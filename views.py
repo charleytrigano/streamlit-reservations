@@ -67,3 +67,63 @@ def modifier_reservation(df):
             df.at[i, "charges"] = round(brut - net, 2)
             df.at[i, "%"] = round((brut - net) / brut * 100, 2) if brut else 0
             df.at[i, "nuitees"] = (depart - arrivee).days
+            df.at[i, "annee"] = arrivee.year
+            df.at[i, "mois"] = arrivee.month
+            df.to_excel("reservations.xlsx", index=False)
+            st.success("✅ Réservation modifiée")
+        if delete:
+            df.drop(index=i, inplace=True)
+            df.to_excel("reservations.xlsx", index=False)
+            st.warning("🗑 Réservation supprimée")
+
+def afficher_calendrier(df):
+    st.subheader("📅 Calendrier")
+    col1, col2 = st.columns(2)
+    with col1:
+        mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
+    with col2:
+        annee = st.selectbox("Année", sorted(df["annee"].dropna().unique()))
+    mois_index = list(calendar.month_name).index(mois_nom)
+    nb_jours = calendar.monthrange(annee, mois_index)[1]
+    jours = [date(annee, mois_index, i+1) for i in range(nb_jours)]
+    planning = {jour: [] for jour in jours}
+    couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
+    for _, row in df.iterrows():
+        debut = row["date_arrivee"]
+        fin = row["date_depart"]
+        for jour in jours:
+            if debut <= jour < fin:
+                icone = couleurs.get(row["plateforme"], "⬜")
+                planning[jour].append(f"{icone} {row['nom_client']}")
+    table = []
+    for semaine in calendar.monthcalendar(annee, mois_index):
+        ligne = []
+        for jour in semaine:
+            if jour == 0:
+                ligne.append("")
+            else:
+                jour_date = date(annee, mois_index, jour)
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
+                ligne.append(contenu)
+        table.append(ligne)
+    st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
+
+def afficher_rapport(df):
+    st.subheader("📊 Rapport mensuel")
+    st.write("Fonctionnalité à compléter : ajouter graphiques et statistiques.")
+
+def liste_clients(df):
+    st.subheader("👥 Liste des clients")
+    annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
+    mois = st.selectbox("Mois", ["Tous"] + list(range(1, 13)), key="mois_clients")
+    data = df[df["annee"] == annee]
+    if mois != "Tous":
+        data = data[data["mois"] == mois]
+    if not data.empty:
+        data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
+        data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
+        colonnes = ["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "prix_brut", "prix_net", "charges", "%", "prix_brut/nuit", "prix_net/nuit"]
+        st.dataframe(data[colonnes])
+        st.download_button("📥 Télécharger CSV", data=data[colonnes].to_csv(index=False).encode("utf-8"), file_name="liste_clients.csv", mime="text/csv")
+    else:
+        st.info("Aucune donnée pour cette période.")
