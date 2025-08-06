@@ -31,6 +31,13 @@ def importer_fichier():
 # ▶️ Application principale
 def main():
     df = importer_fichier()
+
+    # ✅ Corriger les formats de dates (enlever heures/minutes/secondes)
+    if "date_arrivee" in df.columns:
+        df["date_arrivee"] = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.date
+    if "date_depart" in df.columns:
+        df["date_depart"] = pd.to_datetime(df["date_depart"], errors="coerce").dt.date
+
     notifier_arrivees_prochaines(df)
 
     onglet = st.sidebar.radio(
