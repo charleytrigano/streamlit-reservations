@@ -93,16 +93,25 @@ def modifier_reservation(df):
             df.to_excel("reservations.xlsx", index=False)
             st.warning("🗑 Réservation supprimée")
 
-# 📅 Calendrier mensuel
+# 📅 Calendrier mensuel (corrigé)
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier")
+
     mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
 
-    annees_disponibles = sorted(df["annee"].dropna().unique())
+    # ✅ CORRECTION ici
+    annees_disponibles = sorted([int(a) for a in df["annee"].dropna().unique() if str(a).isdigit()])
     if not annees_disponibles:
-        st.warning("Aucune année disponible dans les données.")
+        st.warning("Aucune année valide disponible dans les données.")
         return
+
     annee = st.selectbox("Année", annees_disponibles)
+
+    try:
+        annee = int(annee)
+    except:
+        st.error("Année invalide sélectionnée.")
+        return
 
     mois_index = list(calendar.month_name).index(mois_nom)
     nb_jours = calendar.monthrange(annee, mois_index)[1]
