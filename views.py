@@ -96,17 +96,20 @@ def modifier_reservation(df):
 # 📅 Calendrier mensuel
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier")
-    col1, col2 = st.columns(2)
-    with col1:
-        mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
-    with col2:
-        annee = int(st.selectbox("Année", sorted(df["annee"].dropna().unique())))
+    mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
+
+    annees_disponibles = sorted(df["annee"].dropna().unique())
+    if not annees_disponibles:
+        st.warning("Aucune année disponible dans les données.")
+        return
+    annee = st.selectbox("Année", annees_disponibles)
     mois_index = int(list(calendar.month_name).index(mois_nom))
 
-    nb_jours = calendar.monthrange(annee, mois_index)[1]
-    jours = [date(annee, mois_index, i+1) for i in range(nb_jours)]
+    nb_jours = calendar.monthrange(int(annee), mois_index)[1]
+    jours = [date(int(annee), mois_index, i+1) for i in range(nb_jours)]
     planning = {jour: [] for jour in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
+
     for _, row in df.iterrows():
         debut = row["date_arrivee"]
         fin = row["date_depart"]
@@ -114,17 +117,19 @@ def afficher_calendrier(df):
             if debut <= jour < fin:
                 icone = couleurs.get(row["plateforme"], "⬜")
                 planning[jour].append(f"{icone} {row['nom_client']}")
+
     table = []
-    for semaine in calendar.monthcalendar(annee, mois_index):
+    for semaine in calendar.monthcalendar(int(annee), mois_index):
         ligne = []
         for jour in semaine:
             if jour == 0:
                 ligne.append("")
             else:
-                jour_date = date(annee, mois_index, jour)
+                jour_date = date(int(annee), mois_index, jour)
                 contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
+
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
 # 📊 Rapport mensuel multi-plateformes
