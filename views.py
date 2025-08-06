@@ -93,15 +93,16 @@ def modifier_reservation(df):
             df.to_excel("reservations.xlsx", index=False)
             st.warning("🗑 Réservation supprimée")
 
-# 📅 Affichage du calendrier des réservations
+# 📅 Calendrier mensuel
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier")
     col1, col2 = st.columns(2)
     with col1:
         mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
     with col2:
-        annee = st.selectbox("Année", sorted(df["annee"].dropna().unique()))
-    mois_index = list(calendar.month_name).index(mois_nom)
+        annee = int(st.selectbox("Année", sorted(df["annee"].dropna().unique())))
+    mois_index = int(list(calendar.month_name).index(mois_nom))
+
     nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours = [date(annee, mois_index, i+1) for i in range(nb_jours)]
     planning = {jour: [] for jour in jours}
@@ -126,7 +127,7 @@ def afficher_calendrier(df):
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
-# 📊 Rapport avec graphiques par plateforme
+# 📊 Rapport mensuel multi-plateformes
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel par plateforme")
 
@@ -136,6 +137,7 @@ def afficher_rapport(df):
 
     plateformes = df["plateforme"].dropna().unique().tolist()
     selected_plateformes = st.multiselect("Filtrer par plateforme", plateformes, default=plateformes)
+
     stats = df[df["plateforme"].isin(selected_plateformes)].groupby(["annee", "mois", "plateforme"]).agg({
         "prix_brut": "sum",
         "prix_net": "sum",
@@ -161,7 +163,7 @@ def afficher_rapport(df):
     st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
-# 👥 Liste des clients avec export
+# 👥 Liste des clients + export CSV
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
