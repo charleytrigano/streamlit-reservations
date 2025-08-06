@@ -2,11 +2,25 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import calendar
+import io
+from openpyxl import Workbook
 
 # 📋 Afficher les réservations
 def afficher_reservations(df):
     st.subheader("📋 Réservations")
     st.dataframe(df)
+
+    st.markdown("### 💾 Télécharger le fichier de réservations")
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    output.seek(0)
+    st.download_button(
+        label="📥 Télécharger reservations.xlsx",
+        data=output,
+        file_name="reservations.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 # ➕ Ajouter une réservation
 def ajouter_reservation(df):
@@ -112,7 +126,7 @@ def afficher_calendrier(df):
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
-# 📊 Rapport mensuel avancé avec couleurs par plateforme
+# 📊 Rapport avec graphiques par plateforme
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel par plateforme")
 
@@ -120,7 +134,9 @@ def afficher_rapport(df):
         st.info("Aucune donnée disponible.")
         return
 
-    stats = df.groupby(["annee", "mois", "plateforme"]).agg({
+    plateformes = df["plateforme"].dropna().unique().tolist()
+    selected_plateformes = st.multiselect("Filtrer par plateforme", plateformes, default=plateformes)
+    stats = df[df["plateforme"].isin(selected_plateformes)].groupby(["annee", "mois", "plateforme"]).agg({
         "prix_brut": "sum",
         "prix_net": "sum",
         "charges": "sum",
@@ -130,26 +146,22 @@ def afficher_rapport(df):
     stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x])
     stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
 
-    st.markdown("### 📅 Données groupées par mois et plateforme")
+    st.markdown("### 📅 Données groupées")
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
 
-    st.markdown("### 💰 Revenus bruts par plateforme")
-    pivot_brut = stats.pivot_table(index="période", columns="plateforme", values="prix_brut", aggfunc="sum").fillna(0)
-    st.bar_chart(pivot_brut)
+    st.markdown("### 💰 Revenus bruts")
+    st.bar_chart(stats.pivot(index="période", columns="plateforme", values="prix_brut").fillna(0))
 
-    st.markdown("### 💵 Revenus nets par plateforme")
-    pivot_net = stats.pivot_table(index="période", columns="plateforme", values="prix_net", aggfunc="sum").fillna(0)
-    st.bar_chart(pivot_net)
+    st.markdown("### 💵 Revenus nets")
+    st.bar_chart(stats.pivot(index="période", columns="plateforme", values="prix_net").fillna(0))
 
-    st.markdown("### 🛌 Nuitées par plateforme")
-    pivot_nuit = stats.pivot_table(index="période", columns="plateforme", values="nuitees", aggfunc="sum").fillna(0)
-    st.bar_chart(pivot_nuit)
+    st.markdown("### 🛌 Nuitées")
+    st.bar_chart(stats.pivot(index="période", columns="plateforme", values="nuitees").fillna(0))
 
-    st.markdown("### 💸 Charges par plateforme")
-    pivot_charges = stats.pivot_table(index="période", columns="plateforme", values="charges", aggfunc="sum").fillna(0)
-    st.bar_chart(pivot_charges)
+    st.markdown("### 💸 Charges")
+    st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
-# 👥 Liste des clients avec filtres et export CSV
+# 👥 Liste des clients avec export
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
