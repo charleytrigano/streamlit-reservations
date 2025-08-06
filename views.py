@@ -1,3 +1,7 @@
+from pathlib import Path
+
+# Contenu complet du fichier views.py avec afficher_rapport corrigé
+views_py_content = """
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
@@ -93,32 +97,20 @@ def modifier_reservation(df):
             df.to_excel("reservations.xlsx", index=False)
             st.warning("🗑 Réservation supprimée")
 
-# 📅 Calendrier mensuel (corrigé)
+# 📅 Calendrier mensuel
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier")
-
     mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
-
-    # ✅ CORRECTION ici
     annees_disponibles = sorted([int(a) for a in df["annee"].dropna().unique() if str(a).isdigit()])
     if not annees_disponibles:
         st.warning("Aucune année valide disponible dans les données.")
         return
-
     annee = st.selectbox("Année", annees_disponibles)
-
-    try:
-        annee = int(annee)
-    except:
-        st.error("Année invalide sélectionnée.")
-        return
-
     mois_index = list(calendar.month_name).index(mois_nom)
     nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours = [date(annee, mois_index, i+1) for i in range(nb_jours)]
     planning = {jour: [] for jour in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
-
     for _, row in df.iterrows():
         debut = row["date_arrivee"]
         fin = row["date_depart"]
@@ -126,7 +118,6 @@ def afficher_calendrier(df):
             if debut <= jour < fin:
                 icone = couleurs.get(row["plateforme"], "⬜")
                 planning[jour].append(f"{icone} {row['nom_client']}")
-
     table = []
     for semaine in calendar.monthcalendar(annee, mois_index):
         ligne = []
@@ -135,49 +126,42 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(annee, mois_index, jour)
-                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
+                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
-
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
-# 📊 Rapport mensuel multi-plateformes
+# 📊 Rapport mensuel corrigé
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel par plateforme")
-
     if df.empty:
         st.info("Aucune donnée disponible.")
         return
-
     plateformes = df["plateforme"].dropna().unique().tolist()
     selected_plateformes = st.multiselect("Filtrer par plateforme", plateformes, default=plateformes)
-
-    stats = df[df["plateforme"].isin(selected_plateformes)].groupby(["annee", "mois", "plateforme"]).agg({
+    df_filtre = df[df["plateforme"].isin(selected_plateformes)]
+    stats = df_filtre.groupby(["annee", "mois", "plateforme"]).agg({
         "prix_brut": "sum",
         "prix_net": "sum",
         "charges": "sum",
         "nuitees": "sum"
     }).reset_index()
-
-    stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x])
+    stats = stats[stats["mois"].notna()]
+    stats["mois"] = stats["mois"].astype(int)
+    stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x] if 1 <= x <= 12 else "??")
     stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
-
     st.markdown("### 📅 Données groupées")
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
-
     st.markdown("### 💰 Revenus bruts")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="prix_brut").fillna(0))
-
     st.markdown("### 💵 Revenus nets")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="prix_net").fillna(0))
-
     st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="nuitees").fillna(0))
-
     st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
-# 👥 Liste des clients + export CSV
+# 👥 Liste des clients
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
@@ -185,18 +169,15 @@ def liste_clients(df):
     data = df[df["annee"] == annee]
     if mois != "Tous":
         data = data[data["mois"] == mois]
-
     if not data.empty:
         data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
         data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-
         colonnes = [
             "nom_client", "plateforme", "date_arrivee", "date_depart",
             "nuitees", "prix_brut", "prix_net", "charges", "%",
             "prix_brut/nuit", "prix_net/nuit"
         ]
         st.dataframe(data[colonnes])
-
         st.download_button(
             "📥 Télécharger en CSV",
             data=data[colonnes].to_csv(index=False).encode("utf-8"),
@@ -205,4 +186,10 @@ def liste_clients(df):
         )
     else:
         st.info("Aucune donnée pour cette période.")
+"""
 
+# Sauvegarder dans un fichier
+file_path = "/mnt/data/views.py"
+Path(file_path).write_text(views_py_content)
+
+file_path
