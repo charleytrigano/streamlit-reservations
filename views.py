@@ -3,10 +3,12 @@ import pandas as pd
 from datetime import date, timedelta
 import calendar
 
+# 📋 Afficher les réservations
 def afficher_reservations(df):
     st.subheader("📋 Réservations")
     st.dataframe(df)
 
+# ➕ Ajouter une réservation
 def ajouter_reservation(df):
     st.subheader("➕ Nouvelle Réservation")
     with st.form("ajout"):
@@ -37,6 +39,7 @@ def ajouter_reservation(df):
             df.to_excel("reservations.xlsx", index=False)
             st.success("✅ Réservation enregistrée")
 
+# ✏️ Modifier ou supprimer une réservation
 def modifier_reservation(df):
     st.subheader("✏️ Modifier / Supprimer")
     if df.empty:
@@ -76,6 +79,7 @@ def modifier_reservation(df):
             df.to_excel("reservations.xlsx", index=False)
             st.warning("🗑 Réservation supprimée")
 
+# 📅 Affichage du calendrier des réservations
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier")
     col1, col2 = st.columns(2)
@@ -108,10 +112,40 @@ def afficher_calendrier(df):
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
+# 📊 Rapport mensuel avancé (graphique & stats)
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel")
-    st.write("Fonctionnalité à compléter : ajouter graphiques et statistiques.")
 
+    if df.empty:
+        st.info("Aucune donnée disponible.")
+        return
+
+    stats = df.groupby(["annee", "mois", "plateforme"]).agg({
+        "prix_brut": "sum",
+        "prix_net": "sum",
+        "charges": "sum",
+        "nuitees": "sum"
+    }).reset_index()
+
+    stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x])
+    stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
+
+    st.markdown("### 📅 Données groupées par mois et plateforme")
+    st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
+
+    st.markdown("### 📈 Revenus bruts vs nets")
+    graph1 = stats.groupby("période")[["prix_brut", "prix_net"]].sum()
+    st.line_chart(graph1)
+
+    st.markdown("### 🛌 Nuitées par mois")
+    graph2 = stats.groupby("période")["nuitees"].sum()
+    st.bar_chart(graph2)
+
+    st.markdown("### 📊 Charges par mois")
+    graph3 = stats.groupby("période")["charges"].sum()
+    st.bar_chart(graph3)
+
+# 👥 Liste des clients avec filtres et export
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
@@ -119,11 +153,23 @@ def liste_clients(df):
     data = df[df["annee"] == annee]
     if mois != "Tous":
         data = data[data["mois"] == mois]
+
     if not data.empty:
         data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
         data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-        colonnes = ["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "prix_brut", "prix_net", "charges", "%", "prix_brut/nuit", "prix_net/nuit"]
+
+        colonnes = [
+            "nom_client", "plateforme", "date_arrivee", "date_depart",
+            "nuitees", "prix_brut", "prix_net", "charges", "%",
+            "prix_brut/nuit", "prix_net/nuit"
+        ]
         st.dataframe(data[colonnes])
-        st.download_button("📥 Télécharger CSV", data=data[colonnes].to_csv(index=False).encode("utf-8"), file_name="liste_clients.csv", mime="text/csv")
+
+        st.download_button(
+            "📥 Télécharger en CSV",
+            data=data[colonnes].to_csv(index=False).encode("utf-8"),
+            file_name="liste_clients.csv",
+            mime="text/csv"
+        )
     else:
         st.info("Aucune donnée pour cette période.")
