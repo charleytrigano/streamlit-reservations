@@ -10,21 +10,27 @@ from views import (
 )
 from sms import notifier_arrivees_prochaines, historique_sms
 
+# ▶️ Point d'entrée principal de l'application
 def main():
-    st.set_page_config(page_title="Réservations Villa Tobias", layout="wide")
-    st.sidebar.markdown("## 📤 Importer un fichier Excel")
+    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+    st.sidebar.title("📁 Menu")
+
+    # 📥 Importer un fichier Excel depuis l'utilisateur
+    st.sidebar.markdown("### 📤 Importer un fichier")
     uploader_excel()
 
+    # 📊 Charger les données du fichier
     df = charger_donnees()
+
     if df.empty:
         st.warning("Aucune donnée disponible. Veuillez importer un fichier Excel.")
         return
 
-    # 🔔 Envoi automatique des SMS de rappel si arrivée demain
+    # 🔔 Notification automatique la veille de l'arrivée
     notifier_arrivees_prochaines(df)
 
-    # Navigation par onglets
-    onglet = st.sidebar.radio("Menu", [
+    # 🧭 Menu de navigation
+    onglet = st.sidebar.radio("Navigation", [
         "📋 Réservations",
         "➕ Ajouter",
         "✏️ Modifier / Supprimer",
@@ -45,3 +51,16 @@ def main():
         modifier_reservation(df)
 
     elif onglet == "📅 Calendrier":
+        afficher_calendrier(df)
+
+    elif onglet == "📊 Rapport":
+        afficher_rapport(df)
+
+    elif onglet == "👥 Liste clients":
+        liste_clients(df)
+
+    elif onglet == "✉️ Historique SMS":
+        historique_sms()
+
+if __name__ == "__main__":
+    main()
