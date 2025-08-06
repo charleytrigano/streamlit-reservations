@@ -112,9 +112,9 @@ def afficher_calendrier(df):
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
-# 📊 Rapport mensuel avancé (graphique & stats)
+# 📊 Rapport mensuel avancé avec couleurs par plateforme
 def afficher_rapport(df):
-    st.subheader("📊 Rapport mensuel")
+    st.subheader("📊 Rapport mensuel par plateforme")
 
     if df.empty:
         st.info("Aucune donnée disponible.")
@@ -133,19 +133,23 @@ def afficher_rapport(df):
     st.markdown("### 📅 Données groupées par mois et plateforme")
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
 
-    st.markdown("### 📈 Revenus bruts vs nets")
-    graph1 = stats.groupby("période")[["prix_brut", "prix_net"]].sum()
-    st.line_chart(graph1)
+    st.markdown("### 💰 Revenus bruts par plateforme")
+    pivot_brut = stats.pivot_table(index="période", columns="plateforme", values="prix_brut", aggfunc="sum").fillna(0)
+    st.bar_chart(pivot_brut)
 
-    st.markdown("### 🛌 Nuitées par mois")
-    graph2 = stats.groupby("période")["nuitees"].sum()
-    st.bar_chart(graph2)
+    st.markdown("### 💵 Revenus nets par plateforme")
+    pivot_net = stats.pivot_table(index="période", columns="plateforme", values="prix_net", aggfunc="sum").fillna(0)
+    st.bar_chart(pivot_net)
 
-    st.markdown("### 📊 Charges par mois")
-    graph3 = stats.groupby("période")["charges"].sum()
-    st.bar_chart(graph3)
+    st.markdown("### 🛌 Nuitées par plateforme")
+    pivot_nuit = stats.pivot_table(index="période", columns="plateforme", values="nuitees", aggfunc="sum").fillna(0)
+    st.bar_chart(pivot_nuit)
 
-# 👥 Liste des clients avec filtres et export
+    st.markdown("### 💸 Charges par plateforme")
+    pivot_charges = stats.pivot_table(index="période", columns="plateforme", values="charges", aggfunc="sum").fillna(0)
+    st.bar_chart(pivot_charges)
+
+# 👥 Liste des clients avec filtres et export CSV
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
@@ -173,3 +177,4 @@ def liste_clients(df):
         )
     else:
         st.info("Aucune donnée pour cette période.")
+
