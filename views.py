@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Contenu complet du fichier views.py avec afficher_rapport corrigé
-views_py_content = """
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
@@ -126,13 +122,17 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(annee, mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
 # 📊 Rapport mensuel corrigé
 def afficher_rapport(df):
+
+    df["date_arrivee"] = pd.to_datetime(df["date_arrivee"]).dt.date
+    df["date_depart"] = pd.to_datetime(df["date_depart"]).dt.date
+
     st.subheader("📊 Rapport mensuel par plateforme")
     if df.empty:
         st.info("Aucune donnée disponible.")
@@ -150,6 +150,7 @@ def afficher_rapport(df):
     stats["mois"] = stats["mois"].astype(int)
     stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x] if 1 <= x <= 12 else "??")
     stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
+    stats["période"] = stats["période"].astype(str)
     st.markdown("### 📅 Données groupées")
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
     st.markdown("### 💰 Revenus bruts")
@@ -160,36 +161,3 @@ def afficher_rapport(df):
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="nuitees").fillna(0))
     st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
-
-# 👥 Liste des clients
-def liste_clients(df):
-    st.subheader("👥 Liste des clients")
-    annee = st.selectbox("Année", sorted(df["annee"].unique()), key="annee_clients")
-    mois = st.selectbox("Mois", ["Tous"] + list(range(1, 13)), key="mois_clients")
-    data = df[df["annee"] == annee]
-    if mois != "Tous":
-        data = data[data["mois"] == mois]
-    if not data.empty:
-        data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-        data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-        colonnes = [
-            "nom_client", "plateforme", "date_arrivee", "date_depart",
-            "nuitees", "prix_brut", "prix_net", "charges", "%",
-            "prix_brut/nuit", "prix_net/nuit"
-        ]
-        st.dataframe(data[colonnes])
-        st.download_button(
-            "📥 Télécharger en CSV",
-            data=data[colonnes].to_csv(index=False).encode("utf-8"),
-            file_name="liste_clients.csv",
-            mime="text/csv"
-        )
-    else:
-        st.info("Aucune donnée pour cette période.")
-"""
-
-# Sauvegarder dans un fichier
-file_path = "/mnt/data/views.py"
-Path(file_path).write_text(views_py_content)
-
-file_path
