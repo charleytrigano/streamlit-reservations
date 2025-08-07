@@ -1,5 +1,3 @@
-# Mise à jour du fichier app.py avec les fonctions de calendrier, rapport et sauvegarde
-app_code_avec_rapport = """
 import streamlit as st
 import pandas as pd
 import calendar
@@ -24,11 +22,11 @@ def notifier_arrivees_prochaines(df):
     demain = date.today() + timedelta(days=1)
     df_notif = df[df["date_arrivee"] == pd.to_datetime(demain)]
     for _, row in df_notif.iterrows():
-        message = f\"\"\"
+        message = f"""
         VILLA TOBIAS - {row['plateforme']}
         Bonjour {row['nom_client']}. Votre séjour est prévu du {row['date_arrivee'].date()} au {row['date_depart'].date()}.
         Merci de confirmer votre heure d’arrivée.
-        \"\"\"
+        """
         envoyer_sms(row["telephone"], message)
         enregistrer_sms(row["nom_client"], row["telephone"], message)
 
@@ -184,7 +182,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
@@ -223,9 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-with open("/mnt/data/app.py", "w") as f:
-    f.write(app_code_avec_rapport)
-
-"/mnt/data/app.py"
