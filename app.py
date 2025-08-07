@@ -28,11 +28,10 @@ def importer_fichier():
         st.warning("Aucun fichier disponible.")
         return pd.DataFrame()
 
-# ▶️ Application principale
 def main():
     df = importer_fichier()
 
-    # ✅ Corriger les formats de dates (enlever heures/minutes/secondes)
+    # ✅ Forcer les colonnes de dates au format date uniquement
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.date
     if "date_depart" in df.columns:
