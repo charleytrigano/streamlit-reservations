@@ -1,8 +1,3 @@
-from zipfile import ZipFile
-from pathlib import Path
-
-# Création du fichier app.py complet
-app_py_content = '''
 import streamlit as st
 import pandas as pd
 import calendar
@@ -85,7 +80,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
 
@@ -140,15 +135,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-
-# Sauvegarde du fichier app.py
-app_file_path = Path("/mnt/data/app.py")
-app_file_path.write_text(app_py_content.strip(), encoding="utf-8")
-
-# Création de l'archive ZIP avec app.py
-zip_path = "/mnt/data/app_complet_final.zip"
-with ZipFile(zip_path, "w") as archive:
-    archive.write(app_file_path, arcname="app.py")
-
-zip_path
