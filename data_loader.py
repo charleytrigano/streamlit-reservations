@@ -1,30 +1,26 @@
+import streamlit as st
 import pandas as pd
+import os
 
 FICHIER = "reservations.xlsx"
 
+def uploader_excel():
+    uploaded_file = st.file_uploader("Déposez un fichier Excel", type=["xlsx"])
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        df.to_excel(FICHIER, index=False)
+        st.success("✅ Fichier importé avec succès.")
+
 def charger_donnees():
-    # Charger le fichier Excel
-    df = pd.read_excel(FICHIER)
+    if os.path.exists(FICHIER):
+        df = pd.read_excel(FICHIER)
+        return df
+    return pd.DataFrame()
 
-    # ✅ Supprimer les colonnes en double
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    # ✅ Convertir les dates correctement
-    df["date_arrivee"] = pd.to_datetime(df["date_arrivee"], errors="coerce")
-    df["date_depart"] = pd.to_datetime(df["date_depart"], errors="coerce")
-
-    # ✅ Nettoyer les lignes sans dates valides
-    df = df[df["date_arrivee"].notna() & df["date_depart"].notna()]
-
-    # ✅ Forcer les colonnes numériques
-    df["prix_brut"] = pd.to_numeric(df["prix_brut"], errors="coerce").round(2)
-    df["prix_net"] = pd.to_numeric(df["prix_net"], errors="coerce").round(2)
-
-    # ✅ Recalculer colonnes nécessaires
-    df["charges"] = (df["prix_brut"] - df["prix_net"]).round(2)
-    df["%"] = ((df["charges"] / df["prix_brut"]) * 100).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-    df["nuitees"] = (df["date_depart"] - df["date_arrivee"]).dt.days
-    df["annee"] = df["date_arrivee"].dt.year
-    df["mois"] = df["date_arrivee"].dt.month
-
-    return df
+def telecharger_fichier_excel(df):
+    st.download_button(
+        "📥 Télécharger le fichier Excel",
+        data=df.to_excel(index=False),
+        file_name="reservations_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
