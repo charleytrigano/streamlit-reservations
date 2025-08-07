@@ -1,6 +1,7 @@
+
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import datetime, date, timedelta
 import requests
 import os
 
@@ -10,7 +11,7 @@ FREE_API_KEY = "MF7Qjs3C8KxKHz"
 NUM_TELEPHONE_PERSO = "+33617722379"
 
 def envoyer_sms(telephone, message):
-    url = f"https://smsapi.free-mobile.fr/sendmsg"
+    url = "https://smsapi.free-mobile.fr/sendmsg"
     params = {"user": FREE_USER, "pass": FREE_API_KEY, "msg": message}
     response = requests.get(url, params=params)
     return response.status_code == 200
@@ -27,12 +28,7 @@ def notifier_arrivees_prochaines(df):
     demain = date.today() + timedelta(days=1)
     df_notif = df[df["date_arrivee"] == demain]
     for _, row in df_notif.iterrows():
-        message = f"""
-        VILLA TOBIAS - {row['plateforme']}
-        Bonjour {row['nom_client']}. Votre séjour est prévu du {row['date_arrivee']} au {row['date_depart']}.
-        Afin de vous accueillir merci de nous confirmer votre heure d’arrivée.
-        Un parking est à votre disposition sur place. À demain
-        """
+        message = f"VILLA TOBIAS - {row['plateforme']}\nBonjour {row['nom_client']}."
         envoyer_sms(row["telephone"], message)
         envoyer_sms(NUM_TELEPHONE_PERSO, message)
         enregistrer_sms(row["nom_client"], row["telephone"], message)
@@ -43,4 +39,4 @@ def historique_sms():
         df = pd.read_csv(SMS_HISTO)
         st.dataframe(df)
     else:
-        st.info("Aucun SMS envoyé pour le moment.")
+        st.info("Aucun SMS envoyé.")
