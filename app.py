@@ -160,10 +160,10 @@ def afficher_calendrier(df):
     with col1:
         mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
     with col2:
-        annees_disponibles = sorted(df["annee"].dropna().unique())
+        annees_disponibles = sorted([int(a) for a in df["annee"].dropna().unique() if not pd.isnull(a)])
         annee = st.selectbox("Année", annees_disponibles)
     mois_index = list(calendar.month_name).index(mois_nom)
-    nb_jours = calendar.monthrange(int(annee), mois_index)[1]
+    nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours = [date(int(annee), mois_index, i+1) for i in range(nb_jours)]
     planning = {jour: [] for jour in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
