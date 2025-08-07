@@ -1,46 +1,60 @@
 import streamlit as st
 import pandas as pd
 import calendar
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 import os
 
 FICHIER = "reservations.xlsx"
 
-# 🔄 Charger les données depuis le fichier Excel
-def charger_donnees():
-    if not os.path.exists(FICHIER):
-        return pd.DataFrame()
-    df = pd.read_excel(FICHIER)
-    # Conversion des dates
-    if "date_arrivee" in df.columns:
-        df["date_arrivee"] = pd.to_datetime(df["date_arrivee"]).dt.date
-    if "date_depart" in df.columns:
-        df["date_depart"] = pd.to_datetime(df["date_depart"]).dt.date
-    # Ajouter colonnes année et mois si absentes
-    if "annee" not in df.columns or "mois" not in df.columns:
-        df["annee"] = pd.to_datetime(df["date_arrivee"]).dt.year
-        df["mois"] = pd.to_datetime(df["date_arrivee"]).dt.month
-        df.to_excel(FICHIER, index=False)
-    return df
+# 🔁 Restaurer un fichier Excel modifié par l'utilisateur
+def restaurer_fichier_excel():
+    st.sidebar.markdown("### 🔁 Restaurer un fichier modifié")
+    fichier = st.sidebar.file_uploader("Sélectionner un fichier Excel (.xlsx)", type=["xlsx"], key="restore")
 
-# 💾 Sauvegarder les données dans le fichier Excel
-def sauvegarder(df):
-    df.to_excel(FICHIER, index=False)
+    if fichier:
+        with open(FICHIER, "wb") as f:
+            f.write(fichier.read())
+        st.sidebar.success("✅ Fichier restauré avec succès.")
+        df_recharge = pd.read_excel(FICHIER)
+        return df_recharge
+    return None
+
+# 📥 Charger les données existantes
+def charger_donnees():
+    if os.path.exists(FICHIER):
+        df = pd.read_excel(FICHIER)
+        if "annee" not in df.columns or "mois" not in df.columns:
+            df["date_arrivee"] = pd.to_datetime(df["date_arrivee"])
+            df["annee"] = df["date_arrivee"].dt.year
+            df["mois"] = df["date_arrivee"].dt.month
+            df.to_excel(FICHIER, index=False)
+        return df
+    else:
+        return pd.DataFrame()
+
+# 📤 Télécharger les données Excel actuelles
+def telecharger_fichier_excel(df):
+    st.sidebar.download_button(
+        label="📥 Télécharger le fichier Excel",
+        data=df.to_excel(index=False),
+        file_name="reservations.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 # 📋 Réservations
 def afficher_reservations(df):
-    st.title("📋 Réservations")
+    st.subheader("📋 Réservations")
     st.dataframe(df)
 
 # ➕ Ajouter une réservation
 def ajouter_reservation(df):
     st.subheader("➕ Nouvelle Réservation")
-    with st.form("ajout"):
+    with st.form("ajouter"):
         nom = st.text_input("Nom")
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
-        tel = st.text_input("Téléphone")
-        arrivee = st.date_input("Date arrivée")
-        depart = st.date_input("Date départ", min_value=arrivee + timedelta(days=1))
+        telephone = st.text_input("Téléphone")
+        arrivee = st.date_input("Date d'arrivée")
+        depart = st.date_input("Date de départ", min_value=arrivee + timedelta(days=1))
         prix_brut = st.number_input("Prix brut", min_value=0.0)
         prix_net = st.number_input("Prix net", min_value=0.0, max_value=prix_brut)
         submit = st.form_submit_button("Enregistrer")
@@ -48,84 +62,85 @@ def ajouter_reservation(df):
             ligne = {
                 "nom_client": nom,
                 "plateforme": plateforme,
-                "telephone": tel,
+                "telephone": telephone,
                 "date_arrivee": arrivee,
                 "date_depart": depart,
-                "prix_brut": round(prix_brut, 2),
-                "prix_net": round(prix_net, 2),
-                "charges": round(prix_brut - prix_net, 2),
-                "%": round((prix_brut - prix_net) / prix_brut * 100, 2) if prix_brut else 0,
+                "prix_brut": prix_brut,
+                "prix_net": prix_net,
+                "charges": prix_brut - prix_net,
+                "%": round(((prix_brut - prix_net) / prix_brut) * 100, 2) if prix_brut else 0,
                 "nuitees": (depart - arrivee).days,
                 "annee": arrivee.year,
                 "mois": arrivee.month
             }
             df = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
-            sauvegarder(df)
-            st.success("✅ Réservation enregistrée")
+            df.to_excel(FICHIER, index=False)
+            st.success("✅ Réservation ajoutée avec succès.")
 
 # ✏️ Modifier / Supprimer
 def modifier_reservation(df):
-    st.subheader("✏️ Modifier / Supprimer")
-    if df.empty:
-        st.warning("Aucune réservation à modifier.")
-        return
+    st.subheader("✏️ Modifier / Supprimer une réservation")
     df["identifiant"] = df["nom_client"] + " | " + df["date_arrivee"].astype(str)
-    selection = st.selectbox("Choisissez une réservation", df["identifiant"])
+    selection = st.selectbox("Sélectionnez une réservation", df["identifiant"])
     i = df[df["identifiant"] == selection].index[0]
-    with st.form("modif"):
+    with st.form("modifier"):
         nom = st.text_input("Nom", df.at[i, "nom_client"])
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"], index=["Booking", "Airbnb", "Autre"].index(df.at[i, "plateforme"]))
-        tel = st.text_input("Téléphone", df.at[i, "telephone"])
-        arrivee = st.date_input("Arrivée", df.at[i, "date_arrivee"])
-        depart = st.date_input("Départ", df.at[i, "date_depart"])
-        brut = st.number_input("Prix brut", value=float(df.at[i, "prix_brut"]))
-        net = st.number_input("Prix net", value=float(df.at[i, "prix_net"]))
-        submit = st.form_submit_button("Modifier")
-        delete = st.form_submit_button("Supprimer")
-        if submit:
+        telephone = st.text_input("Téléphone", df.at[i, "telephone"])
+        arrivee = st.date_input("Date d'arrivée", df.at[i, "date_arrivee"])
+        depart = st.date_input("Date de départ", df.at[i, "date_depart"])
+        prix_brut = st.number_input("Prix brut", value=float(df.at[i, "prix_brut"]))
+        prix_net = st.number_input("Prix net", value=float(df.at[i, "prix_net"]))
+        modifier = st.form_submit_button("Modifier")
+        supprimer = st.form_submit_button("Supprimer")
+
+        if modifier:
             df.at[i, "nom_client"] = nom
             df.at[i, "plateforme"] = plateforme
-            df.at[i, "telephone"] = tel
+            df.at[i, "telephone"] = telephone
             df.at[i, "date_arrivee"] = arrivee
             df.at[i, "date_depart"] = depart
-            df.at[i, "prix_brut"] = round(brut, 2)
-            df.at[i, "prix_net"] = round(net, 2)
-            df.at[i, "charges"] = round(brut - net, 2)
-            df.at[i, "%"] = round((brut - net) / brut * 100, 2) if brut else 0
+            df.at[i, "prix_brut"] = prix_brut
+            df.at[i, "prix_net"] = prix_net
+            df.at[i, "charges"] = prix_brut - prix_net
+            df.at[i, "%"] = round(((prix_brut - prix_net) / prix_brut) * 100, 2) if prix_brut else 0
             df.at[i, "nuitees"] = (depart - arrivee).days
             df.at[i, "annee"] = arrivee.year
             df.at[i, "mois"] = arrivee.month
-            sauvegarder(df)
-            st.success("✅ Réservation modifiée")
-        if delete:
+            df.drop(columns="identifiant", inplace=True)
+            df.to_excel(FICHIER, index=False)
+            st.success("✅ Réservation modifiée.")
+
+        if supprimer:
             df.drop(index=i, inplace=True)
-            sauvegarder(df)
-            st.warning("🗑 Réservation supprimée")
+            df.drop(columns="identifiant", inplace=True)
+            df.to_excel(FICHIER, index=False)
+            st.warning("❌ Réservation supprimée.")
 
 # 📅 Calendrier mensuel
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier mensuel")
     if df.empty:
-        st.warning("Aucune donnée disponible.")
+        st.info("Aucune réservation disponible.")
         return
-    col1, col2 = st.columns(2)
-    with col1:
-        mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
-    with col2:
-        annees_disponibles = sorted(df["annee"].dropna().unique())
-        annee = st.selectbox("Année", annees_disponibles)
+
+    mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
+    annee = st.selectbox("Année", sorted(df["annee"].dropna().unique()))
     mois_index = list(calendar.month_name).index(mois_nom)
+
     jours_du_mois = [date(int(annee), mois_index, j + 1) for j in range(calendar.monthrange(int(annee), mois_index)[1])]
     planning = {jour: [] for jour in jours_du_mois}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
+
     for _, row in df.iterrows():
-        debut = row["date_arrivee"]
-        fin = row["date_depart"]
+        debut = pd.to_datetime(row["date_arrivee"]).date()
+        fin = pd.to_datetime(row["date_depart"]).date()
         for jour in jours_du_mois:
             if debut <= jour < fin:
                 icone = couleurs.get(row["plateforme"], "⬜")
                 planning[jour].append(f"{icone} {row['nom_client']}")
-    table = []
+
+    tableau = []
     for semaine in calendar.monthcalendar(int(annee), mois_index):
         ligne = []
         for jour in semaine:
@@ -133,53 +148,67 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning.get(jour_date, []))
                 ligne.append(contenu)
-        table.append(ligne)
-    st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
+        tableau.append(ligne)
+
+    st.table(pd.DataFrame(tableau, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
 # 📊 Rapport
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel")
     if df.empty:
-        st.warning("Aucune donnée disponible.")
+        st.info("Aucune donnée à afficher.")
         return
-    plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique())
-    filtre = st.selectbox("Filtrer par plateforme", plateformes)
-    if filtre != "Toutes":
-        df = df[df["plateforme"] == filtre]
+
     stats = df.groupby(["annee", "mois", "plateforme"]).agg({
         "prix_brut": "sum",
         "prix_net": "sum",
         "charges": "sum",
         "nuitees": "sum"
     }).reset_index()
-    stats["mois"] = stats["mois"].astype(int)
-    stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[x])
+
+    stats["mois_texte"] = stats["mois"].apply(lambda x: calendar.month_abbr[int(x)])
     stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
+
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
-    st.markdown("### 📈 Revenus bruts vs nets")
+
+    st.markdown("### 📈 Revenus bruts")
     st.line_chart(stats.pivot(index="période", columns="plateforme", values="prix_brut").fillna(0))
-    st.markdown("### 🛌 Nuitées par mois")
+
+    st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="nuitees").fillna(0))
-    st.markdown("### 📊 Charges mensuelles")
+
+    st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
 # 👥 Liste des clients
 def liste_clients(df):
     st.subheader("👥 Liste des clients")
     if df.empty:
-        st.info("Aucune donnée à afficher.")
+        st.info("Aucune donnée.")
         return
-    st.dataframe(df)
+    st.dataframe(df[["nom_client", "plateforme", "date_arrivee", "date_depart", "prix_brut", "prix_net", "telephone"]])
 
-# ▶️ Application principale
+# ▶️ Point d’entrée
 def main():
-    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+    st.set_page_config(page_title="📖 Réservations", layout="wide")
     st.sidebar.title("📁 Menu")
 
-    df = charger_donnees()
+    # 🔁 Restauration
+    df_restauré = restaurer_fichier_excel()
 
+    # 📊 Chargement des données
+    if df_restauré is not None:
+        df = df_restauré
+    else:
+        df = charger_donnees()
+
+    if df.empty:
+        st.warning("Veuillez importer ou restaurer un fichier.")
+        return
+
+    # 🧭 Navigation
     onglet = st.sidebar.radio("Navigation", [
         "📋 Réservations",
         "➕ Ajouter",
@@ -191,6 +220,7 @@ def main():
 
     if onglet == "📋 Réservations":
         afficher_reservations(df)
+        telecharger_fichier_excel(df)
     elif onglet == "➕ Ajouter":
         ajouter_reservation(df)
     elif onglet == "✏️ Modifier / Supprimer":
