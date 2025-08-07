@@ -153,6 +153,7 @@ def afficher_rapport(df):
         "nuitees": "sum"
     }).reset_index()
 
+    stats["mois"] = pd.to_numeric(stats["mois"], errors="coerce")
     stats = stats[stats["mois"].notna() & (stats["mois"] >= 1) & (stats["mois"] <= 12)].copy()
     stats["mois_texte"] = stats["mois"].astype(int).apply(lambda x: calendar.month_abbr[x])
     stats["période"] = stats["mois_texte"] + " " + stats["annee"].astype(str)
@@ -167,5 +168,3 @@ def afficher_rapport(df):
 
     st.markdown("### 📊 Charges mensuelles")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
-
-
