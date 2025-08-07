@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Recréation du fichier app.py après le reset de l'environnement
-app_py_content = """
 import streamlit as st
 import pandas as pd
 import calendar
@@ -36,7 +32,7 @@ def afficher_reservations(df):
 
 def afficher_calendrier(df):
     st.title("📅 Calendrier mensuel")
-    
+
     if df.empty or "AAAA" not in df.columns or "MM" not in df.columns:
         st.warning("Colonnes AAAA et MM manquantes dans les données.")
         return
@@ -71,7 +67,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
 
@@ -133,10 +129,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-# Enregistrement dans un fichier
-app_path = Path("/mnt/data/app.py")
-app_path.write_text(app_py_content.strip(), encoding="utf-8")
-
-app_path
