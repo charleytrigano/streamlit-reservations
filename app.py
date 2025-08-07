@@ -108,8 +108,8 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}
-" + "\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
+                " + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
