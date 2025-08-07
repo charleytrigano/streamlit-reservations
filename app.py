@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import os
+
 from sms import notifier_arrivees_prochaines, historique_sms
-from views import (
+from views import afficher_reservations  # 👈 Pour l'instant, on importe uniquement celle-ci
     afficher_reservations,
     ajouter_reservation,
     modifier_reservation,
