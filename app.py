@@ -1,21 +1,34 @@
 from pathlib import Path
 
-# Génération du code de `app.py` mis à jour
-code_app_py = """
+# Contenu complet de app.py avec correction automatique des colonnes AAAA et MM
+app_py_content = '''
 import streamlit as st
 import pandas as pd
 import calendar
 from datetime import date
-from pathlib import Path
+import os
 
 FICHIER = "reservations.xlsx"
 
+def charger_donnees():
+    if os.path.exists(FICHIER):
+        return pd.read_excel(FICHIER)
+    else:
+        return pd.DataFrame()
+
+def uploader_excel():
+    uploaded_file = st.sidebar.file_uploader("📤 Importer un fichier Excel", type=["xlsx"])
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        df.to_excel(FICHIER, index=False)
+        st.sidebar.success("✅ Fichier importé avec succès")
+
 def telecharger_fichier_excel(df):
-    st.download_button(
-        "📥 Télécharger le fichier Excel",
+    st.sidebar.download_button(
+        label="📥 Télécharger le fichier Excel",
         data=df.to_excel(index=False),
         file_name="reservations.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 def afficher_reservations(df):
@@ -24,33 +37,29 @@ def afficher_reservations(df):
 
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier mensuel")
-
-    if "aaaa" not in df.columns or "mm" not in df.columns:
-        st.warning("Les colonnes 'aaaa' et 'mm' sont requises.")
+    
+    if df.empty:
+        st.warning("Aucune donnée disponible.")
         return
 
-    col1, col2 = st.columns(2)
-    with col1:
-        mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
-        mois_index = list(calendar.month_name).index(mois_nom)
-    with col2:
-        annees = sorted(df["aaaa"].dropna().unique())
-        annee = st.selectbox("Année", annees)
+    mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:], index=date.today().month - 1)
+    annee = st.selectbox("Année", sorted(df["AAAA"].dropna().unique().astype(int)), index=0)
 
-    jours_du_mois = [
-        date(int(annee), mois_index, j + 1)
-        for j in range(calendar.monthrange(int(annee), mois_index)[1])
-    ]
-    planning = {jour: [] for jour in jours_du_mois}
+    mois_index = list(calendar.month_name).index(mois_nom)
+    jours = [date(int(annee), mois_index, i+1) for i in range(calendar.monthrange(int(annee), mois_index)[1])]
+    planning = {jour: [] for jour in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
 
     for _, row in df.iterrows():
-        debut = pd.to_datetime(row["date_arrivee"]).date()
-        fin = pd.to_datetime(row["date_depart"]).date()
-        for jour in jours_du_mois:
-            if debut <= jour < fin:
-                icone = couleurs.get(row["plateforme"], "⬜")
-                planning[jour].append(f"{icone} {row['nom_client']}")
+        try:
+            debut = pd.to_datetime(row["date_arrivee"]).date()
+            fin = pd.to_datetime(row["date_depart"]).date()
+            for jour in jours:
+                if debut <= jour < fin:
+                    icone = couleurs.get(row.get("plateforme", "Autre"), "⬜")
+                    planning[jour].append(f"{icone} {row.get('nom_client', '')}")
+        except:
+            continue
 
     table = []
     for semaine in calendar.monthcalendar(int(annee), mois_index):
@@ -67,8 +76,7 @@ def afficher_calendrier(df):
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
 
 def afficher_rapport(df):
-    st.subheader("📊 Rapport mensuel")
-
+    st.subheader("📊 Rapport")
     if df.empty:
         st.info("Aucune donnée disponible.")
         return
@@ -78,55 +86,59 @@ def afficher_rapport(df):
     if filtre != "Toutes":
         df = df[df["plateforme"] == filtre]
 
-    stats = df.groupby(["aaaa", "mm", "plateforme"]).agg({
+    stats = df.groupby(["AAAA", "MM", "plateforme"]).agg({
         "prix_brut": "sum",
         "prix_net": "sum",
         "charges": "sum",
         "nuitees": "sum"
     }).reset_index()
 
-    stats["mois_texte"] = stats["mm"].apply(lambda x: calendar.month_abbr[int(x)])
-    stats["période"] = stats["mois_texte"] + " " + stats["aaaa"].astype(str)
+    stats["mois_texte"] = stats["MM"].apply(lambda x: f"{calendar.month_abbr[int(x)]}")
+    stats["période"] = stats["mois_texte"] + " " + stats["AAAA"].astype(str)
 
     st.dataframe(stats[["période", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]])
 
-    st.markdown("### 📈 Revenus bruts par plateforme")
     st.line_chart(stats.pivot(index="période", columns="plateforme", values="prix_brut").fillna(0))
-
-    st.markdown("### 🛌 Nuitées par mois")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="nuitees").fillna(0))
-
-    st.markdown("### 📊 Charges mensuelles")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
 def main():
-    st.set_page_config("📖 Réservations Villa Tobias", layout="wide")
+    st.set_page_config(page_title="📖 Réservations", layout="wide")
+    st.sidebar.title("📁 Menu")
 
-    if not Path(FICHIER).exists():
-        st.warning("Le fichier reservations.xlsx est introuvable.")
-        return
+    uploader_excel()
+    df = charger_donnees()
 
-    df = pd.read_excel(FICHIER)
+    # Correction colonnes AAAA et MM
+    if not df.empty:
+        df["date_arrivee"] = pd.to_datetime(df["date_arrivee"], errors='coerce')
+        if "AAAA" not in df.columns or "MM" not in df.columns:
+            df["AAAA"] = df["date_arrivee"].dt.year
+            df["MM"] = df["date_arrivee"].dt.month
+            df.to_excel(FICHIER, index=False)
+            st.success("✅ Colonnes AAAA et MM ajoutées.")
 
-    onglet = st.sidebar.radio("Menu", [
+    onglet = st.sidebar.radio("Navigation", [
         "📋 Réservations",
         "📅 Calendrier",
-        "📊 Rapport",
-        "📥 Télécharger"
+        "📊 Rapport"
     ])
 
     if onglet == "📋 Réservations":
         afficher_reservations(df)
+        telecharger_fichier_excel(df)
+
     elif onglet == "📅 Calendrier":
         afficher_calendrier(df)
+
     elif onglet == "📊 Rapport":
         afficher_rapport(df)
-    elif onglet == "📥 Télécharger":
-        telecharger_fichier_excel(df)
 
 if __name__ == "__main__":
     main()
-"""
+'''
 
-# Écriture dans le fichier
-Path("/mnt/data/app.py").write_text(code_app_py.strip(), encoding="utf-8")
+# Sauvegarde dans le fichier app.py
+path = Path("/mnt/data/app.py")
+path.write_text(app_py_content.strip(), encoding="utf-8")
+path
