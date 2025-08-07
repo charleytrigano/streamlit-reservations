@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Contenu complet de app.py avec correction automatique des colonnes AAAA et MM
-app_py_content = '''
 import streamlit as st
 import pandas as pd
 import calendar
@@ -37,7 +33,7 @@ def afficher_reservations(df):
 
 def afficher_calendrier(df):
     st.subheader("📅 Calendrier mensuel")
-    
+
     if df.empty:
         st.warning("Aucune donnée disponible.")
         return
@@ -69,7 +65,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
 
@@ -136,9 +132,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-
-# Sauvegarde dans le fichier app.py
-path = Path("/mnt/data/app.py")
-path.write_text(app_py_content.strip(), encoding="utf-8")
-path
