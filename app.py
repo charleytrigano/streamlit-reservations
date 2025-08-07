@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Contenu de app.py
-app_py_content = """
 import streamlit as st
 import pandas as pd
 import calendar
@@ -112,7 +108,8 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}
+" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
@@ -167,7 +164,3 @@ def liste_clients(df):
         st.download_button("📥 Télécharger en CSV", data=data[colonnes].to_csv(index=False).encode("utf-8"), file_name="liste_clients.csv", mime="text/csv")
     else:
         st.info("Aucune donnée pour cette période.")
-"""
-
-# Écrire dans le fichier app.py
-Path("/mnt/data/app.py").write_text(app_py_content.strip(), encoding="utf-8")
