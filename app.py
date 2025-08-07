@@ -1,7 +1,3 @@
-from pathlib import Path
-
-# Contenu complet du fichier app.py corrigé
-app_py_content = """
 import streamlit as st
 import pandas as pd
 import calendar
@@ -113,7 +109,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(annee, mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[jour_date])
+                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
 
@@ -181,9 +177,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-# Sauvegarde du fichier app.py corrigé
-app_py_path = Path("/mnt/data/app.py")
-app_py_path.write_text(app_py_content.strip(), encoding="utf-8")
-app_py_path
