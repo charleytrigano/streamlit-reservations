@@ -1,6 +1,3 @@
-from pathlib import Path
-
-app_code = '''
 import streamlit as st
 import pandas as pd
 import calendar
@@ -114,7 +111,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 d = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(planning[d])
+                contenu = f"{jour}\n" + "\n".join(planning[d])
                 ligne.append(contenu)
         tableau.append(ligne)
 
@@ -174,7 +171,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-
-# Écriture du fichier app.py
-Path("/mnt/data/app.py").write_text(app_code.strip(), encoding="utf-8")
