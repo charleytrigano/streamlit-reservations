@@ -1,32 +1,69 @@
 import streamlit as st
 import pandas as pd
 import calendar
-from datetime import date, timedelta
+from datetime import datetime, timedelta, date
 import os
 
 FICHIER = "reservations.xlsx"
+SMS_HISTO = "historique_sms.csv"
 
-# 📂 Import manuel d’un fichier Excel
-def importer_fichier():
-    st.sidebar.markdown("### 📂 Importer un fichier Excel")
-    uploaded_file = st.sidebar.file_uploader("Sélectionner un fichier .xlsx", type=["xlsx"])
-    if uploaded_file:
-        df_new = pd.read_excel(uploaded_file)
-        df_new.to_excel(FICHIER, index=False)
-        st.sidebar.success("✅ Fichier importé avec succès")
-        return df_new
-    elif os.path.exists(FICHIER):
-        return pd.read_excel(FICHIER)
+def envoyer_sms(telephone, message):
+    print(f"SMS envoyé à {telephone} : {message}")
+
+def enregistrer_sms(nom, tel, contenu):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ligne = {"nom": nom, "telephone": tel, "message": contenu, "horodatage": now}
+    df_hist = pd.DataFrame([ligne])
+    if os.path.exists(SMS_HISTO):
+        df_hist = pd.concat([pd.read_csv(SMS_HISTO), df_hist], ignore_index=True)
+    df_hist.to_csv(SMS_HISTO, index=False)
+
+def notifier_arrivees_prochaines(df):
+    demain = date.today() + timedelta(days=1)
+    df_notif = df[df["date_arrivee"] == pd.to_datetime(demain)]
+    for _, row in df_notif.iterrows():
+        message = f"""
+        VILLA TOBIAS - {row['plateforme']}
+        Bonjour {row['nom_client']}. Votre séjour est prévu du {row['date_arrivee'].date()} au {row['date_depart'].date()}.
+        Merci de confirmer votre heure d’arrivée.
+        """
+        envoyer_sms(row["telephone"], message)
+        enregistrer_sms(row["nom_client"], row["telephone"], message)
+
+def historique_sms():
+    st.subheader("📨 Historique des SMS envoyés")
+    if os.path.exists(SMS_HISTO):
+        df = pd.read_csv(SMS_HISTO)
+        st.dataframe(df)
     else:
-        st.warning("Aucun fichier disponible.")
-        return pd.DataFrame()
+        st.info("Aucun SMS envoyé pour le moment.")
 
-# ▶️ Afficher les réservations
+def charger_donnees():
+    if os.path.exists(FICHIER):
+        df = pd.read_excel(FICHIER)
+        return df
+    return pd.DataFrame()
+
+def uploader_excel():
+    uploaded = st.sidebar.file_uploader("Importer un fichier Excel", type=["xlsx"])
+    if uploaded:
+        df = pd.read_excel(uploaded)
+        df.to_excel(FICHIER, index=False)
+        st.sidebar.success("✅ Fichier importé avec succès.")
+
+def telecharger_fichier_excel(df):
+    st.sidebar.markdown("### 💾 Sauvegarde")
+    st.sidebar.download_button(
+        label="📥 Télécharger le fichier Excel",
+        data=df.to_excel(index=False),
+        file_name="reservations_export.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 def afficher_reservations(df):
     st.title("📋 Réservations")
     st.dataframe(df)
 
-# ➕ Ajouter une réservation
 def ajouter_reservation(df):
     st.subheader("➕ Nouvelle Réservation")
     with st.form("ajout"):
@@ -57,7 +94,6 @@ def ajouter_reservation(df):
             df.to_excel(FICHIER, index=False)
             st.success("✅ Réservation enregistrée")
 
-# ✏️ Modifier ou supprimer une réservation
 def modifier_reservation(df):
     st.subheader("✏️ Modifier / Supprimer")
     df["identifiant"] = df["nom_client"] + " | " + pd.to_datetime(df["date_arrivee"]).astype(str)
@@ -93,50 +129,17 @@ def modifier_reservation(df):
             df.to_excel(FICHIER, index=False)
             st.warning("🗑 Réservation supprimée")
 
-# 📅 Afficher le calendrier
-def afficher_calendrier(df):
-    st.subheader("📅 Calendrier")
-    if df.empty or "annee" not in df.columns or df["annee"].dropna().empty:
-        st.warning("Aucune année valide disponible dans les données.")
-        return
-    col1, col2 = st.columns(2)
-    with col1:
-        mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:])
-    with col2:
-        annees_disponibles = sorted([int(a) for a in df["annee"].dropna().unique() if not pd.isnull(a)])
-        annee = st.selectbox("Année", annees_disponibles)
 
-    mois_index = list(calendar.month_name).index(mois_nom)
-    nb_jours = calendar.monthrange(annee, mois_index)[1]
-    jours = [date(annee, mois_index, i+1) for i in range(nb_jours)]
-    planning = {jour: [] for jour in jours}
-    couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
-    for _, row in df.iterrows():
-        debut = row["date_arrivee"]
-        fin = row["date_depart"]
-        for jour in jours:
-            if debut <= jour < fin:
-                icone = couleurs.get(row["plateforme"], "⬜")
-                planning[jour].append(f"{icone} {row['nom_client']}")
-    table = []
-    for semaine in calendar.monthcalendar(annee, mois_index):
-        ligne = []
-        for jour in semaine:
-            if jour == 0:
-                ligne.append("")
-            else:
-                jour_date = date(annee, mois_index, jour)
-                contenu = f"{jour}\n" + "\n".join(planning[jour_date])
-                ligne.append(contenu)
-        table.append(ligne)
-    st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
-
-# 📊 Afficher le rapport mensuel
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel")
+
     if df.empty:
         st.info("Aucune donnée disponible.")
         return
+
+    # ✅ Forcer les colonnes à être numériques
+    for col in ["prix_brut", "prix_net", "charges", "nuitees"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
     plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique())
     filtre = st.selectbox("Filtrer par plateforme", plateformes)
@@ -165,62 +168,4 @@ def afficher_rapport(df):
     st.markdown("### 📊 Charges mensuelles")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
 
-# 👥 Liste des clients
-def liste_clients(df):
-    st.subheader("👥 Liste des clients")
-    if "annee" not in df.columns or df["annee"].dropna().empty:
-        st.info("Aucune année valide dans les données.")
-        return
-    annee = st.selectbox("Année", sorted(df["annee"].dropna().unique()), key="annee_clients")
-    mois = st.selectbox("Mois", ["Tous"] + list(range(1, 13)), key="mois_clients")
-    data = df[df["annee"] == annee]
-    if mois != "Tous":
-        data = data[data["mois"] == mois]
 
-    if not data.empty:
-        data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-        data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([float("inf"), float("-inf")], 0).fillna(0).round(2)
-
-        colonnes = ["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "prix_brut", "prix_net", "charges", "%", "prix_brut/nuit", "prix_net/nuit"]
-        st.dataframe(data[colonnes])
-        st.download_button("📥 Télécharger en CSV", data=data[colonnes].to_csv(index=False).encode("utf-8"), file_name="liste_clients.csv", mime="text/csv")
-    else:
-        st.info("Aucune donnée pour cette période.")
-
-# ▶️ Application principale
-def main():
-    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
-    st.sidebar.title("📁 Menu")
-
-    df = importer_fichier()
-    if df.empty:
-        st.warning("Veuillez importer un fichier pour commencer.")
-        return
-
-    onglet = st.sidebar.radio(
-        "Menu",
-        [
-            "📋 Réservations",
-            "➕ Ajouter",
-            "✏️ Modifier / Supprimer",
-            "📅 Calendrier",
-            "📊 Rapport",
-            "👥 Liste clients",
-        ],
-    )
-
-    if onglet == "📋 Réservations":
-        afficher_reservations(df)
-    elif onglet == "➕ Ajouter":
-        ajouter_reservation(df)
-    elif onglet == "✏️ Modifier / Supprimer":
-        modifier_reservation(df)
-    elif onglet == "📅 Calendrier":
-        afficher_calendrier(df)
-    elif onglet == "📊 Rapport":
-        afficher_rapport(df)
-    elif onglet == "👥 Liste clients":
-        liste_clients(df)
-
-if __name__ == "__main__":
-    main()
