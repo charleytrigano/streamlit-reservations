@@ -7,9 +7,11 @@ import os
 FICHIER = "reservations.xlsx"
 SMS_HISTO = "historique_sms.csv"
 
+# 📲 Simuler l'envoi de SMS (remplace cette fonction pour une vraie API)
 def envoyer_sms(telephone, message):
     print(f"SMS envoyé à {telephone} : {message}")
 
+# 📝 Historique SMS
 def enregistrer_sms(nom, tel, contenu):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     ligne = {"nom": nom, "telephone": tel, "message": contenu, "horodatage": now}
@@ -18,6 +20,7 @@ def enregistrer_sms(nom, tel, contenu):
         df_hist = pd.concat([pd.read_csv(SMS_HISTO), df_hist], ignore_index=True)
     df_hist.to_csv(SMS_HISTO, index=False)
 
+# 🔔 Notifier les arrivées
 def notifier_arrivees_prochaines(df):
     demain = date.today() + timedelta(days=1)
     df_notif = df[df["date_arrivee"] == pd.to_datetime(demain)]
@@ -60,6 +63,7 @@ def telecharger_fichier_excel(df):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+# 💾 Pages de l'application
 def afficher_reservations(df):
     st.title("📋 Réservations")
     st.dataframe(df)
@@ -129,7 +133,6 @@ def modifier_reservation(df):
             df.to_excel(FICHIER, index=False)
             st.warning("🗑 Réservation supprimée")
 
-
 def afficher_rapport(df):
     st.subheader("📊 Rapport mensuel")
 
@@ -137,7 +140,6 @@ def afficher_rapport(df):
         st.info("Aucune donnée disponible.")
         return
 
-    # ✅ Forcer les colonnes à être numériques
     for col in ["prix_brut", "prix_net", "charges", "nuitees"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -168,3 +170,40 @@ def afficher_rapport(df):
 
     st.markdown("### 📊 Charges mensuelles")
     st.bar_chart(stats.pivot(index="période", columns="plateforme", values="charges").fillna(0))
+
+# ▶️ Lancement de l'application
+def main():
+    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+    st.sidebar.title("📁 Menu")
+
+    uploader_excel()
+    df = charger_donnees()
+
+    if df.empty:
+        st.warning("Aucune donnée disponible.")
+        return
+
+    notifier_arrivees_prochaines(df)
+
+    onglet = st.sidebar.radio("Navigation", [
+        "📋 Réservations",
+        "➕ Ajouter",
+        "✏️ Modifier / Supprimer",
+        "📊 Rapport",
+        "✉️ Historique SMS"
+    ])
+
+    if onglet == "📋 Réservations":
+        afficher_reservations(df)
+        telecharger_fichier_excel(df)
+    elif onglet == "➕ Ajouter":
+        ajouter_reservation(df)
+    elif onglet == "✏️ Modifier / Supprimer":
+        modifier_reservation(df)
+    elif onglet == "📊 Rapport":
+        afficher_rapport(df)
+    elif onglet == "✉️ Historique SMS":
+        historique_sms()
+
+if __name__ == "__main__":
+    main()
