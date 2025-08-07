@@ -12,7 +12,7 @@ def charger_donnees():
 
     df = pd.read_excel(FICHIER)
 
-    # ⏱️ Nettoyer les dates et ajouter colonnes annee / mois
+    # Nettoyer les dates et ajouter annee / mois
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = pd.to_datetime(df["date_arrivee"]).dt.date
         df["annee"] = pd.to_datetime(df["date_arrivee"]).dt.year
@@ -23,7 +23,7 @@ def charger_donnees():
 
     return df
 
-# 📤 Permettre à l'utilisateur d'importer un fichier Excel
+# 📤 Importer un fichier Excel
 def uploader_excel():
     uploaded_file = st.sidebar.file_uploader("📤 Charger un fichier Excel", type=["xlsx"])
     if uploaded_file:
@@ -31,7 +31,7 @@ def uploader_excel():
         df.to_excel(FICHIER, index=False)
         st.sidebar.success("✅ Fichier importé et sauvegardé.")
 
-# 💾 Téléchargement du fichier mis à jour
+# 💾 Télécharger les données
 def telecharger_fichier_excel(df):
     st.download_button(
         label="📥 Télécharger le fichier Excel mis à jour",
