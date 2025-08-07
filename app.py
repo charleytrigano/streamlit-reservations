@@ -1,8 +1,3 @@
-from pathlib import Path
-from zipfile import ZipFile
-
-# Contenu du fichier app.py corrigé sans write_text
-app_py_content = """
 import streamlit as st
 import pandas as pd
 import calendar
@@ -77,7 +72,7 @@ def afficher_calendrier(df):
                 ligne.append("")
             else:
                 jour_date = date(int(annee), mois_index, jour)
-                contenu = f"{jour}\\n" + "\\n".join(calendrier[jour_date])
+                contenu = f"{jour}\n" + "\n".join(calendrier[jour_date])
                 ligne.append(contenu)
         table.append(ligne)
     st.table(pd.DataFrame(table, columns=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]))
@@ -126,15 +121,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-
-# Sauvegarder dans un fichier .py
-app_file_path = Path("/mnt/data/app.py")
-app_file_path.write_text(app_py_content.strip(), encoding="utf-8")
-
-# Créer un fichier .zip contenant app.py
-zip_path = "/mnt/data/app_complet.zip"
-with ZipFile(zip_path, "w") as zipf:
-    zipf.write(app_file_path, arcname="app.py")
-
-zip_path
