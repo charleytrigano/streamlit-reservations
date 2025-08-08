@@ -105,8 +105,13 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
+    # ⚠️ Forcer openpyxl même pour un chemin disque
     df = ensure_schema(df)
-    df.to_excel(FICHIER, index=False)
+    try:
+        with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False)
+    except Exception as e:
+        st.error(f"Échec de sauvegarde Excel : {e}")
 
 def bouton_restaurer():
     up = st.sidebar.file_uploader("📤 Restaurer un fichier Excel", type=["xlsx"])
@@ -120,13 +125,22 @@ def bouton_restaurer():
             st.sidebar.error(f"Erreur import: {e}")
 
 def bouton_telecharger(df: pd.DataFrame):
+    # ⚠️ Forcer openpyxl pour BytesIO
     buf = BytesIO()
-    ensure_schema(df).to_excel(buf, index=False)
+    try:
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            ensure_schema(df).to_excel(writer, index=False)
+        data_xlsx = buf.getvalue()
+    except Exception:
+        st.sidebar.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+        data_xlsx = None
+
     st.sidebar.download_button(
         "📥 Télécharger le fichier Excel",
-        data=buf.getvalue(),
+        data=data_xlsx if data_xlsx else b"",
         file_name="reservations.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=(data_xlsx is None),
     )
 
 
