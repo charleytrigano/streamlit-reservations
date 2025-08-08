@@ -77,7 +77,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if "nom_client" not in df.columns:
         df["nom_client"] = ""
 
-    # Ordre de colonnes conseillé (sans imposer si absent)
+    # Ordre conseillé (si colonnes présentes)
     order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
              "prix_brut","prix_net","charges","%","AAAA","MM"]
     ordered = [c for c in order if c in df.columns]
@@ -122,6 +122,7 @@ def bouton_telecharger(df: pd.DataFrame):
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
     show = ensure_schema(df).copy()
+    # Dates jolies
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
             show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
@@ -227,12 +228,11 @@ def vue_calendrier(df: pd.DataFrame):
     annee = st.selectbox("Année", annees, index=max(0, len(annees) - 1))
     mois_index = list(calendar.month_name).index(mois_nom)  # 1..12
 
-    # Jours du mois (objets date)
+    # Jours du mois
     jours = [date(annee, mois_index, j+1) for j in range(calendar.monthrange(annee, mois_index)[1])]
     planning = {j: [] for j in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
 
-    # Remplissage planning: comparer date vs date (pas Timestamp)
     for _, row in df.iterrows():
         d1 = row.get("date_arrivee")
         d2 = row.get("date_depart")
@@ -244,7 +244,6 @@ def vue_calendrier(df: pd.DataFrame):
                 nom = str(row.get("nom_client", ""))
                 planning[j].append(f"{icone} {nom}")
 
-    # Tableau semaine x jours
     table = []
     for semaine in calendar.monthcalendar(annee, mois_index):
         ligne = []
@@ -266,43 +265,83 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique())
-    filtre = st.selectbox("Filtrer par plateforme", plateformes)
-    data = df if filtre == "Toutes" else df[df["plateforme"] == filtre]
+    # --- Filtres ---
+    col1, col2, col3 = st.columns(3)
+
+    plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    with col1:
+        filtre_plateforme = st.selectbox("Plateforme", plateformes)
+
+    annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
+    annees = ["Toutes"] + annees_uniques
+    with col2:
+        filtre_annee = st.selectbox("Année", annees)
+
+    mois_map = {i: calendar.month_name[i] for i in range(1, 13)}
+    mois_options = ["Tous"] + [f"{i:02d} - {mois_map[i]}" for i in range(1, 13)]
+    with col3:
+        filtre_mois_label = st.selectbox("Mois", mois_options)
+
+    # --- Application des filtres ---
+    data = df.copy()
+    if filtre_plateforme != "Toutes":
+        data = data[data["plateforme"] == filtre_plateforme]
+    if filtre_annee != "Toutes":
+        data = data[data["AAAA"] == int(filtre_annee)]
+    if filtre_mois_label != "Tous":
+        mois_num = int(filtre_mois_label.split(" - ")[0])  # "03 - March" -> 3
+        data = data[data["MM"] == mois_num]
 
     if data.empty:
-        st.info("Aucune donnée pour ce filtre.")
+        st.info("Aucune donnée pour ces filtres.")
         return
 
+    # --- Agrégation ---
     stats = (
         data
-        .dropna(subset=["AAAA","MM"])
-        .groupby(["AAAA","MM","plateforme"], dropna=True)
-        .agg(prix_brut=("prix_brut","sum"),
-             prix_net=("prix_net","sum"),
-             charges=("charges","sum"),
-             nuitees=("nuitees","sum"))
+        .dropna(subset=["AAAA", "MM"])
+        .groupby(["AAAA", "MM", "plateforme"], dropna=True)
+        .agg(
+            prix_brut=("prix_brut", "sum"),
+            prix_net=("prix_net", "sum"),
+            charges=("charges", "sum"),
+            nuitees=("nuitees", "sum"),
+        )
         .reset_index()
     )
 
     if stats.empty:
-        st.info("Aucune statistique à afficher.")
+        st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
-    # Période lisible + garder AAAA/MM visibles
     stats["mois_txt"] = stats["MM"].astype(int).apply(lambda x: calendar.month_abbr[x])
     stats["periode"] = stats["mois_txt"] + " " + stats["AAAA"].astype(int).astype(str)
 
-    st.dataframe(stats[["AAAA","MM","periode","plateforme","prix_brut","prix_net","charges","nuitees"]], use_container_width=True)
+    st.dataframe(
+        stats[["AAAA", "MM", "periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        use_container_width=True
+    )
 
-    st.markdown("### 💰 Revenus bruts par mois")
+    # --- Graphiques ---
+    st.markdown("### 💰 Revenus bruts")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="prix_brut").fillna(0))
 
-    st.markdown("### 💸 Charges par mois")
+    st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="charges").fillna(0))
 
-    st.markdown("### 🛌 Nuitées par mois")
+    st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="nuitees").fillna(0))
+
+    # --- Export XLSX du tableau agrégé filtré ---
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        stats.to_excel(writer, index=False, sheet_name="Rapport")
+    st.download_button(
+        "📥 Exporter le rapport (XLSX)",
+        data=out.getvalue(),
+        file_name="rapport_filtré.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
@@ -321,23 +360,19 @@ def vue_clients(df: pd.DataFrame):
     if data.empty:
         st.info("Aucune donnée pour cette période.")
         return
-    # Calculs / affichage
     with pd.option_context('mode.use_inf_as_na', True):
         if "nuitees" in data.columns and "prix_brut" in data.columns:
             data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).round(2).fillna(0)
         if "nuitees" in data.columns and "prix_net" in data.columns:
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).round(2).fillna(0)
-
     cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
             "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"]
     cols = [c for c in cols if c in data.columns]
-
     show = data.copy()
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
             show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
     st.dataframe(show[cols], use_container_width=True)
-
     st.download_button(
         "📥 Télécharger la liste (CSV)",
         data=show[cols].to_csv(index=False).encode("utf-8"),
@@ -382,3 +417,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
