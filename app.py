@@ -400,16 +400,23 @@ def vue_rapport(df: pd.DataFrame):
     st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="nuitees").fillna(0))
 
-    # --- Export XLSX du tableau agrégé filtré ---
+    # --- Export XLSX du tableau agrégé filtré (openpyxl) ---
     out = BytesIO()
-    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-        stats.to_excel(writer, index=False, sheet_name="Rapport")
-    st.download_button(
-        "📥 Exporter le rapport (XLSX)",
-        data=out.getvalue(),
-        file_name="rapport_filtre.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    try:
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            stats.to_excel(writer, index=False, sheet_name="Rapport")
+        data_xlsx = out.getvalue()
+    except Exception:
+        st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+        data_xlsx = None
+
+    if data_xlsx:
+        st.download_button(
+            "📥 Exporter le rapport (XLSX)",
+            data=data_xlsx,
+            file_name="rapport_filtre.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
@@ -462,14 +469,21 @@ def vue_sms(df: pd.DataFrame):
         st.dataframe(dfh, use_container_width=True)
 
         out = BytesIO()
-        with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-            dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
-        st.download_button(
-            "📥 Télécharger l’historique (XLSX)",
-            data=out.getvalue(),
-            file_name="historique_sms.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        try:
+            with pd.ExcelWriter(out, engine="openpyxl") as writer:
+                dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
+            data_xlsx = out.getvalue()
+        except Exception:
+            st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+            data_xlsx = None
+
+        if data_xlsx:
+            st.download_button(
+                "📥 Télécharger l’historique (XLSX)",
+                data=data_xlsx,
+                file_name="historique_sms.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
         if st.button("🧹 Vider l’historique"):
             try:
