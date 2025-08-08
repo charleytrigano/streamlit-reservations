@@ -94,19 +94,72 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
 
+# -------- Détection & tri avec lignes "Total" --------
+def _marque_totaux(df: pd.DataFrame) -> pd.Series:
+    """Détecte les lignes de total (robuste) : 'total' dans nom_client/plateforme,
+    ou lignes sans dates mais avec des montants."""
+    if df is None or df.empty:
+        return pd.Series([], dtype=bool)
+
+    mask = pd.Series(False, index=df.index)
+
+    # a) 'total' écrit dans nom_client ou plateforme
+    for col in ["nom_client", "plateforme"]:
+        if col in df.columns:
+            m = df[col].astype(str).str.strip().str.lower().eq("total")
+            mask = mask | m
+
+    # b) lignes sans dates mais avec des montants => souvent un total
+    has_no_dates = pd.Series(True, index=df.index)
+    if "date_arrivee" in df.columns:
+        has_no_dates = has_no_dates & df["date_arrivee"].isna()
+    if "date_depart" in df.columns:
+        has_no_dates = has_no_dates & df["date_depart"].isna()
+
+    has_money = pd.Series(False, index=df.index)
+    for col in ["prix_brut", "prix_net", "charges"]:
+        if col in df.columns:
+            has_money = has_money | df[col].notna()
+
+    mask = mask | (has_no_dates & has_money)
+    return mask
+
+def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
+    """Sépare les totaux, trie le reste par date_arrivee puis recolle les totaux en bas."""
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+    # Séparer totaux
+    mask_total = _marque_totaux(df)
+    df_tot = df[mask_total].copy()
+    df_core = df[~mask_total].copy()
+
+    # Trier le cœur par date_arrivee (+ nom pour stabiliser)
+    by_cols = [c for c in ["date_arrivee", "nom_client"] if c in df_core.columns]
+    if by_cols:
+        df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
+
+    # Recolle les totaux en bas (en conservant leur ordre d'origine)
+    out = pd.concat([df_core, df_tot], ignore_index=True)
+    return out
+
 
 # -------------------- IO Excel --------------------
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
         return pd.DataFrame()
     try:
-        return ensure_schema(pd.read_excel(FICHIER))
+        df = ensure_schema(pd.read_excel(FICHIER))
+        df = _trier_et_recoller_totaux(df)  # tri au chargement
+        return df
     except Exception:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    # ⚠️ Forcer openpyxl même pour un chemin disque
+    # ⚠️ Forcer openpyxl même pour un chemin disque + tri avant écriture
     df = ensure_schema(df)
+    df = _trier_et_recoller_totaux(df)
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
@@ -118,6 +171,7 @@ def bouton_restaurer():
     if up is not None:
         try:
             df_new = pd.read_excel(up)
+            df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
             sauvegarder_donnees(df_new)
             st.sidebar.success("✅ Fichier restauré.")
             st.rerun()
@@ -129,7 +183,7 @@ def bouton_telecharger(df: pd.DataFrame):
     buf = BytesIO()
     try:
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            ensure_schema(df).to_excel(writer, index=False)
+            _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
         data_xlsx = buf.getvalue()
     except Exception:
         st.sidebar.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
@@ -204,7 +258,7 @@ def notifier_arrivees_prochaines(df: pd.DataFrame):
 # -------------------- Vues --------------------
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
-    show = ensure_schema(df).copy()
+    show = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
             show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
@@ -238,13 +292,14 @@ def vue_ajouter(df: pd.DataFrame):
             "MM": arrivee.month
         }
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
+        df2 = _trier_et_recoller_totaux(df2)  # tri immédiat avant sauvegarde
         sauvegarder_donnees(df2)
         st.success("✅ Réservation enregistrée")
         st.rerun()
 
 def vue_modifier(df: pd.DataFrame):
     st.title("✏️ Modifier / Supprimer")
-    df = ensure_schema(df)
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune réservation.")
         return
@@ -284,6 +339,7 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i, "AAAA"] = arrivee.year
         df.at[i, "MM"] = arrivee.month
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        df = _trier_et_recoller_totaux(df)
         sauvegarder_donnees(df)
         st.success("✅ Réservation modifiée")
         st.rerun()
@@ -291,13 +347,14 @@ def vue_modifier(df: pd.DataFrame):
     if b_del:
         df2 = df.drop(index=i)
         df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        df2 = _trier_et_recoller_totaux(df2)
         sauvegarder_donnees(df2)
         st.warning("🗑 Réservation supprimée")
         st.rerun()
 
 def vue_calendrier(df: pd.DataFrame):
     st.title("📅 Calendrier mensuel")
-    df = ensure_schema(df)
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune donnée.")
         return
@@ -342,7 +399,7 @@ def vue_calendrier(df: pd.DataFrame):
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport")
-    df = ensure_schema(df)
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune donnée.")
         return
@@ -434,7 +491,7 @@ def vue_rapport(df: pd.DataFrame):
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
-    df = ensure_schema(df)
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune donnée.")
         return
