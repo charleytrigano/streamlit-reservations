@@ -1,11 +1,21 @@
 import streamlit as st
 import pandas as pd
 import calendar
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from io import BytesIO
 import os
+import requests  # SMS
 
 FICHIER = "reservations.xlsx"
+
+# ==================== CONFIG SMS ====================
+# Idéalement, mets ces infos dans Streamlit Cloud → Settings → Secrets
+FREE_USER = st.secrets.get("FREE_USER", "12026027")                  # <-- remplace si besoin
+FREE_API_KEY = st.secrets.get("FREE_API_KEY", "MF7Qjs3C8KxKHz")      # <-- remplace si besoin
+NUM_TELEPHONE_PERSO = st.secrets.get("NUM_TELEPHONE_PERSO", "+33617722379")
+SMS_HISTO = "historique_sms.csv"
+# ====================================================
+
 
 # -------------------- Utils --------------------
 def to_date_only(x):
@@ -84,6 +94,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
 
+
 # -------------------- IO Excel --------------------
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
@@ -118,11 +129,68 @@ def bouton_telecharger(df: pd.DataFrame):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+
+# -------------------- SMS --------------------
+def envoyer_sms(message: str) -> bool:
+    """Envoi un SMS via l’API Free Mobile (vers la ligne associée au compte Free)."""
+    try:
+        url = "https://smsapi.free-mobile.fr/sendmsg"
+        params = {"user": FREE_USER, "pass": FREE_API_KEY, "msg": message}
+        r = requests.get(url, params=params, timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+def enregistrer_sms(nom: str, tel: str, contenu: str):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ligne = {"nom": nom, "telephone": tel, "message": contenu, "horodatage": now}
+    try:
+        if os.path.exists(SMS_HISTO):
+            dfh = pd.read_csv(SMS_HISTO)
+            dfh = pd.concat([dfh, pd.DataFrame([ligne])], ignore_index=True)
+        else:
+            dfh = pd.DataFrame([ligne])
+        dfh.to_csv(SMS_HISTO, index=False)
+    except Exception:
+        pass
+
+def notifier_arrivees_prochaines(df: pd.DataFrame):
+    """
+    Envoie un SMS pour chaque arrivée prévue DEMAIN.
+    Envoi sur la ligne Free Mobile (vous), et enregistre un historique.
+    """
+    if df is None or df.empty:
+        return 0, 0
+    demain = date.today() + timedelta(days=1)
+    a_notifier = df[df["date_arrivee"] == demain]
+    envoyes = 0
+    erreurs = 0
+    for _, row in a_notifier.iterrows():
+        nom = str(row.get("nom_client", "")).strip()
+        plate = str(row.get("plateforme", ""))
+        d1 = row.get("date_arrivee")
+        d2 = row.get("date_depart")
+        d1txt = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else str(d1)
+        d2txt = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else str(d2)
+        message = (
+            f"VILLA TOBIAS - {plate}\n"
+            f"Bonjour {nom}. Votre séjour est prévu du {d1txt} au {d2txt}.\n"
+            f"Afin de vous accueillir, merci de nous confirmer votre heure d’arrivée.\n"
+            f"Un parking est à votre disposition sur place. À demain."
+        )
+        ok = envoyer_sms(message)
+        if ok:
+            envoyes += 1
+        else:
+            erreurs += 1
+        enregistrer_sms(nom, str(row.get("telephone", "")), message)
+    return envoyes, erreurs
+
+
 # -------------------- Vues --------------------
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
     show = ensure_schema(df).copy()
-    # Dates jolies
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
             show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
@@ -339,7 +407,7 @@ def vue_rapport(df: pd.DataFrame):
     st.download_button(
         "📥 Exporter le rapport (XLSX)",
         data=out.getvalue(),
-        file_name="rapport_filtré.xlsx",
+        file_name="rapport_filtre.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
@@ -380,9 +448,39 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
-def vue_sms():
-    st.title("✉️ Historique SMS")
-    st.info("À raccorder au fournisseur SMS (non modifié).")
+def vue_sms(df: pd.DataFrame):
+    st.title("✉️ Historique & envoi de SMS")
+
+    # Envoi manuel des rappels "arrivées demain"
+    if st.button("🔔 Envoyer les SMS pour les arrivées de demain"):
+        envoyes, erreurs = notifier_arrivees_prochaines(df)
+        st.success(f"SMS envoyés: {envoyes} • Échecs: {erreurs}")
+
+    st.markdown("#### Historique des SMS envoyés")
+    if os.path.exists(SMS_HISTO):
+        dfh = pd.read_csv(SMS_HISTO)
+        st.dataframe(dfh, use_container_width=True)
+
+        out = BytesIO()
+        with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+            dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
+        st.download_button(
+            "📥 Télécharger l’historique (XLSX)",
+            data=out.getvalue(),
+            file_name="historique_sms.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        if st.button("🧹 Vider l’historique"):
+            try:
+                os.remove(SMS_HISTO)
+                st.success("Historique supprimé.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Impossible de supprimer : {e}")
+    else:
+        st.info("Aucun SMS envoyé pour le moment.")
+
 
 # -------------------- App --------------------
 def main():
@@ -413,8 +511,7 @@ def main():
     elif onglet == "👥 Liste clients":
         vue_clients(df)
     elif onglet == "✉️ Historique SMS":
-        vue_sms()
+        vue_sms(df)
 
 if __name__ == "__main__":
     main()
-
