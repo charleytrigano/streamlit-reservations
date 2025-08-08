@@ -1,6 +1,6 @@
 streamlit
 pandas
-openpyxl
+openpyxl>=3.1.2
 requests
 matplotlib
 fpdf
