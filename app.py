@@ -4,16 +4,17 @@ import calendar
 from datetime import date, timedelta, datetime
 from io import BytesIO
 import os
-import requests  # SMS
+import json
+import requests  # SMS + iCal fetch
 import re
 from zoneinfo import ZoneInfo
 
 FICHIER = "reservations.xlsx"
+ICAL_SOURCES_FILE = "ical_sources.json"
 
 # ==================== CONFIG SMS ====================
-# Idéalement, mets ces infos dans Streamlit Cloud → Settings → Secrets
-FREE_USER = st.secrets.get("FREE_USER", "12026027")                  # <-- remplace si besoin
-FREE_API_KEY = st.secrets.get("FREE_API_KEY", "MF7Qjs3C8KxKHz")      # <-- remplace si besoin
+FREE_USER = st.secrets.get("FREE_USER", "12026027")
+FREE_API_KEY = st.secrets.get("FREE_API_KEY", "MF7Qjs3C8KxKHz")
 NUM_TELEPHONE_PERSO = st.secrets.get("NUM_TELEPHONE_PERSO", "+33617722379")
 SMS_HISTO = "historique_sms.csv"
 # ====================================================
@@ -29,24 +30,19 @@ def to_date_only(x):
         return None
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise le DF sans changer le modèle de données d'origine."""
     if df is None or df.empty:
         return pd.DataFrame()
-
     df = df.copy()
 
-    # Dates en 'date' (pas datetime)
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
         df["date_depart"] = df["date_depart"].apply(to_date_only)
 
-    # Colonnes montants
     for col in ["prix_brut", "prix_net", "charges", "%"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Calculs si manquants
     if "prix_brut" in df.columns and "prix_net" in df.columns:
         if "charges" not in df.columns:
             df["charges"] = df["prix_brut"] - df["prix_net"]
@@ -58,14 +54,12 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].round(2)
 
-    # nuitees
     if "date_arrivee" in df.columns and "date_depart" in df.columns:
         df["nuitees"] = [
             (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else None
             for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
         ]
 
-    # AAAA / MM depuis date_arrivee si nécessaire
     if "date_arrivee" in df.columns:
         years, months = [], []
         for d in df["date_arrivee"]:
@@ -83,66 +77,49 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if "MM" in df.columns:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
-    # Valeurs par défaut
     if "plateforme" not in df.columns:
         df["plateforme"] = "Autre"
     if "nom_client" not in df.columns:
         df["nom_client"] = ""
+    if "uid_ical" not in df.columns:
+        df["uid_ical"] = ""
 
-    # Ordre conseillé (si colonnes présentes)
     order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
              "prix_brut","prix_net","charges","%","AAAA","MM","uid_ical"]
     ordered = [c for c in order if c in df.columns]
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
 
-# -------- Détection & tri avec lignes "Total" --------
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte les lignes de total (robuste) : 'total' dans nom_client/plateforme,
-    ou lignes sans dates mais avec des montants."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
-
     mask = pd.Series(False, index=df.index)
-
-    # a) 'total' écrit dans nom_client ou plateforme
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
             m = df[col].astype(str).str.strip().str.lower().eq("total")
             mask = mask | m
-
-    # b) lignes sans dates mais avec des montants => souvent un total
     has_no_dates = pd.Series(True, index=df.index)
     if "date_arrivee" in df.columns:
         has_no_dates = has_no_dates & df["date_arrivee"].isna()
     if "date_depart" in df.columns:
         has_no_dates = has_no_dates & df["date_depart"].isna()
-
     has_money = pd.Series(False, index=df.index)
     for col in ["prix_brut", "prix_net", "charges"]:
         if col in df.columns:
             has_money = has_money | df[col].notna()
-
     mask = mask | (has_no_dates & has_money)
     return mask
 
 def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
-    """Sépare les totaux, trie le reste par date_arrivee puis recolle les totaux en bas."""
     if df is None or df.empty:
         return df
-
     df = df.copy()
-    # Séparer totaux
     mask_total = _marque_totaux(df)
     df_tot = df[mask_total].copy()
     df_core = df[~mask_total].copy()
-
-    # Trier le cœur par date_arrivee (+ nom pour stabiliser)
     by_cols = [c for c in ["date_arrivee", "nom_client"] if c in df_core.columns]
     if by_cols:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
-
-    # Recolle les totaux en bas (en conservant leur ordre d'origine)
     out = pd.concat([df_core, df_tot], ignore_index=True)
     return out
 
@@ -153,13 +130,12 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
     try:
         df = ensure_schema(pd.read_excel(FICHIER))
-        df = _trier_et_recoller_totaux(df)  # tri au chargement
+        df = _trier_et_recoller_totaux(df)
         return df
     except Exception:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    # ⚠️ Forcer openpyxl même pour un chemin disque + tri avant écriture
     df = ensure_schema(df)
     df = _trier_et_recoller_totaux(df)
     try:
@@ -181,7 +157,6 @@ def bouton_restaurer():
             st.sidebar.error(f"Erreur import: {e}")
 
 def bouton_telecharger(df: pd.DataFrame):
-    # ⚠️ Forcer openpyxl pour BytesIO
     buf = BytesIO()
     try:
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -190,7 +165,6 @@ def bouton_telecharger(df: pd.DataFrame):
     except Exception:
         st.sidebar.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
         data_xlsx = None
-
     st.sidebar.download_button(
         "📥 Télécharger le fichier Excel",
         data=data_xlsx if data_xlsx else b"",
@@ -202,7 +176,6 @@ def bouton_telecharger(df: pd.DataFrame):
 
 # -------------------- SMS --------------------
 def envoyer_sms(message: str) -> bool:
-    """Envoi un SMS via l’API Free Mobile (vers la ligne associée au compte Free)."""
     try:
         url = "https://smsapi.free-mobile.fr/sendmsg"
         params = {"user": FREE_USER, "pass": FREE_API_KEY, "msg": message}
@@ -225,10 +198,6 @@ def enregistrer_sms(nom: str, tel: str, contenu: str):
         pass
 
 def notifier_arrivees_prochaines(df: pd.DataFrame):
-    """
-    Envoie un SMS pour chaque arrivée prévue DEMAIN.
-    Envoi sur la ligne Free Mobile (vous), et enregistre un historique.
-    """
     if df is None or df.empty:
         return 0, 0
     demain = date.today() + timedelta(days=1)
@@ -305,10 +274,8 @@ def fetch_ics(url: str) -> str | None:
     return None
 
 def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
-    """Retourne un DF avec: date_arrivee, date_depart, uid_ical, nom_client (si trouvé), plateforme, status."""
     if not text:
         return pd.DataFrame()
-
     lines = _ics_unfold(text)
     events = []
     cur = []
@@ -326,7 +293,6 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
             dtstart = _ics_get_field(cur, "DTSTART")
             dtend = _ics_get_field(cur, "DTEND")
 
-            # skip annulés / blocked
             if "CANCELLED" in status:
                 continue
             if "BLOCK" in summary.upper():
@@ -335,7 +301,6 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
             d1 = _to_local_date_only(dtstart) if dtstart else None
             d2 = _to_local_date_only(dtend) if dtend else None
 
-            # essaie d’extraire un nom (heuristique simple)
             nom = ""
             m1 = re.search(r"(Guest|Client)\s*[:=-]\s*([^\n\r|]+)", descr, flags=re.I)
             if m1:
@@ -344,7 +309,7 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
                 nom = summary.strip()
 
             events.append({
-                "uid_ical": uid or "",
+                "uid_ical": (uid or "").strip(),
                 "status": status or "CONFIRMED",
                 "nom_client": nom,
                 "plateforme": plateforme,
@@ -359,23 +324,60 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # garde seulement les lignes avec dates valides
     df = df[(df["date_arrivee"].notna()) & (df["date_depart"].notna())].copy()
-
-    # complète AAAA/MM
     df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
     df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
 
-    # initialise montants à 0.0 (tu compléteras ensuite)
-    for c in ["prix_brut","prix_net","charges","%","nuitees"]:
+    for c in ["prix_brut","prix_net","charges","%","nuitees","telephone"]:
         df[c] = pd.NA
     df["prix_brut"] = 0.0
     df["prix_net"]  = 0.0
     df["charges"]   = 0.0
     df["%"]         = 0.0
     df["nuitees"]   = (df["date_depart"] - df["date_arrivee"]).apply(lambda d: d.days)
+    df["telephone"] = ""
 
     return df
+
+
+# -------------------- iCal sources (CRUD) --------------------
+def load_ical_sources() -> list[dict]:
+    # Si absent, créer avec tes 2 URLs par défaut
+    if not os.path.exists(ICAL_SOURCES_FILE):
+        defaults = [
+            {
+                "plateforme": "Booking",
+                "url": "https://admin.booking.com/hotel/hoteladmin/ical.html?t=9e698b04-6003-498e-ba23-9fb706154a1c"
+            },
+            {
+                "plateforme": "Airbnb",
+                "url": "https://www.airbnb.fr/calendar/ical/2342615.ics?s=bf28ee09c81befe58bb2c12233de25be"
+            }
+        ]
+        save_ical_sources(defaults)
+        return defaults
+    try:
+        with open(ICAL_SOURCES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_ical_sources(sources: list[dict]):
+    try:
+        with open(ICAL_SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sources, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Impossible d’écrire {ICAL_SOURCES_FILE} : {e}")
+
+def add_ical_source(plateforme: str, url: str):
+    src = load_ical_sources()
+    src.append({"plateforme": plateforme.strip(), "url": url.strip()})
+    save_ical_sources(src)
+
+def remove_ical_sources(urls_to_remove: list[str]):
+    src = load_ical_sources()
+    src = [s for s in src if s.get("url") not in set(urls_to_remove)]
+    save_ical_sources(src)
 
 
 # -------------------- Vues --------------------
@@ -412,10 +414,11 @@ def vue_ajouter(df: pd.DataFrame):
             "%": round(((prix_brut - prix_net) / prix_brut * 100) if prix_brut else 0, 2),
             "nuitees": (depart - arrivee).days,
             "AAAA": arrivee.year,
-            "MM": arrivee.month
+            "MM": arrivee.month,
+            "uid_ical": ""
         }
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
-        df2 = _trier_et_recoller_totaux(df2)  # tri immédiat avant sauvegarde
+        df2 = _trier_et_recoller_totaux(df2)
         sauvegarder_donnees(df2)
         st.success("✅ Réservation enregistrée")
         st.rerun()
@@ -426,7 +429,6 @@ def vue_modifier(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune réservation.")
         return
-
     df["identifiant"] = df["nom_client"].astype(str) + " | " + df["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
     choix = st.selectbox("Choisir une réservation", df["identifiant"])
     idx = df.index[df["identifiant"] == choix]
@@ -481,20 +483,16 @@ def vue_calendrier(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune donnée.")
         return
-
     mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:], index=max(0, (date.today().month - 1)))
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     if not annees:
         st.warning("Aucune année disponible.")
         return
     annee = st.selectbox("Année", annees, index=max(0, len(annees) - 1))
-    mois_index = list(calendar.month_name).index(mois_nom)  # 1..12
-
-    # Jours du mois
+    mois_index = list(calendar.month_name).index(mois_nom)
     jours = [date(annee, mois_index, j+1) for j in range(calendar.monthrange(annee, mois_index)[1])]
     planning = {j: [] for j in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
-
     for _, row in df.iterrows():
         d1 = row.get("date_arrivee")
         d2 = row.get("date_depart")
@@ -505,7 +503,6 @@ def vue_calendrier(df: pd.DataFrame):
                 icone = couleurs.get(row.get("plateforme", "Autre"), "⬜")
                 nom = str(row.get("nom_client", ""))
                 planning[j].append(f"{icone} {nom}")
-
     table = []
     for semaine in calendar.monthcalendar(annee, mois_index):
         ligne = []
@@ -517,7 +514,6 @@ def vue_calendrier(df: pd.DataFrame):
                 contenu = f"{jour}\n" + "\n".join(planning.get(d, []))
                 ligne.append(contenu)
         table.append(ligne)
-
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
@@ -526,75 +522,54 @@ def vue_rapport(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune donnée.")
         return
-
-    # --- Filtres ---
     col1, col2, col3 = st.columns(3)
-
     plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
     with col1:
         filtre_plateforme = st.selectbox("Plateforme", plateformes)
-
     annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     annees = ["Toutes"] + annees_uniques
     with col2:
         filtre_annee = st.selectbox("Année", annees)
-
     mois_map = {i: calendar.month_name[i] for i in range(1, 13)}
     mois_options = ["Tous"] + [f"{i:02d} - {mois_map[i]}" for i in range(1, 13)]
     with col3:
         filtre_mois_label = st.selectbox("Mois", mois_options)
-
-    # --- Application des filtres ---
     data = df.copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
     if filtre_annee != "Toutes":
         data = data[data["AAAA"] == int(filtre_annee)]
     if filtre_mois_label != "Tous":
-        mois_num = int(filtre_mois_label.split(" - ")[0])  # "03 - March" -> 3
+        mois_num = int(filtre_mois_label.split(" - ")[0])
         data = data[data["MM"] == mois_num]
-
     if data.empty:
         st.info("Aucune donnée pour ces filtres.")
         return
-
-    # --- Agrégation ---
     stats = (
-        data
-        .dropna(subset=["AAAA", "MM"])
-        .groupby(["AAAA", "MM", "plateforme"], dropna=True)
-        .agg(
-            prix_brut=("prix_brut", "sum"),
-            prix_net=("prix_net", "sum"),
-            charges=("charges", "sum"),
-            nuitees=("nuitees", "sum"),
-        )
-        .reset_index()
+        data.dropna(subset=["AAAA", "MM"])
+            .groupby(["AAAA", "MM", "plateforme"], dropna=True)
+            .agg(
+                prix_brut=("prix_brut", "sum"),
+                prix_net=("prix_net", "sum"),
+                charges=("charges", "sum"),
+                nuitees=("nuitees", "sum"),
+            ).reset_index()
     )
-
     if stats.empty:
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
-
     stats["mois_txt"] = stats["MM"].astype(int).apply(lambda x: calendar.month_abbr[x])
     stats["periode"] = stats["mois_txt"] + " " + stats["AAAA"].astype(int).astype(str)
-
     st.dataframe(
         stats[["AAAA", "MM", "periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
-
-    # --- Graphiques ---
     st.markdown("### 💰 Revenus bruts")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="prix_brut").fillna(0))
-
     st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="charges").fillna(0))
-
     st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="nuitees").fillna(0))
-
-    # --- Export XLSX du tableau agrégé filtré (openpyxl) ---
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
@@ -603,7 +578,6 @@ def vue_rapport(df: pd.DataFrame):
     except Exception:
         st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
         data_xlsx = None
-
     if data_xlsx:
         st.download_button(
             "📥 Exporter le rapport (XLSX)",
@@ -651,17 +625,13 @@ def vue_clients(df: pd.DataFrame):
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ Historique & envoi de SMS")
-
-    # Envoi manuel des rappels "arrivées demain"
     if st.button("🔔 Envoyer les SMS pour les arrivées de demain"):
         envoyes, erreurs = notifier_arrivees_prochaines(df)
         st.success(f"SMS envoyés: {envoyes} • Échecs: {erreurs}")
-
     st.markdown("#### Historique des SMS envoyés")
     if os.path.exists(SMS_HISTO):
         dfh = pd.read_csv(SMS_HISTO)
         st.dataframe(dfh, use_container_width=True)
-
         out = BytesIO()
         try:
             with pd.ExcelWriter(out, engine="openpyxl") as writer:
@@ -670,7 +640,6 @@ def vue_sms(df: pd.DataFrame):
         except Exception:
             st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
             data_xlsx = None
-
         if data_xlsx:
             st.download_button(
                 "📥 Télécharger l’historique (XLSX)",
@@ -678,7 +647,6 @@ def vue_sms(df: pd.DataFrame):
                 file_name="historique_sms.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
         if st.button("🧹 Vider l’historique"):
             try:
                 os.remove(SMS_HISTO)
@@ -691,78 +659,102 @@ def vue_sms(df: pd.DataFrame):
 
 def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (Airbnb / Booking / autres)")
-    st.info("Colle ici tes URLs iCal. Je charge un aperçu, puis tu importes ce que tu veux dans Excel. "
-            "Les réservations CANCELLED ou Blocked sont ignorées. Déduplication par UID pour éviter les doublons.")
 
-    colA, colB = st.columns(2)
-    with colA:
-        url1 = st.text_input("URL iCal #1")
-        plat1 = st.selectbox("Plateforme #1", ["Airbnb","Booking","Autre"], index=0)
-    with colB:
-        url2 = st.text_input("URL iCal #2")
-        plat2 = st.selectbox("Plateforme #2", ["Airbnb","Booking","Autre"], index=1)
+    # --- Gestion des sources ---
+    st.subheader("📚 Sources iCal")
+    sources = load_ical_sources()
+    if sources:
+        st.dataframe(pd.DataFrame(sources), use_container_width=True)
+        urls_to_remove = st.multiselect("Sélectionner des sources à supprimer (par URL)", [s["url"] for s in sources])
+        if st.button("🗑 Supprimer la sélection"):
+            remove_ical_sources(urls_to_remove)
+            st.success("Sources supprimées.")
+            st.rerun()
+    else:
+        st.info("Aucune source iCal enregistrée.")
 
-    btn = st.button("📥 Charger l’aperçu")
-    if not btn:
-        return
+    with st.expander("➕ Ajouter une plateforme iCal"):
+        colA, colB = st.columns([1,3])
+        with colA:
+            new_platform = st.text_input("Nom de la plateforme", placeholder="Ex: VRBO / Abritel / Autre")
+        with colB:
+            new_url = st.text_input("URL iCal")
+        if st.button("✅ Ajouter la source"):
+            if new_platform.strip() and new_url.strip():
+                add_ical_source(new_platform.strip(), new_url.strip())
+                st.success("Source ajoutée.")
+                st.rerun()
+            else:
+                st.error("Renseigne un nom et une URL.")
 
-    dfs = []
-    for url, plat in [(url1, plat1), (url2, plat2)]:
-        if url.strip():
-            txt = fetch_ics(url.strip())
+    st.subheader("📥 Charger l’aperçu")
+    if st.button("Charger les réservations depuis toutes les sources actives"):
+        dfs = []
+        for s in load_ical_sources():
+            txt = fetch_ics(s["url"])
             if not txt:
-                st.error(f"Impossible de charger: {url}")
+                st.warning(f"Impossible de charger: {s['plateforme']} ({s['url']})")
                 continue
-            dfe = parse_ics(txt, plat)
+            dfe = parse_ics(txt, s["plateforme"])
             if dfe.empty:
-                st.warning(f"Aucun événement exploitable pour {plat}.")
+                st.info(f"Aucun événement exploitable pour {s['plateforme']}.")
             else:
                 dfs.append(dfe)
 
-    if not dfs:
-        st.info("Rien à importer.")
-        return
-
-    df_new = pd.concat(dfs, ignore_index=True)
-
-    # Déduplication par UID vs Excel existant
-    df_exist = ensure_schema(df.copy())
-    if "uid_ical" not in df_exist.columns:
-        df_exist["uid_ical"] = ""
-
-    uids_exist = set(df_exist["uid_ical"].dropna().astype(str))
-    df_new["uid_ical"] = df_new["uid_ical"].fillna("").astype(str)
-    df_new = df_new[~df_new["uid_ical"].isin(uids_exist)].copy()
-
-    if df_new.empty:
-        st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
-        return
-
-    # Aperçu
-    show = df_new.copy()
-    for col in ["date_arrivee","date_depart"]:
-        show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
-    st.subheader("Aperçu des nouvelles réservations détectées")
-    st.dataframe(show[["plateforme","nom_client","date_arrivee","date_depart","uid_ical"]], use_container_width=True)
-
-    # Sélection
-    selection = st.multiselect(
-        "Sélectionne les UID à importer",
-        options=show["uid_ical"].tolist(),
-        default=show["uid_ical"].tolist()
-    )
-
-    if st.button("✅ Importer la sélection dans Excel"):
-        a_importer = df_new[df_new["uid_ical"].isin(selection)].copy()
-        if a_importer.empty:
-            st.warning("Aucune sélection.")
+        if not dfs:
+            st.info("Rien à importer.")
             return
 
-        # On ne touche pas aux totaux; on concatène puis on sauvegarde (tri auto)
-        df_final = pd.concat([df_exist, a_importer], ignore_index=True)
-        sauvegarder_donnees(df_final)
-        st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
-        st.rerun()
+        df_new = pd.concat(dfs, ignore_index=True)
+
+        # Déduplication par UID + fallback heuristique
+        exist = ensure_schema(df.copy())
+        if "uid_ical" not in exist.columns:
+            exist["uid_ical"] = ""
+        uids_exist = set(exist["uid_ical"].dropna().astype(str))
+        df_new["uid_ical"] = df_new["uid_ical"].fillna("").astype(str)
+        # retire UIDs déjà présents
+        df_new = df_new[~df_new["uid_ical"].isin(uids_exist)].copy()
+
+        # Fallback si UID vide : on retire ceux déjà présents sur mêmes clés
+        if not df_new.empty:
+            key_cols = ["plateforme","date_arrivee","date_depart","nom_client"]
+            merged = df_new.merge(
+                exist[key_cols].assign(_exists=True),
+                on=key_cols, how="left"
+            )
+            df_new = merged[merged["_exists"] != True].drop(columns=["_exists"])
+
+        if df_new.empty:
+            st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
+            return
+
+        show = df_new.copy()
+        for col in ["date_arrivee","date_depart"]:
+            show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+        st.subheader("Aperçu des nouvelles réservations détectées")
+        st.dataframe(show[["plateforme","nom_client","date_arrivee","date_depart","uid_ical"]], use_container_width=True)
+
+        selection = st.multiselect(
+            "Sélectionne les UID (ou lignes sans UID) à importer",
+            options=show["uid_ical"].tolist(),
+            default=show["uid_ical"].tolist()
+        )
+
+        if st.button("✅ Importer dans Excel"):
+            if not selection:
+                st.warning("Aucune sélection.")
+                return
+            a_importer = df_new[df_new["uid_ical"].isin(selection)].copy()
+            if a_importer.empty and any(u == "" for u in selection):
+                a_importer = df_new[df_new["uid_ical"] == ""].copy()
+            if a_importer.empty:
+                st.warning("Aucune ligne à importer.")
+                return
+            final = pd.concat([exist, a_importer], ignore_index=True)
+            sauvegarder_donnees(final)
+            st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
+            st.rerun()
 
 
 # -------------------- App --------------------
