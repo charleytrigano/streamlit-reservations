@@ -124,7 +124,6 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat([df_core, df_tot], ignore_index=True)
     return out
 
-# Helper pour la sélection lisible des évènements iCal
 def _make_sel_key(row):
     uid = (row.get("uid_ical") or "").strip()
     if uid:
@@ -157,22 +156,18 @@ def _github_headers():
     }
 
 def sauvegarde_github(file_bytes: bytes, message="Auto-save reservations.xlsx"):
-    """Commit/Update reservations.xlsx dans le dépôt GitHub si secrets présents."""
     headers = _github_headers()
     repo = st.secrets.get("GITHUB_REPO")
     branch = st.secrets.get("GITHUB_BRANCH", "main")
     path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     if not headers or not repo:
         return False, "GitHub non configuré"
-
     try:
-        # 1) Récupérer le SHA existant
         get_url = f"https://api.github.com/repos/{repo}/contents/{path}"
         params = {"ref": branch}
         r_get = requests.get(get_url, headers=headers, params=params, timeout=15)
         sha = r_get.json().get("sha") if r_get.status_code == 200 else None
 
-        # 2) PUT nouveau contenu encodé base64
         put_url = f"https://api.github.com/repos/{repo}/contents/{path}"
         payload = {
             "message": message,
@@ -190,7 +185,6 @@ def sauvegarde_github(file_bytes: bytes, message="Auto-save reservations.xlsx"):
         return False, f"Erreur GitHub: {e}"
 
 def _push_to_github_from_df(df: pd.DataFrame):
-    """Encode le df en XLSX et pousse sur GitHub (si secrets). Non bloquant."""
     try:
         buf = BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -206,14 +200,12 @@ def _push_to_github_from_df(df: pd.DataFrame):
 def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
     df = _trier_et_recoller_totaux(df)
-    # 1) Sauvegarde locale
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
         return
-    # 2) Sauvegarde GitHub (optionnelle)
     _push_to_github_from_df(df)
 
 def bouton_restaurer():
@@ -365,9 +357,7 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
             dtstart = _ics_get_field(cur, "DTSTART")
             dtend = _ics_get_field(cur, "DTEND")
 
-            # ----- amélioration extraction "nom_client" -----
             nom = ""
-            # 1) ATTENDEE/ORGANIZER;CN=John Doe
             try:
                 attendee_lines = [ln for ln in cur if ln.startswith("ATTENDEE") or ln.startswith("ORGANIZER")]
                 for aln in attendee_lines:
@@ -377,7 +367,6 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
                         break
             except Exception:
                 pass
-            # 2) DESCRIPTION (FR/EN)
             if not nom:
                 text_desc = (descr or "")
                 patterns = [r"(?:Guest|Client|Name|Nom|Réservé par|Reserve par|Booker|Hôte|Contact)\s*[:=\-]\s*([^\n\r|]+)"]
@@ -386,12 +375,10 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
                     if m:
                         nom = m.group(1).strip()
                         break
-            # 3) SUMMARY si non générique
             if not nom:
                 if summary and summary.strip().lower() not in ("booked","reserved","reservation","blocked","block"):
                     nom = summary.strip()
 
-            # skip annulés / blocked
             if "CANCELLED" in (status or ""):
                 continue
             if "BLOCK" in (summary or "").upper():
@@ -428,47 +415,7 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
     df["%"]         = 0.0
     df["nuitees"]   = (df["date_depart"] - df["date_arrivee"]).apply(lambda d: d.days)
     df["telephone"] = ""
-
     return df
-
-
-# -------------------- iCal sources (CRUD) --------------------
-def load_ical_sources() -> list[dict]:
-    if not os.path.exists(ICAL_SOURCES_FILE):
-        defaults = [
-            {
-                "plateforme": "Booking",
-                "url": "https://admin.booking.com/hotel/hoteladmin/ical.html?t=9e698b04-6003-498e-ba23-9fb706154a1c"
-            },
-            {
-                "plateforme": "Airbnb",
-                "url": "https://www.airbnb.fr/calendar/ical/2342615.ics?s=bf28ee09c81befe58bb2c12233de25be"
-            }
-        ]
-        save_ical_sources(defaults)
-        return defaults
-    try:
-        with open(ICAL_SOURCES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-def save_ical_sources(sources: list[dict]):
-    try:
-        with open(ICAL_SOURCES_FILE, "w", encoding="utf-8") as f:
-            json.dump(sources, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.error(f"Impossible d’écrire {ICAL_SOURCES_FILE} : {e}")
-
-def add_ical_source(plateforme: str, url: str):
-    src = load_ical_sources()
-    src.append({"plateforme": plateforme.strip(), "url": url.strip()})
-    save_ical_sources(src)
-
-def remove_ical_sources(urls_to_remove: list[str]):
-    src = load_ical_sources()
-    src = [s for s in src if s.get("url") not in set(urls_to_remove)]
-    save_ical_sources(src)
 
 
 # -------------------- Vues --------------------
@@ -487,34 +434,41 @@ def vue_ajouter(df: pd.DataFrame):
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
         tel = st.text_input("Téléphone")
 
-        arrivee = st.date_input("Date d’arrivée", value=date.today())
-        depart = st.date_input(
-            "Date de départ",
-            value=arrivee + timedelta(days=1),
-            min_value=arrivee + timedelta(days=1)
+        # --- DATES avec état persistant (corrige le retour auto à arrivée+1) ---
+        if "ajout_arrivee" not in st.session_state:
+            st.session_state.ajout_arrivee = date.today()
+        if "ajout_depart" not in st.session_state:
+            st.session_state.ajout_depart = st.session_state.ajout_arrivee + timedelta(days=1)
+
+        arrivee = st.date_input(
+            "Date d’arrivée",
+            key="ajout_arrivee",
+            value=st.session_state.ajout_arrivee,
         )
 
-        prix_brut = st.number_input(
-            "Prix brut (€)", min_value=0.0, step=1.0, format="%.2f"
+        min_dep = arrivee + timedelta(days=1)
+        default_dep = st.session_state.ajout_depart
+        if not isinstance(default_dep, date) or default_dep < min_dep:
+            default_dep = min_dep
+
+        depart = st.date_input(
+            "Date de départ",
+            key="ajout_depart",
+            value=default_dep,
+            min_value=min_dep,
         )
-        prix_net = st.number_input(
-            "Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
-            help="Doit normalement être ≤ au prix brut."
-        )
+
+        prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
+        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
+                                   help="Doit normalement être ≤ au prix brut.")
 
         # Calculs automatiques
         charges_calc = max(prix_brut - prix_net, 0.0)
         pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
 
         # Affichage lecture seule
-        st.number_input(
-            "Charges (€)", value=round(charges_calc, 2),
-            step=0.01, format="%.2f", disabled=True
-        )
-        st.number_input(
-            "Commission (%)", value=round(pct_calc, 2),
-            step=0.01, format="%.2f", disabled=True
-        )
+        st.number_input("Charges (€)", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
+        st.number_input("Commission (%)", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
 
         ok = st.form_submit_button("Enregistrer")
 
@@ -522,11 +476,14 @@ def vue_ajouter(df: pd.DataFrame):
         if prix_net > prix_brut:
             st.error("Le prix net ne peut pas être supérieur au prix brut.")
             return
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
+            return
 
         ligne = {
-            "nom_client": nom.strip(),
+            "nom_client": (nom or "").strip(),
             "plateforme": plateforme,
-            "telephone": tel.strip(),
+            "telephone": (tel or "").strip(),
             "date_arrivee": arrivee,
             "date_depart": depart,
             "prix_brut": float(prix_brut),
@@ -572,6 +529,9 @@ def vue_modifier(df: pd.DataFrame):
         b_del = c2.form_submit_button("🗑 Supprimer")
 
     if b_modif:
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
+            return
         df.at[i, "nom_client"] = nom.strip()
         df.at[i, "plateforme"] = plateforme
         df.at[i, "telephone"] = tel.strip()
@@ -781,7 +741,6 @@ def vue_sms(df: pd.DataFrame):
 def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (Airbnb / Booking / autres)")
 
-    # --- Gestion des sources ---
     st.subheader("📚 Sources iCal")
     sources = load_ical_sources()
     if sources:
@@ -828,7 +787,6 @@ def vue_sync_ical(df: pd.DataFrame):
 
         df_new = pd.concat(dfs, ignore_index=True)
 
-        # Déduplication par UID + fallback heuristique
         exist = ensure_schema(df.copy())
         if "uid_ical" not in exist.columns:
             exist["uid_ical"] = ""
@@ -848,16 +806,15 @@ def vue_sync_ical(df: pd.DataFrame):
             st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
             return
 
-        # --------- Aperçu ÉDITABLE avec sel_key cachée + alerte noms vides -----------
         df_new = df_new.copy()
         df_new["arrivee_txt"] = df_new["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["depart_txt"]  = df_new["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["sel_key"]     = df_new.apply(_make_sel_key, axis=1)
-        df_new["Importer"]    = True  # cochée par défaut
-        df_new["⚠️ Nom manquant"] = df_new["nom_client"].fillna("").str.strip().eq(True if False else "").astype(bool)
+        df_new["Importer"]    = True
+        df_new["⚠️ Nom manquant"] = df_new["nom_client"].fillna("").str.strip().eq("").astype(bool)
 
         preview = df_new[["Importer","plateforme","nom_client","arrivee_txt","depart_txt","uid_ical","⚠️ Nom manquant"]].copy()
-        preview.index = df_new["sel_key"]  # clef interne cachée
+        preview.index = df_new["sel_key"]
         preview.index.name = "key_hidden"
 
         st.caption("🟨 Les lignes avec **Nom manquant = True** sont à compléter (non bloquant).")
@@ -884,13 +841,11 @@ def vue_sync_ical(df: pd.DataFrame):
                 st.warning("Aucune ligne à importer.")
                 return
 
-            # Lignes cochées
             edited_checked = edited[edited["Importer"] == True].copy()
             if edited_checked.empty:
                 st.warning("Aucune ligne sélectionnée.")
                 return
 
-            # Mettre à jour les noms saisis (map via index = sel_key)
             name_map = dict(zip(edited.index, edited["nom_client"].fillna("").astype(str)))
             df_new["nom_client"] = df_new.apply(
                 lambda r: name_map.get(r["sel_key"], r["nom_client"]),
@@ -919,6 +874,24 @@ def main():
     bouton_restaurer()
     df = charger_donnees()
     bouton_telecharger(df)
+
+    # ---- Test manuel de sauvegarde GitHub ----
+    if st.sidebar.button("🔁 Tester la sauvegarde GitHub"):
+        df_now = charger_donnees()
+        if df_now.empty:
+            st.sidebar.warning("Aucune donnée à pousser.")
+        else:
+            try:
+                buf = BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                    _trier_et_recoller_totaux(ensure_schema(df_now)).to_excel(writer, index=False)
+                ok, msg = sauvegarde_github(buf.getvalue(), message="Test push manuel depuis l'app")
+                if ok:
+                    st.sidebar.success("✅ Sauvegarde GitHub OK (test)")
+                else:
+                    st.sidebar.error(f"❌ Échec GitHub (test) : {msg}")
+            except Exception as e:
+                st.sidebar.error(f"❌ Erreur test GitHub : {e}")
 
     st.sidebar.title("🧭 Navigation")
     onglet = st.sidebar.radio(
