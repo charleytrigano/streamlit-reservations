@@ -5,6 +5,8 @@ from datetime import date, timedelta, datetime
 from io import BytesIO
 import os
 import requests  # SMS
+import re
+from zoneinfo import ZoneInfo
 
 FICHIER = "reservations.xlsx"
 
@@ -89,7 +91,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     # Ordre conseillé (si colonnes présentes)
     order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
-             "prix_brut","prix_net","charges","%","AAAA","MM"]
+             "prix_brut","prix_net","charges","%","AAAA","MM","uid_ical"]
     ordered = [c for c in order if c in df.columns]
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
@@ -253,6 +255,127 @@ def notifier_arrivees_prochaines(df: pd.DataFrame):
             erreurs += 1
         enregistrer_sms(nom, str(row.get("telephone", "")), message)
     return envoyes, erreurs
+
+
+# -------------------- iCal helpers --------------------
+def _ics_get_field(lines, key):
+    for ln in lines:
+        if ln.startswith(key + ":") or ln.startswith(key + ";"):
+            return ln.split(":", 1)[1].strip()
+    return None
+
+def _ics_unfold(text):
+    out = []
+    buf = ""
+    for ln in text.splitlines():
+        if ln.startswith(" ") or ln.startswith("\t"):
+            buf += ln[1:]
+        else:
+            if buf:
+                out.append(buf)
+            buf = ln
+    if buf:
+        out.append(buf)
+    return out
+
+def _parse_ics_datetime(val: str) -> datetime | None:
+    try:
+        if re.fullmatch(r"\d{8}", val):
+            return datetime.strptime(val, "%Y%m%d").replace(tzinfo=ZoneInfo("Europe/Paris"))
+        dt = pd.to_datetime(val, utc=True, errors="coerce")
+        if pd.isna(dt):
+            return None
+        return dt.tz_convert(ZoneInfo("Europe/Paris")).to_pydatetime()
+    except Exception:
+        return None
+
+def _to_local_date_only(val: str) -> date | None:
+    dt = _parse_ics_datetime(val)
+    if dt is None:
+        return None
+    return dt.date()
+
+def fetch_ics(url: str) -> str | None:
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
+    return None
+
+def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
+    """Retourne un DF avec: date_arrivee, date_depart, uid_ical, nom_client (si trouvé), plateforme, status."""
+    if not text:
+        return pd.DataFrame()
+
+    lines = _ics_unfold(text)
+    events = []
+    cur = []
+    inside = False
+    for ln in lines:
+        if ln.startswith("BEGIN:VEVENT"):
+            inside = True
+            cur = []
+        elif ln.startswith("END:VEVENT"):
+            inside = False
+            uid = _ics_get_field(cur, "UID")
+            status = (_ics_get_field(cur, "STATUS") or "").upper()
+            summary = _ics_get_field(cur, "SUMMARY") or ""
+            descr = _ics_get_field(cur, "DESCRIPTION") or ""
+            dtstart = _ics_get_field(cur, "DTSTART")
+            dtend = _ics_get_field(cur, "DTEND")
+
+            # skip annulés / blocked
+            if "CANCELLED" in status:
+                continue
+            if "BLOCK" in summary.upper():
+                continue
+
+            d1 = _to_local_date_only(dtstart) if dtstart else None
+            d2 = _to_local_date_only(dtend) if dtend else None
+
+            # essaie d’extraire un nom (heuristique simple)
+            nom = ""
+            m1 = re.search(r"(Guest|Client)\s*[:=-]\s*([^\n\r|]+)", descr, flags=re.I)
+            if m1:
+                nom = m1.group(2).strip()
+            elif summary and summary.strip().lower() not in ("booked","reserved","reservation"):
+                nom = summary.strip()
+
+            events.append({
+                "uid_ical": uid or "",
+                "status": status or "CONFIRMED",
+                "nom_client": nom,
+                "plateforme": plateforme,
+                "date_arrivee": d1,
+                "date_depart": d2,
+            })
+        else:
+            if inside:
+                cur.append(ln)
+
+    df = pd.DataFrame(events)
+    if df.empty:
+        return df
+
+    # garde seulement les lignes avec dates valides
+    df = df[(df["date_arrivee"].notna()) & (df["date_depart"].notna())].copy()
+
+    # complète AAAA/MM
+    df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
+    df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
+
+    # initialise montants à 0.0 (tu compléteras ensuite)
+    for c in ["prix_brut","prix_net","charges","%","nuitees"]:
+        df[c] = pd.NA
+    df["prix_brut"] = 0.0
+    df["prix_net"]  = 0.0
+    df["charges"]   = 0.0
+    df["%"]         = 0.0
+    df["nuitees"]   = (df["date_depart"] - df["date_arrivee"]).apply(lambda d: d.days)
+
+    return df
 
 
 # -------------------- Vues --------------------
@@ -566,6 +689,81 @@ def vue_sms(df: pd.DataFrame):
     else:
         st.info("Aucun SMS envoyé pour le moment.")
 
+def vue_sync_ical(df: pd.DataFrame):
+    st.title("🔄 Synchroniser iCal (Airbnb / Booking / autres)")
+    st.info("Colle ici tes URLs iCal. Je charge un aperçu, puis tu importes ce que tu veux dans Excel. "
+            "Les réservations CANCELLED ou Blocked sont ignorées. Déduplication par UID pour éviter les doublons.")
+
+    colA, colB = st.columns(2)
+    with colA:
+        url1 = st.text_input("URL iCal #1")
+        plat1 = st.selectbox("Plateforme #1", ["Airbnb","Booking","Autre"], index=0)
+    with colB:
+        url2 = st.text_input("URL iCal #2")
+        plat2 = st.selectbox("Plateforme #2", ["Airbnb","Booking","Autre"], index=1)
+
+    btn = st.button("📥 Charger l’aperçu")
+    if not btn:
+        return
+
+    dfs = []
+    for url, plat in [(url1, plat1), (url2, plat2)]:
+        if url.strip():
+            txt = fetch_ics(url.strip())
+            if not txt:
+                st.error(f"Impossible de charger: {url}")
+                continue
+            dfe = parse_ics(txt, plat)
+            if dfe.empty:
+                st.warning(f"Aucun événement exploitable pour {plat}.")
+            else:
+                dfs.append(dfe)
+
+    if not dfs:
+        st.info("Rien à importer.")
+        return
+
+    df_new = pd.concat(dfs, ignore_index=True)
+
+    # Déduplication par UID vs Excel existant
+    df_exist = ensure_schema(df.copy())
+    if "uid_ical" not in df_exist.columns:
+        df_exist["uid_ical"] = ""
+
+    uids_exist = set(df_exist["uid_ical"].dropna().astype(str))
+    df_new["uid_ical"] = df_new["uid_ical"].fillna("").astype(str)
+    df_new = df_new[~df_new["uid_ical"].isin(uids_exist)].copy()
+
+    if df_new.empty:
+        st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
+        return
+
+    # Aperçu
+    show = df_new.copy()
+    for col in ["date_arrivee","date_depart"]:
+        show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+    st.subheader("Aperçu des nouvelles réservations détectées")
+    st.dataframe(show[["plateforme","nom_client","date_arrivee","date_depart","uid_ical"]], use_container_width=True)
+
+    # Sélection
+    selection = st.multiselect(
+        "Sélectionne les UID à importer",
+        options=show["uid_ical"].tolist(),
+        default=show["uid_ical"].tolist()
+    )
+
+    if st.button("✅ Importer la sélection dans Excel"):
+        a_importer = df_new[df_new["uid_ical"].isin(selection)].copy()
+        if a_importer.empty:
+            st.warning("Aucune sélection.")
+            return
+
+        # On ne touche pas aux totaux; on concatène puis on sauvegarde (tri auto)
+        df_final = pd.concat([df_exist, a_importer], ignore_index=True)
+        sauvegarder_donnees(df_final)
+        st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
+        st.rerun()
+
 
 # -------------------- App --------------------
 def main():
@@ -580,7 +778,7 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","✉️ Historique SMS"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","✉️ Historique SMS","🔄 Synchroniser iCal"]
     )
 
     if onglet == "📋 Réservations":
@@ -597,6 +795,8 @@ def main():
         vue_clients(df)
     elif onglet == "✉️ Historique SMS":
         vue_sms(df)
+    elif onglet == "🔄 Synchroniser iCal":
+        vue_sync_ical(df)
 
 if __name__ == "__main__":
     main()
