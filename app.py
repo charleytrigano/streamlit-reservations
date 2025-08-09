@@ -434,27 +434,25 @@ def vue_ajouter(df: pd.DataFrame):
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
         tel = st.text_input("Téléphone")
 
-        # --- DATES avec état persistant (corrige le retour auto à arrivée+1) ---
+        # --- DATES avec état persistant, sans value= pour éviter le warning ---
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
-        if "ajout_depart" not in st.session_state:
-            st.session_state.ajout_depart = st.session_state.ajout_arrivee + timedelta(days=1)
 
         arrivee = st.date_input(
             "Date d’arrivée",
-            key="ajout_arrivee",
-            value=st.session_state.ajout_arrivee,
+            key="ajout_arrivee",  # pas de value=
         )
 
-        min_dep = arrivee + timedelta(days=1)
-        default_dep = st.session_state.ajout_depart
-        if not isinstance(default_dep, date) or default_dep < min_dep:
-            default_dep = min_dep
+        min_dep = st.session_state.ajout_arrivee + timedelta(days=1)
+
+        if "ajout_depart" not in st.session_state or not isinstance(st.session_state.ajout_depart, date):
+            st.session_state.ajout_depart = min_dep
+        elif st.session_state.ajout_depart < min_dep:
+            st.session_state.ajout_depart = min_dep
 
         depart = st.date_input(
             "Date de départ",
-            key="ajout_depart",
-            value=default_dep,
+            key="ajout_depart",   # pas de value=
             min_value=min_dep,
         )
 
@@ -738,6 +736,38 @@ def vue_sms(df: pd.DataFrame):
     else:
         st.info("Aucun SMS envoyé pour le moment.")
 
+# -------------------- iCal sources (store) --------------------
+def load_ical_sources() -> list[dict]:
+    if not os.path.exists(ICAL_SOURCES_FILE):
+        defaults = [
+            {"plateforme": "Booking", "url": "https://admin.booking.com/hotel/hoteladmin/ical.html?t=9e698b04-6003-498e-ba23-9fb706154a1c"},
+            {"plateforme": "Airbnb", "url": "https://www.airbnb.fr/calendar/ical/2342615.ics?s=bf28ee09c81befe58bb2c12233de25be"},
+        ]
+        save_ical_sources(defaults)
+        return defaults
+    try:
+        with open(ICAL_SOURCES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_ical_sources(sources: list[dict]):
+    try:
+        with open(ICAL_SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sources, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Impossible d’écrire {ICAL_SOURCES_FILE} : {e}")
+
+def add_ical_source(plateforme: str, url: str):
+    src = load_ical_sources()
+    src.append({"plateforme": plateforme.strip(), "url": url.strip()})
+    save_ical_sources(src)
+
+def remove_ical_sources(urls_to_remove: list[str]):
+    src = load_ical_sources()
+    src = [s for s in src if s.get("url") not in set(urls_to_remove)]
+    save_ical_sources(src)
+
 def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (Airbnb / Booking / autres)")
 
@@ -875,7 +905,7 @@ def main():
     df = charger_donnees()
     bouton_telecharger(df)
 
-    # ---- Test manuel de sauvegarde GitHub ----
+    # Bouton test GitHub
     if st.sidebar.button("🔁 Tester la sauvegarde GitHub"):
         df_now = charger_donnees()
         if df_now.empty:
