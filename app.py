@@ -123,6 +123,17 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat([df_core, df_tot], ignore_index=True)
     return out
 
+# Helper pour la sélection lisible des évènements iCal
+def _make_sel_key(row):
+    uid = (row.get("uid_ical") or "").strip()
+    if uid:
+        return uid
+    d1 = row.get("date_arrivee")
+    d2 = row.get("date_depart")
+    d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
+    d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
+    return f"{row.get('plateforme','')}|{row.get('nom_client','')}|{d1s}|{d2s}"
+
 
 # -------------------- IO Excel --------------------
 def charger_donnees() -> pd.DataFrame:
@@ -342,7 +353,6 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
 
 # -------------------- iCal sources (CRUD) --------------------
 def load_ical_sources() -> list[dict]:
-    # Si absent, créer avec tes 2 URLs par défaut
     if not os.path.exists(ICAL_SOURCES_FILE):
         defaults = [
             {
@@ -713,10 +723,8 @@ def vue_sync_ical(df: pd.DataFrame):
             exist["uid_ical"] = ""
         uids_exist = set(exist["uid_ical"].dropna().astype(str))
         df_new["uid_ical"] = df_new["uid_ical"].fillna("").astype(str)
-        # retire UIDs déjà présents
         df_new = df_new[~df_new["uid_ical"].isin(uids_exist)].copy()
 
-        # Fallback si UID vide : on retire ceux déjà présents sur mêmes clés
         if not df_new.empty:
             key_cols = ["plateforme","date_arrivee","date_depart","nom_client"]
             merged = df_new.merge(
@@ -729,29 +737,42 @@ def vue_sync_ical(df: pd.DataFrame):
             st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
             return
 
-        show = df_new.copy()
-        for col in ["date_arrivee","date_depart"]:
-            show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+        # --------- Aperçu lisible + sélection lisible -----------
+        df_new = df_new.copy()
+        df_new["arrivee_txt"] = df_new["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+        df_new["depart_txt"]  = df_new["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+        df_new["sel_key"]     = df_new.apply(_make_sel_key, axis=1)
+        df_new["label"] = df_new.apply(
+            lambda r: f"{r['plateforme']} • {r['nom_client'] or '—'} • {r['arrivee_txt']} → {r['depart_txt']}"
+                      + (f"  (UID…{str(r['uid_ical'])[:6]})" if (r.get('uid_ical') or '') else ""),
+            axis=1
+        )
+
         st.subheader("Aperçu des nouvelles réservations détectées")
-        st.dataframe(show[["plateforme","nom_client","date_arrivee","date_depart","uid_ical"]], use_container_width=True)
+        st.dataframe(
+            df_new[["plateforme","nom_client","arrivee_txt","depart_txt","uid_ical"]],
+            use_container_width=True
+        )
 
         selection = st.multiselect(
-            "Sélectionne les UID (ou lignes sans UID) à importer",
-            options=show["uid_ical"].tolist(),
-            default=show["uid_ical"].tolist()
+            "Sélectionne à importer",
+            options=df_new["label"].tolist(),
+            default=df_new["label"].tolist(),
         )
 
         if st.button("✅ Importer dans Excel"):
             if not selection:
                 st.warning("Aucune sélection.")
                 return
-            a_importer = df_new[df_new["uid_ical"].isin(selection)].copy()
-            if a_importer.empty and any(u == "" for u in selection):
-                a_importer = df_new[df_new["uid_ical"] == ""].copy()
+            sel_keys = set(df_new[df_new["label"].isin(selection)]["sel_key"])
+            a_importer = df_new[df_new["sel_key"].isin(sel_keys)].copy()
             if a_importer.empty:
                 st.warning("Aucune ligne à importer.")
                 return
-            final = pd.concat([exist, a_importer], ignore_index=True)
+            final = pd.concat(
+                [exist, a_importer.drop(columns=["arrivee_txt","depart_txt","sel_key","label"], errors="ignore")],
+                ignore_index=True
+            )
             sauvegarder_donnees(final)
             st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
             st.rerun()
