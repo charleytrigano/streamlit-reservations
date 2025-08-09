@@ -425,15 +425,45 @@ def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
     with st.form("ajout_resa"):
         nom = st.text_input("Nom du client")
-        plateforme = st.selectbox("Plateforme", ["Booking","Airbnb","Autre"])
+        plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
         tel = st.text_input("Téléphone")
+
         arrivee = st.date_input("Date d’arrivée", value=date.today())
-        depart = st.date_input("Date de départ", value=arrivee + timedelta(days=1), min_value=arrivee + timedelta(days=1))
-        prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
-        prix_net = st.number_input("Prix net (€)", min_value=0.0, max_value=prix_brut, step=1.0, format="%.2f")
+        depart = st.date_input(
+            "Date de départ",
+            value=arrivee + timedelta(days=1),
+            min_value=arrivee + timedelta(days=1)
+        )
+
+        prix_brut = st.number_input(
+            "Prix brut (€)", min_value=0.0, step=1.0, format="%.2f"
+        )
+        prix_net = st.number_input(
+            "Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
+            help="Doit normalement être ≤ au prix brut."
+        )
+
+        # Calculs automatiques
+        charges_calc = max(prix_brut - prix_net, 0.0)
+        pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
+
+        # Affichage lecture seule
+        st.number_input(
+            "Charges (€)", value=round(charges_calc, 2),
+            step=0.01, format="%.2f", disabled=True
+        )
+        st.number_input(
+            "Commission (%)", value=round(pct_calc, 2),
+            step=0.01, format="%.2f", disabled=True
+        )
+
         ok = st.form_submit_button("Enregistrer")
 
     if ok:
+        if prix_net > prix_brut:
+            st.error("Le prix net ne peut pas être supérieur au prix brut.")
+            return
+
         ligne = {
             "nom_client": nom.strip(),
             "plateforme": plateforme,
@@ -442,8 +472,8 @@ def vue_ajouter(df: pd.DataFrame):
             "date_depart": depart,
             "prix_brut": float(prix_brut),
             "prix_net": float(prix_net),
-            "charges": round(prix_brut - prix_net, 2),
-            "%": round(((prix_brut - prix_net) / prix_brut * 100) if prix_brut else 0, 2),
+            "charges": round(charges_calc, 2),
+            "%": round(pct_calc, 2),
             "nuitees": (depart - arrivee).days,
             "AAAA": arrivee.year,
             "MM": arrivee.month,
