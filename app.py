@@ -316,7 +316,7 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
                         break
             except Exception:
                 pass
-            # 2) DESCRIPTION (plusieurs variantes FR/EN)
+            # 2) DESCRIPTION (FR/EN)
             if not nom:
                 text_desc = (descr or "")
                 patterns = [
@@ -334,7 +334,6 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
 
             # skip annulés / blocked
             if "CANCELLED" in (status or ""):
-                # même si on a un nom, on ignore les events annulés
                 continue
             if "BLOCK" in (summary or "").upper():
                 continue
@@ -760,42 +759,64 @@ def vue_sync_ical(df: pd.DataFrame):
             st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
             return
 
-        # --------- Aperçu lisible + sélection lisible -----------
+        # --------- Aperçu éditable + sélection par cases à cocher -----------
         df_new = df_new.copy()
         df_new["arrivee_txt"] = df_new["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["depart_txt"]  = df_new["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["sel_key"]     = df_new.apply(_make_sel_key, axis=1)
-        df_new["label"] = df_new.apply(
-            lambda r: f"{r['plateforme']} • {r['nom_client'] or '—'} • {r['arrivee_txt']} → {r['depart_txt']}"
-                      + (f"  (UID…{str(r['uid_ical'])[:6]})" if (r.get('uid_ical') or '') else ""),
-            axis=1
-        )
+        df_new["Importer"]    = True  # cochée par défaut
 
-        st.subheader("Aperçu des nouvelles réservations détectées")
-        st.dataframe(
-            df_new[["plateforme","nom_client","arrivee_txt","depart_txt","uid_ical"]],
-            use_container_width=True
-        )
+        editable_cols = ["Importer", "plateforme", "nom_client", "arrivee_txt", "depart_txt", "uid_ical", "sel_key"]
+        preview = df_new[editable_cols].copy()
 
-        selection = st.multiselect(
-            "Sélectionne à importer",
-            options=df_new["label"].tolist(),
-            default=df_new["label"].tolist(),
+        # data_editor renvoie la version modifiée par l'utilisateur
+        edited = st.data_editor(
+            preview,
+            use_container_width=True,
+            num_rows="fixed",
+            column_config={
+                "Importer": st.column_config.CheckboxColumn("Importer"),
+                "plateforme": st.column_config.TextColumn("Plateforme", disabled=True),
+                "nom_client": st.column_config.TextColumn("Nom client"),
+                "arrivee_txt": st.column_config.TextColumn("Arrivée", disabled=True),
+                "depart_txt": st.column_config.TextColumn("Départ", disabled=True),
+                "uid_ical": st.column_config.TextColumn("UID iCal", disabled=True),
+                "sel_key": st.column_config.TextColumn("Clé (interne)", disabled=True),
+            },
+            hide_index=True,
+            key="ical_preview_editor"
         )
 
         if st.button("✅ Importer dans Excel"):
-            if not selection:
-                st.warning("Aucune sélection.")
-                return
-            sel_keys = set(df_new[df_new["label"].isin(selection)]["sel_key"])
-            a_importer = df_new[df_new["sel_key"].isin(sel_keys)].copy()
-            if a_importer.empty:
+            if edited is None or edited.empty:
                 st.warning("Aucune ligne à importer.")
                 return
-            final = pd.concat(
-                [exist, a_importer.drop(columns=["arrivee_txt","depart_txt","sel_key","label"], errors="ignore")],
-                ignore_index=True
+
+            # Lignes cochées
+            edited_checked = edited[edited["Importer"] == True].copy()
+            if edited_checked.empty:
+                st.warning("Aucune ligne sélectionnée.")
+                return
+
+            # Maj des noms saisis dans df_new avant import (match par sel_key)
+            name_map = dict(zip(edited_checked["sel_key"], edited_checked["nom_client"].fillna("").astype(str)))
+            df_new["nom_client"] = df_new.apply(
+                lambda r: name_map.get(r["sel_key"], r["nom_client"]),
+                axis=1
             )
+
+            # Filtrer df_new sur les sel_key cochés
+            chosen_keys = set(edited_checked["sel_key"])
+            a_importer = df_new[df_new["sel_key"].isin(chosen_keys)].copy()
+
+            # Nettoyage colonnes techniques avant sauvegarde
+            a_importer.drop(columns=["Importer","arrivee_txt","depart_txt","sel_key"], inplace=True, errors="ignore")
+
+            if a_importer.empty:
+                st.warning("Aucune ligne à importer après filtrage.")
+                return
+
+            final = pd.concat([exist, a_importer], ignore_index=True)
             sauvegarder_donnees(final)
             st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
             st.rerun()
