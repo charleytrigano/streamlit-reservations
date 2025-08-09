@@ -5,8 +5,9 @@ from datetime import date, timedelta, datetime
 from io import BytesIO
 import os
 import json
-import requests  # SMS + iCal fetch
+import requests
 import re
+import base64
 from zoneinfo import ZoneInfo
 
 FICHIER = "reservations.xlsx"
@@ -135,7 +136,7 @@ def _make_sel_key(row):
     return f"{row.get('plateforme','')}|{row.get('nom_client','')}|{d1s}|{d2s}"
 
 
-# -------------------- IO Excel --------------------
+# -------------------- IO Excel + GitHub auto-save --------------------
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
         return pd.DataFrame()
@@ -146,14 +147,74 @@ def charger_donnees() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def _github_headers():
+    token = st.secrets.get("GITHUB_TOKEN")
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+
+def sauvegarde_github(file_bytes: bytes, message="Auto-save reservations.xlsx"):
+    """Commit/Update reservations.xlsx dans le dépôt GitHub si secrets présents."""
+    headers = _github_headers()
+    repo = st.secrets.get("GITHUB_REPO")
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+    path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
+    if not headers or not repo:
+        return False, "GitHub non configuré"
+
+    try:
+        # 1) Récupérer le SHA existant
+        get_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        params = {"ref": branch}
+        r_get = requests.get(get_url, headers=headers, params=params, timeout=15)
+        sha = r_get.json().get("sha") if r_get.status_code == 200 else None
+
+        # 2) PUT nouveau contenu encodé base64
+        put_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        payload = {
+            "message": message,
+            "content": base64.b64encode(file_bytes).decode("utf-8"),
+            "branch": branch
+        }
+        if sha:
+            payload["sha"] = sha
+
+        r_put = requests.put(put_url, headers=headers, json=payload, timeout=20)
+        if r_put.status_code in (200, 201):
+            return True, "Sauvegarde GitHub effectuée"
+        return False, f"GitHub PUT {r_put.status_code}: {r_put.text[:200]}"
+    except Exception as e:
+        return False, f"Erreur GitHub: {e}"
+
+def _push_to_github_from_df(df: pd.DataFrame):
+    """Encode le df en XLSX et pousse sur GitHub (si secrets). Non bloquant."""
+    try:
+        buf = BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False)
+        ok, msg = sauvegarde_github(buf.getvalue(), message="Auto-save via app Streamlit")
+        if ok:
+            st.sidebar.success("✅ Sauvegarde GitHub OK")
+        else:
+            st.sidebar.info(f"ℹ️ Sauvegarde locale OK (GitHub: {msg})")
+    except Exception as e:
+        st.sidebar.info(f"ℹ️ Sauvegarde locale OK (GitHub erreur: {e})")
+
 def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
     df = _trier_et_recoller_totaux(df)
+    # 1) Sauvegarde locale
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
+        return
+    # 2) Sauvegarde GitHub (optionnelle)
+    _push_to_github_from_df(df)
 
 def bouton_restaurer():
     up = st.sidebar.file_uploader("📤 Restaurer un fichier Excel", type=["xlsx"])
@@ -319,9 +380,7 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
             # 2) DESCRIPTION (FR/EN)
             if not nom:
                 text_desc = (descr or "")
-                patterns = [
-                    r"(?:Guest|Client|Name|Nom|Réservé par|Reserve par|Booker|Hôte|Contact)\s*[:=\-]\s*([^\n\r|]+)",
-                ]
+                patterns = [r"(?:Guest|Client|Name|Nom|Réservé par|Reserve par|Booker|Hôte|Contact)\s*[:=\-]\s*([^\n\r|]+)"]
                 for pat in patterns:
                     m = re.search(pat, text_desc, flags=re.IGNORECASE)
                     if m:
