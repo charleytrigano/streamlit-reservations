@@ -759,17 +759,19 @@ def vue_sync_ical(df: pd.DataFrame):
             st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
             return
 
-        # --------- Aperçu ÉDITABLE avec sel_key cachée (index) -----------
+        # --------- Aperçu ÉDITABLE avec sel_key cachée + alerte noms vides -----------
         df_new = df_new.copy()
         df_new["arrivee_txt"] = df_new["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["depart_txt"]  = df_new["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
         df_new["sel_key"]     = df_new.apply(_make_sel_key, axis=1)
         df_new["Importer"]    = True  # cochée par défaut
+        df_new["⚠️ Nom manquant"] = df_new["nom_client"].fillna("").str.strip().eq(True if False else "").astype(bool)
 
-        # On n'affiche PAS sel_key : on la met en index (invisible) pour garder l'identifiant interne
-        preview = df_new[["Importer","plateforme","nom_client","arrivee_txt","depart_txt","uid_ical"]].copy()
-        preview.index = df_new["sel_key"]  # <-- clef interne cachée
+        preview = df_new[["Importer","plateforme","nom_client","arrivee_txt","depart_txt","uid_ical","⚠️ Nom manquant"]].copy()
+        preview.index = df_new["sel_key"]  # clef interne cachée
         preview.index.name = "key_hidden"
+
+        st.caption("🟨 Les lignes avec **Nom manquant = True** sont à compléter (non bloquant).")
 
         edited = st.data_editor(
             preview,
@@ -782,8 +784,9 @@ def vue_sync_ical(df: pd.DataFrame):
                 "arrivee_txt": st.column_config.TextColumn("Arrivée", disabled=True),
                 "depart_txt": st.column_config.TextColumn("Départ", disabled=True),
                 "uid_ical": st.column_config.TextColumn("UID iCal", disabled=True),
+                "⚠️ Nom manquant": st.column_config.CheckboxColumn("⚠️ Nom manquant", disabled=True),
             },
-            hide_index=True,  # <-- index (sel_key) caché visuellement
+            hide_index=True,
             key="ical_preview_editor"
         )
 
@@ -798,19 +801,16 @@ def vue_sync_ical(df: pd.DataFrame):
                 st.warning("Aucune ligne sélectionnée.")
                 return
 
-            # Maj des noms saisis dans df_new (on mappe via l'INDEX = sel_key)
+            # Mettre à jour les noms saisis (map via index = sel_key)
             name_map = dict(zip(edited.index, edited["nom_client"].fillna("").astype(str)))
             df_new["nom_client"] = df_new.apply(
                 lambda r: name_map.get(r["sel_key"], r["nom_client"]),
                 axis=1
             )
 
-            # Filtrer df_new sur les sel_key cochés
             chosen_keys = set(edited_checked.index)
             a_importer = df_new[df_new["sel_key"].isin(chosen_keys)].copy()
-
-            # Nettoyage colonnes techniques avant sauvegarde
-            a_importer.drop(columns=["Importer","arrivee_txt","depart_txt","sel_key"], inplace=True, errors="ignore")
+            a_importer.drop(columns=["Importer","arrivee_txt","depart_txt","sel_key","⚠️ Nom manquant"], inplace=True, errors="ignore")
 
             if a_importer.empty:
                 st.warning("Aucune ligne à importer après filtrage.")
