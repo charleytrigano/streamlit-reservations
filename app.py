@@ -304,20 +304,43 @@ def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
             dtstart = _ics_get_field(cur, "DTSTART")
             dtend = _ics_get_field(cur, "DTEND")
 
-            if "CANCELLED" in status:
+            # ----- amélioration extraction "nom_client" -----
+            nom = ""
+            # 1) ATTENDEE/ORGANIZER;CN=John Doe
+            try:
+                attendee_lines = [ln for ln in cur if ln.startswith("ATTENDEE") or ln.startswith("ORGANIZER")]
+                for aln in attendee_lines:
+                    mcn = re.search(r";CN=([^:;]+)", aln)
+                    if mcn:
+                        nom = mcn.group(1).strip()
+                        break
+            except Exception:
+                pass
+            # 2) DESCRIPTION (plusieurs variantes FR/EN)
+            if not nom:
+                text_desc = (descr or "")
+                patterns = [
+                    r"(?:Guest|Client|Name|Nom|Réservé par|Reserve par|Booker|Hôte|Contact)\s*[:=\-]\s*([^\n\r|]+)",
+                ]
+                for pat in patterns:
+                    m = re.search(pat, text_desc, flags=re.IGNORECASE)
+                    if m:
+                        nom = m.group(1).strip()
+                        break
+            # 3) SUMMARY si non générique
+            if not nom:
+                if summary and summary.strip().lower() not in ("booked","reserved","reservation","blocked","block"):
+                    nom = summary.strip()
+
+            # skip annulés / blocked
+            if "CANCELLED" in (status or ""):
+                # même si on a un nom, on ignore les events annulés
                 continue
-            if "BLOCK" in summary.upper():
+            if "BLOCK" in (summary or "").upper():
                 continue
 
             d1 = _to_local_date_only(dtstart) if dtstart else None
             d2 = _to_local_date_only(dtend) if dtend else None
-
-            nom = ""
-            m1 = re.search(r"(Guest|Client)\s*[:=-]\s*([^\n\r|]+)", descr, flags=re.I)
-            if m1:
-                nom = m1.group(2).strip()
-            elif summary and summary.strip().lower() not in ("booked","reserved","reservation"):
-                nom = summary.strip()
 
             events.append({
                 "uid_ical": (uid or "").strip(),
