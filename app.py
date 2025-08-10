@@ -9,16 +9,17 @@ import requests
 import re
 import base64
 from zoneinfo import ZoneInfo
+from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
 ICAL_SOURCES_FILE = "ical_sources.json"
 
-# ==================== CONFIG SMS ====================
-FREE_USER = st.secrets.get("FREE_USER", "12026027")
-FREE_API_KEY = st.secrets.get("FREE_API_KEY", "MF7Qjs3C8KxKHz")
-NUM_TELEPHONE_PERSO = st.secrets.get("NUM_TELEPHONE_PERSO", "+33617722379")
+# ==================== CONFIG SMS (Free Mobile = notif admin optionnelle) ====================
+FREE_USER = st.secrets.get("FREE_USER", "")
+FREE_API_KEY = st.secrets.get("FREE_API_KEY", "")
+NUM_TELEPHONE_PERSO = st.secrets.get("NUM_TELEPHONE_PERSO", "")
 SMS_HISTO = "historique_sms.csv"
-# ====================================================
+# ===========================================================================================
 
 
 # -------------------- Utils --------------------
@@ -35,15 +36,18 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     df = df.copy()
 
+    # Dates -> date
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
         df["date_depart"] = df["date_depart"].apply(to_date_only)
 
+    # Numériques
     for col in ["prix_brut", "prix_net", "charges", "%"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Charges / %
     if "prix_brut" in df.columns and "prix_net" in df.columns:
         if "charges" not in df.columns:
             df["charges"] = df["prix_brut"] - df["prix_net"]
@@ -55,12 +59,14 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].round(2)
 
+    # Nuitées
     if "date_arrivee" in df.columns and "date_depart" in df.columns:
         df["nuitees"] = [
             (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else None
             for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
         ]
 
+    # AAAA / MM
     if "date_arrivee" in df.columns:
         years, months = [], []
         for d in df["date_arrivee"]:
@@ -78,10 +84,13 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if "MM" in df.columns:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
+    # Colonnes manquantes
     if "plateforme" not in df.columns:
         df["plateforme"] = "Autre"
     if "nom_client" not in df.columns:
         df["nom_client"] = ""
+    if "telephone" not in df.columns:
+        df["telephone"] = ""
     if "uid_ical" not in df.columns:
         df["uid_ical"] = ""
 
@@ -238,8 +247,11 @@ def bouton_telecharger(df: pd.DataFrame):
     )
 
 
-# -------------------- SMS --------------------
-def envoyer_sms(message: str) -> bool:
+# -------------------- SMS (Free Mobile = notif admin optionnelle) --------------------
+def envoyer_sms_free_admin(message: str) -> bool:
+    """Envoie le SMS sur TA ligne Free (notification), pas vers le client."""
+    if not (FREE_USER and FREE_API_KEY):
+        return False
     try:
         url = "https://smsapi.free-mobile.fr/sendmsg"
         params = {"user": FREE_USER, "pass": FREE_API_KEY, "msg": message}
@@ -260,34 +272,6 @@ def enregistrer_sms(nom: str, tel: str, contenu: str):
         dfh.to_csv(SMS_HISTO, index=False)
     except Exception:
         pass
-
-def notifier_arrivees_prochaines(df: pd.DataFrame):
-    if df is None or df.empty:
-        return 0, 0
-    demain = date.today() + timedelta(days=1)
-    a_notifier = df[df["date_arrivee"] == demain]
-    envoyes = 0
-    erreurs = 0
-    for _, row in a_notifier.iterrows():
-        nom = str(row.get("nom_client", "")).strip()
-        plate = str(row.get("plateforme", ""))
-        d1 = row.get("date_arrivee")
-        d2 = row.get("date_depart")
-        d1txt = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else str(d1)
-        d2txt = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else str(d2)
-        message = (
-            f"VILLA TOBIAS - {plate}\n"
-            f"Bonjour {nom}. Votre séjour est prévu du {d1txt} au {d2txt}.\n"
-            f"Afin de vous accueillir, merci de nous confirmer votre heure d’arrivée.\n"
-            f"Un parking est à votre disposition sur place. À demain."
-        )
-        ok = envoyer_sms(message)
-        if ok:
-            envoyes += 1
-        else:
-            erreurs += 1
-        enregistrer_sms(nom, str(row.get("telephone", "")), message)
-    return envoyes, erreurs
 
 
 # -------------------- iCal helpers --------------------
@@ -434,37 +418,29 @@ def vue_ajouter(df: pd.DataFrame):
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
         tel = st.text_input("Téléphone")
 
-        # --- DATES avec état persistant, sans value= pour éviter le warning ---
+        # DATES persistantes (pas de value= pour éviter warning)
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
 
-        arrivee = st.date_input(
-            "Date d’arrivée",
-            key="ajout_arrivee",  # pas de value=
-        )
+        arrivee = st.date_input("Date d’arrivée", key="ajout_arrivee")
 
         min_dep = st.session_state.ajout_arrivee + timedelta(days=1)
-
         if "ajout_depart" not in st.session_state or not isinstance(st.session_state.ajout_depart, date):
             st.session_state.ajout_depart = min_dep
         elif st.session_state.ajout_depart < min_dep:
             st.session_state.ajout_depart = min_dep
 
-        depart = st.date_input(
-            "Date de départ",
-            key="ajout_depart",   # pas de value=
-            min_value=min_dep,
-        )
+        depart = st.date_input("Date de départ", key="ajout_depart", min_value=min_dep)
 
         prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
         prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
                                    help="Doit normalement être ≤ au prix brut.")
 
-        # Calculs automatiques
+        # Calculs auto
         charges_calc = max(prix_brut - prix_net, 0.0)
         pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
 
-        # Affichage lecture seule
+        # Lecture seule
         st.number_input("Charges (€)", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
         st.number_input("Commission (%)", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
 
@@ -702,41 +678,7 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
-def vue_sms(df: pd.DataFrame):
-    st.title("✉️ Historique & envoi de SMS")
-    if st.button("🔔 Envoyer les SMS pour les arrivées de demain"):
-        envoyes, erreurs = notifier_arrivees_prochaines(df)
-        st.success(f"SMS envoyés: {envoyes} • Échecs: {erreurs}")
-    st.markdown("#### Historique des SMS envoyés")
-    if os.path.exists(SMS_HISTO):
-        dfh = pd.read_csv(SMS_HISTO)
-        st.dataframe(dfh, use_container_width=True)
-        out = BytesIO()
-        try:
-            with pd.ExcelWriter(out, engine="openpyxl") as writer:
-                dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
-            data_xlsx = out.getvalue()
-        except Exception:
-            st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
-            data_xlsx = None
-        if data_xlsx:
-            st.download_button(
-                "📥 Télécharger l’historique (XLSX)",
-                data=data_xlsx,
-                file_name="historique_sms.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        if st.button("🧹 Vider l’historique"):
-            try:
-                os.remove(SMS_HISTO)
-                st.success("Historique supprimé.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Impossible de supprimer : {e}")
-    else:
-        st.info("Aucun SMS envoyé pour le moment.")
-
-# -------------------- iCal sources (store) --------------------
+# --------- iCal sources store ----------
 def load_ical_sources() -> list[dict]:
     if not os.path.exists(ICAL_SOURCES_FILE):
         defaults = [
@@ -896,6 +838,114 @@ def vue_sync_ical(df: pd.DataFrame):
             st.rerun()
 
 
+# -------------------- SMS (via ton téléphone : lien sms:) --------------------
+TEMPLATE_SMS = (
+    "VILLA TOBIAS\n"
+    "Plateforme : {plateforme}\n"
+    "Date d'arrivée : {date_arrivee}  Date départ : {date_depart}  Nombre de nuitées : {nuitees}\n\n"
+    "Bonjour {nom_client}\n\n"
+    "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivée. "
+    "Nous vous attendrons sur place pour vous remettre les clés de l'appartement et vous indiquer votre emplacement de parking. "
+    "Nous vous souhaitons un bon voyage et vous disons à demain.\n\n"
+    "Annick & Charley"
+)
+
+def _fmt_date(d):
+    return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
+
+def build_sms_from_row(row: dict) -> str:
+    return TEMPLATE_SMS.format(
+        plateforme=(row.get("plateforme") or ""),
+        date_arrivee=_fmt_date(row.get("date_arrivee")),
+        date_depart=_fmt_date(row.get("date_depart")),
+        nuitees=(row.get("nuitees") or 0),
+        nom_client=(row.get("nom_client") or "")
+    )
+
+def vue_sms(df: pd.DataFrame):
+    st.title("📱 Envoyer des SMS (via ton téléphone)")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    # Filtrer: réservations à venir (arrivée aujourd'hui ou plus)
+    today = date.today()
+    data = df[(df["date_arrivee"].apply(lambda d: isinstance(d, date) and d >= today))].copy()
+    if data.empty:
+        st.info("Aucune réservation à venir.")
+        return
+
+    st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
+    for _, r in data.sort_values(by=["date_arrivee","nom_client"]).iterrows():
+        nom = str(r.get("nom_client","")).strip() or "—"
+        plate = str(r.get("plateforme","")).strip() or "—"
+        d1 = _fmt_date(r.get("date_arrivee"))
+        d2 = _fmt_date(r.get("date_depart"))
+        nuit = r.get("nuitees") or 0
+        tel = str(r.get("telephone") or "").strip()
+
+        message = build_sms_from_row(r)
+        # Lien sms: (Android ouvre Google Messages). On URL-encode le body.
+        lien = f"sms:{tel}?&body={quote(message)}" if tel else None
+
+        cols = st.columns([3,2,2,2,2,2])
+        cols[0].markdown(f"**{nom}**")
+        cols[1].markdown(f"**Plateforme**<br>{plate}", unsafe_allow_html=True)
+        cols[2].markdown(f"**Arrivée**<br>{d1}", unsafe_allow_html=True)
+        cols[3].markdown(f"**Départ**<br>{d2}", unsafe_allow_html=True)
+        cols[4].markdown(f"**Nuitées**<br>{nuit}", unsafe_allow_html=True)
+
+        if tel and lien:
+            cols[5].markdown(f"[📲 Envoyer SMS]({lien})")
+        else:
+            cols[5].write("📵 N° manquant")
+
+        # Bouton admin (optionnel) : m'envoyer ce SMS via Free Mobile
+        with st.expander(f"Aperçu du message pour {nom}"):
+            st.text(message)
+            if st.button(f"📩 M’envoyer ce SMS (Free Mobile) — {nom}"):
+                if not (FREE_USER and FREE_API_KEY):
+                    st.error("FREE_USER / FREE_API_KEY non configurés dans Secrets.")
+                else:
+                    ok = envoyer_sms_free_admin(message)
+                    if ok:
+                        st.success("✅ SMS envoyé sur ta ligne Free (notification).")
+                        enregistrer_sms(nom, "ADMIN", message)
+                    else:
+                        st.error("❌ Échec d’envoi via Free Mobile.")
+
+    # Historique
+    st.markdown("#### Historique des SMS (notifications Free Mobile uniquement)")
+    if os.path.exists(SMS_HISTO):
+        dfh = pd.read_csv(SMS_HISTO)
+        st.dataframe(dfh, use_container_width=True)
+        out = BytesIO()
+        try:
+            with pd.ExcelWriter(out, engine="openpyxl") as writer:
+                dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
+            data_xlsx = out.getvalue()
+        except Exception:
+            st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+            data_xlsx = None
+        if data_xlsx:
+            st.download_button(
+                "📥 Télécharger l’historique (XLSX)",
+                data=data_xlsx,
+                file_name="historique_sms.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        if st.button("🧹 Vider l’historique"):
+            try:
+                os.remove(SMS_HISTO)
+                st.success("Historique supprimé.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Impossible de supprimer : {e}")
+    else:
+        st.info("Aucun SMS (Free) enregistré pour le moment.")
+
+
 # -------------------- App --------------------
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -927,7 +977,7 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","✉️ Historique SMS","🔄 Synchroniser iCal"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","📱 SMS","🔄 Synchroniser iCal"]
     )
 
     if onglet == "📋 Réservations":
@@ -942,7 +992,7 @@ def main():
         vue_rapport(df)
     elif onglet == "👥 Liste clients":
         vue_clients(df)
-    elif onglet == "✉️ Historique SMS":
+    elif onglet == "📱 SMS":
         vue_sms(df)
     elif onglet == "🔄 Synchroniser iCal":
         vue_sync_ical(df)
