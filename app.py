@@ -453,6 +453,7 @@ def vue_rapport(df: pd.DataFrame):
     with col2:
         filtre_mois_label = st.selectbox("Mois", mois_options)
 
+    # Filtrage de base : année choisie
     data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
@@ -464,9 +465,11 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
+    # Agrégat par mois et plateforme
     stats = (
-        data.dropna(subset=["AAAA", "MM"])
-            .groupby(["AAAA", "MM", "plateforme"], dropna=True)
+        data.dropna(subset=["MM"])
+            .assign(MM=lambda d: d["MM"].astype(int))
+            .groupby(["MM", "plateforme"], dropna=True)
             .agg(
                 prix_brut=("prix_brut", "sum"),
                 prix_net=("prix_net", "sum"),
@@ -478,28 +481,25 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
-    # Tri strict Jan->Déc pour l'année sélectionnée
+    # Tri strict Jan->Déc et labels "Jan 2025"
     stats = stats.sort_values(["MM", "plateforme"]).reset_index(drop=True)
-    stats["mois_txt"] = stats["MM"].astype(int).apply(lambda x: calendar.month_abbr[x])
-    stats["periode"] = stats["mois_txt"] + " " + stats["AAAA"].astype(int).astype(str)
-    # Clé pour tri index (01..12)
-    stats["periode_key"] = stats["MM"].astype(int)
+    stats["periode_key"] = stats["MM"].astype(int)                   # 1..12
+    stats["periode"] = stats["MM"].astype(int).apply(lambda m: f"{calendar.month_abbr[m]} {annee}")
 
-    # Tableau
+    # Tableau récap
     st.dataframe(
-        stats[["AAAA", "MM", "periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats[["periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
 
-    # Graphes triés Jan->Déc
+    # Fonction de tracé avec index numérique trié 1..12, puis remap label
     def _plot_metric(metric_col, title):
         pivot = (
             stats.pivot(index="periode_key", columns="plateforme", values=metric_col)
-                 .sort_index()
+                 .reindex(index=list(range(1,13)))   # force l'ordre Jan..Dec (même si mois manquants)
                  .fillna(0)
         )
-        labels = {i: calendar.month_abbr[i] + f" {annee}" for i in range(1,13)}
-        pivot.index = pivot.index.map(lambda k: labels.get(k, str(k)))
+        pivot.index = pivot.index.map(lambda m: f"{calendar.month_abbr[m]} {annee}")
         st.markdown(title)
         st.bar_chart(pivot)
 
