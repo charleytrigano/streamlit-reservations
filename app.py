@@ -521,7 +521,6 @@ def vue_sms(df: pd.DataFrame):
         tel = str(r.get("telephone") or "").strip()
 
         message = build_sms(r)
-        lien = f"sms:{tel}?&body={quote(message)}" if tel else None
 
         cols = st.columns([3,2,2,2,2,2])
         cols[0].markdown(f"**{nom}**")
@@ -530,8 +529,10 @@ def vue_sms(df: pd.DataFrame):
         cols[3].markdown(f"**Départ**<br>{d2}", unsafe_allow_html=True)
         cols[4].markdown(f"**Nuitées**<br>{nuit}", unsafe_allow_html=True)
 
-        if tel and lien:
-            cols[5].markdown(f"[📲 Envoyer SMS]({lien})")
+        if tel:
+            # PATCH: utiliser 'smsto:' et une seule query 'body=' + encodage complet
+            lien = f"smsto:{tel}?body={quote(message)}"
+            cols[5].markdown(f'<a href="{lien}">📲 Envoyer SMS</a>', unsafe_allow_html=True)
         else:
             cols[5].write("📵 N° manquant")
 
