@@ -429,6 +429,12 @@ def vue_calendrier(df: pd.DataFrame):
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
+def _ordered_platforms(existing: list) -> list:
+    """Renvoie l'ordre de colonnes: Booking, Airbnb, Autre, puis les autres (triées)."""
+    base = ["Booking", "Airbnb", "Autre"]
+    rest = [p for p in existing if p not in base]
+    return base + sorted(rest)
+
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois)")
     df = _trier_et_recoller_totaux(ensure_schema(df))
@@ -486,7 +492,12 @@ def vue_rapport(df: pd.DataFrame):
     stats["periode_key"] = stats["MM"].astype(int)                   # 1..12
     stats["periode"] = stats["MM"].astype(int).apply(lambda m: f"{calendar.month_abbr[m]} {annee}")
 
-    # Tableau récap
+    # Ordre de colonnes plateformes figé
+    ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
+    stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
+
+    # Tableau récap trié
+    stats = stats.sort_values(["periode_key", "plateforme"]).reset_index(drop=True)
     st.dataframe(
         stats[["periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
@@ -499,6 +510,9 @@ def vue_rapport(df: pd.DataFrame):
                  .reindex(index=list(range(1,13)))   # force l'ordre Jan..Dec (même si mois manquants)
                  .fillna(0)
         )
+        # Applique l'ordre de colonnes voulu
+        pivot = pivot.reindex(columns=ordered_cols, fill_value=0)
+        # Remap étiquettes X
         pivot.index = pivot.index.map(lambda m: f"{calendar.month_abbr[m]} {annee}")
         st.markdown(title)
         st.bar_chart(pivot)
