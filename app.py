@@ -3,26 +3,12 @@ import pandas as pd
 import calendar
 from datetime import date, timedelta, datetime
 from io import BytesIO
-import os
-import json
-import requests
-import re
-import base64
-from zoneinfo import ZoneInfo
 from urllib.parse import quote
+import os
 
 FICHIER = "reservations.xlsx"
-ICAL_SOURCES_FILE = "ical_sources.json"
 
-# ==================== CONFIG SMS (Free Mobile = notif admin optionnelle) ====================
-FREE_USER = st.secrets.get("FREE_USER", "")
-FREE_API_KEY = st.secrets.get("FREE_API_KEY", "")
-NUM_TELEPHONE_PERSO = st.secrets.get("NUM_TELEPHONE_PERSO", "")
-SMS_HISTO = "historique_sms.csv"
-# ===========================================================================================
-
-
-# -------------------- Utils --------------------
+# -------------------- Utilitaires --------------------
 def to_date_only(x):
     if pd.isna(x):
         return None
@@ -32,11 +18,12 @@ def to_date_only(x):
         return None
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Nettoie le DF : dates (date), montants (2 décimales), calcule charges, %, nuitées, AAAA, MM, colonnes manquantes."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
 
-    # Dates -> date
+    # Dates => date uniquement
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
@@ -47,7 +34,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Charges / %
+    # Calculs charges / %
     if "prix_brut" in df.columns and "prix_net" in df.columns:
         if "charges" not in df.columns:
             df["charges"] = df["prix_brut"] - df["prix_net"]
@@ -68,39 +55,28 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     # AAAA / MM
     if "date_arrivee" in df.columns:
-        years, months = [], []
-        for d in df["date_arrivee"]:
-            if isinstance(d, date):
-                years.append(d.year)
-                months.append(d.month)
-            else:
-                years.append(pd.NA)
-                months.append(pd.NA)
-        df["AAAA"] = years
-        df["MM"] = months
-
-    if "AAAA" in df.columns:
+        df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
+        df["MM"] = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
         df["AAAA"] = pd.to_numeric(df["AAAA"], errors="coerce").astype("Int64")
-    if "MM" in df.columns:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
-    # Colonnes manquantes
-    if "plateforme" not in df.columns:
-        df["plateforme"] = "Autre"
-    if "nom_client" not in df.columns:
-        df["nom_client"] = ""
-    if "telephone" not in df.columns:
-        df["telephone"] = ""
-    if "uid_ical" not in df.columns:
-        df["uid_ical"] = ""
+    # Colonnes minimales
+    for col, default in [
+        ("plateforme", "Autre"),
+        ("nom_client", ""),
+        ("telephone", ""),
+    ]:
+        if col not in df.columns:
+            df[col] = default
 
-    order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
-             "prix_brut","prix_net","charges","%","AAAA","MM","uid_ical"]
-    ordered = [c for c in order if c in df.columns]
+    cols_order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
+                  "prix_brut","prix_net","charges","%","AAAA","MM"]
+    ordered = [c for c in cols_order if c in df.columns]
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
+    """Détecte une ligne de total pour la repousser en bas (nom/plateforme == 'total' ou montants sans dates)."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
@@ -110,112 +86,53 @@ def _marque_totaux(df: pd.DataFrame) -> pd.Series:
             mask = mask | m
     has_no_dates = pd.Series(True, index=df.index)
     if "date_arrivee" in df.columns:
-        has_no_dates = has_no_dates & df["date_arrivee"].isna()
+        has_no_dates &= df["date_arrivee"].isna()
     if "date_depart" in df.columns:
-        has_no_dates = has_no_dates & df["date_depart"].isna()
+        has_no_dates &= df["date_depart"].isna()
     has_money = pd.Series(False, index=df.index)
-    for col in ["prix_brut", "prix_net", "charges"]:
-        if col in df.columns:
-            has_money = has_money | df[col].notna()
-    mask = mask | (has_no_dates & has_money)
-    return mask
+    for c in ["prix_brut","prix_net","charges"]:
+        if c in df.columns:
+            has_money |= df[c].notna()
+    return mask | (has_no_dates & has_money)
 
 def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     df = df.copy()
-    mask_total = _marque_totaux(df)
-    df_tot = df[mask_total].copy()
-    df_core = df[~mask_total].copy()
-    by_cols = [c for c in ["date_arrivee", "nom_client"] if c in df_core.columns]
+    tot_mask = _marque_totaux(df)
+    df_total = df[tot_mask].copy()
+    df_core = df[~tot_mask].copy()
+
+    by_cols = [c for c in ["date_arrivee","nom_client"] if c in df_core.columns]
     if by_cols:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
-    out = pd.concat([df_core, df_tot], ignore_index=True)
+    out = pd.concat([df_core, df_total], ignore_index=True)
     return out
 
-def _make_sel_key(row):
-    uid = (row.get("uid_ical") or "").strip()
-    if uid:
-        return uid
-    d1 = row.get("date_arrivee")
-    d2 = row.get("date_depart")
-    d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
-    d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
-    return f"{row.get('plateforme','')}|{row.get('nom_client','')}|{d1s}|{d2s}"
+def format_date_str(d):
+    return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
-
-# -------------------- IO Excel + GitHub auto-save --------------------
+# -------------------- I/O Excel --------------------
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
         return pd.DataFrame()
     try:
-        df = ensure_schema(pd.read_excel(FICHIER))
+        df = pd.read_excel(FICHIER)
+        df = ensure_schema(df)
         df = _trier_et_recoller_totaux(df)
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Erreur de lecture Excel : {e}")
         return pd.DataFrame()
 
-def _github_headers():
-    token = st.secrets.get("GITHUB_TOKEN")
-    if not token:
-        return None
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
-
-def sauvegarde_github(file_bytes: bytes, message="Auto-save reservations.xlsx"):
-    headers = _github_headers()
-    repo = st.secrets.get("GITHUB_REPO")
-    branch = st.secrets.get("GITHUB_BRANCH", "main")
-    path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
-    if not headers or not repo:
-        return False, "GitHub non configuré"
-    try:
-        get_url = f"https://api.github.com/repos/{repo}/contents/{path}"
-        params = {"ref": branch}
-        r_get = requests.get(get_url, headers=headers, params=params, timeout=15)
-        sha = r_get.json().get("sha") if r_get.status_code == 200 else None
-
-        put_url = f"https://api.github.com/repos/{repo}/contents/{path}"
-        payload = {
-            "message": message,
-            "content": base64.b64encode(file_bytes).decode("utf-8"),
-            "branch": branch
-        }
-        if sha:
-            payload["sha"] = sha
-
-        r_put = requests.put(put_url, headers=headers, json=payload, timeout=20)
-        if r_put.status_code in (200, 201):
-            return True, "Sauvegarde GitHub effectuée"
-        return False, f"GitHub PUT {r_put.status_code}: {r_put.text[:200]}"
-    except Exception as e:
-        return False, f"Erreur GitHub: {e}"
-
-def _push_to_github_from_df(df: pd.DataFrame):
-    try:
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False)
-        ok, msg = sauvegarde_github(buf.getvalue(), message="Auto-save via app Streamlit")
-        if ok:
-            st.sidebar.success("✅ Sauvegarde GitHub OK")
-        else:
-            st.sidebar.info(f"ℹ️ Sauvegarde locale OK (GitHub: {msg})")
-    except Exception as e:
-        st.sidebar.info(f"ℹ️ Sauvegarde locale OK (GitHub erreur: {e})")
-
 def sauvegarder_donnees(df: pd.DataFrame):
-    df = ensure_schema(df)
-    df = _trier_et_recoller_totaux(df)
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
+        st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
-        return
-    _push_to_github_from_df(df)
 
 def bouton_restaurer():
     up = st.sidebar.file_uploader("📤 Restaurer un fichier Excel", type=["xlsx"])
@@ -235,9 +152,10 @@ def bouton_telecharger(df: pd.DataFrame):
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
         data_xlsx = buf.getvalue()
-    except Exception:
-        st.sidebar.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+    except Exception as e:
+        st.sidebar.error(f"Export XLSX indisponible : {e}")
         data_xlsx = None
+
     st.sidebar.download_button(
         "📥 Télécharger le fichier Excel",
         data=data_xlsx if data_xlsx else b"",
@@ -246,169 +164,13 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-
-# -------------------- SMS (Free Mobile = notif admin optionnelle) --------------------
-def envoyer_sms_free_admin(message: str) -> bool:
-    """Envoie le SMS sur TA ligne Free (notification), pas vers le client."""
-    if not (FREE_USER and FREE_API_KEY):
-        return False
-    try:
-        url = "https://smsapi.free-mobile.fr/sendmsg"
-        params = {"user": FREE_USER, "pass": FREE_API_KEY, "msg": message}
-        r = requests.get(url, params=params, timeout=10)
-        return r.status_code == 200
-    except Exception:
-        return False
-
-def enregistrer_sms(nom: str, tel: str, contenu: str):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    ligne = {"nom": nom, "telephone": tel, "message": contenu, "horodatage": now}
-    try:
-        if os.path.exists(SMS_HISTO):
-            dfh = pd.read_csv(SMS_HISTO)
-            dfh = pd.concat([dfh, pd.DataFrame([ligne])], ignore_index=True)
-        else:
-            dfh = pd.DataFrame([ligne])
-        dfh.to_csv(SMS_HISTO, index=False)
-    except Exception:
-        pass
-
-
-# -------------------- iCal helpers --------------------
-def _ics_get_field(lines, key):
-    for ln in lines:
-        if ln.startswith(key + ":") or ln.startswith(key + ";"):
-            return ln.split(":", 1)[1].strip()
-    return None
-
-def _ics_unfold(text):
-    out = []
-    buf = ""
-    for ln in text.splitlines():
-        if ln.startswith(" ") or ln.startswith("\t"):
-            buf += ln[1:]
-        else:
-            if buf:
-                out.append(buf)
-            buf = ln
-    if buf:
-        out.append(buf)
-    return out
-
-def _parse_ics_datetime(val: str) -> datetime | None:
-    try:
-        if re.fullmatch(r"\d{8}", val):
-            return datetime.strptime(val, "%Y%m%d").replace(tzinfo=ZoneInfo("Europe/Paris"))
-        dt = pd.to_datetime(val, utc=True, errors="coerce")
-        if pd.isna(dt):
-            return None
-        return dt.tz_convert(ZoneInfo("Europe/Paris")).to_pydatetime()
-    except Exception:
-        return None
-
-def _to_local_date_only(val: str) -> date | None:
-    dt = _parse_ics_datetime(val)
-    if dt is None:
-        return None
-    return dt.date()
-
-def fetch_ics(url: str) -> str | None:
-    try:
-        r = requests.get(url, timeout=20)
-        if r.status_code == 200 and r.text:
-            return r.text
-    except Exception:
-        pass
-    return None
-
-def parse_ics(text: str, plateforme: str) -> pd.DataFrame:
-    if not text:
-        return pd.DataFrame()
-    lines = _ics_unfold(text)
-    events = []
-    cur = []
-    inside = False
-    for ln in lines:
-        if ln.startswith("BEGIN:VEVENT"):
-            inside = True
-            cur = []
-        elif ln.startswith("END:VEVENT"):
-            inside = False
-            uid = _ics_get_field(cur, "UID")
-            status = (_ics_get_field(cur, "STATUS") or "").upper()
-            summary = _ics_get_field(cur, "SUMMARY") or ""
-            descr = _ics_get_field(cur, "DESCRIPTION") or ""
-            dtstart = _ics_get_field(cur, "DTSTART")
-            dtend = _ics_get_field(cur, "DTEND")
-
-            nom = ""
-            try:
-                attendee_lines = [ln for ln in cur if ln.startswith("ATTENDEE") or ln.startswith("ORGANIZER")]
-                for aln in attendee_lines:
-                    mcn = re.search(r";CN=([^:;]+)", aln)
-                    if mcn:
-                        nom = mcn.group(1).strip()
-                        break
-            except Exception:
-                pass
-            if not nom:
-                text_desc = (descr or "")
-                patterns = [r"(?:Guest|Client|Name|Nom|Réservé par|Reserve par|Booker|Hôte|Contact)\s*[:=\-]\s*([^\n\r|]+)"]
-                for pat in patterns:
-                    m = re.search(pat, text_desc, flags=re.IGNORECASE)
-                    if m:
-                        nom = m.group(1).strip()
-                        break
-            if not nom:
-                if summary and summary.strip().lower() not in ("booked","reserved","reservation","blocked","block"):
-                    nom = summary.strip()
-
-            if "CANCELLED" in (status or ""):
-                continue
-            if "BLOCK" in (summary or "").upper():
-                continue
-
-            d1 = _to_local_date_only(dtstart) if dtstart else None
-            d2 = _to_local_date_only(dtend) if dtend else None
-
-            events.append({
-                "uid_ical": (uid or "").strip(),
-                "status": status or "CONFIRMED",
-                "nom_client": nom,
-                "plateforme": plateforme,
-                "date_arrivee": d1,
-                "date_depart": d2,
-            })
-        else:
-            if inside:
-                cur.append(ln)
-
-    df = pd.DataFrame(events)
-    if df.empty:
-        return df
-
-    df = df[(df["date_arrivee"].notna()) & (df["date_depart"].notna())].copy()
-    df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
-    df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
-
-    for c in ["prix_brut","prix_net","charges","%","nuitees","telephone"]:
-        df[c] = pd.NA
-    df["prix_brut"] = 0.0
-    df["prix_net"]  = 0.0
-    df["charges"]   = 0.0
-    df["%"]         = 0.0
-    df["nuitees"]   = (df["date_depart"] - df["date_arrivee"]).apply(lambda d: d.days)
-    df["telephone"] = ""
-    return df
-
-
 # -------------------- Vues --------------------
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
     show = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
-            show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+            show[col] = show[col].apply(format_date_str)
     st.dataframe(show, use_container_width=True)
 
 def vue_ajouter(df: pd.DataFrame):
@@ -416,15 +178,15 @@ def vue_ajouter(df: pd.DataFrame):
     with st.form("ajout_resa"):
         nom = st.text_input("Nom du client")
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
-        tel = st.text_input("Téléphone")
+        tel = st.text_input("Téléphone (format +33...)")
 
-        # DATES persistantes (pas de value= pour éviter warning)
+        # DATES persistantes (évite le warning default value + session)
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
 
         arrivee = st.date_input("Date d’arrivée", key="ajout_arrivee")
-
         min_dep = st.session_state.ajout_arrivee + timedelta(days=1)
+
         if "ajout_depart" not in st.session_state or not isinstance(st.session_state.ajout_depart, date):
             st.session_state.ajout_depart = min_dep
         elif st.session_state.ajout_depart < min_dep:
@@ -434,13 +196,10 @@ def vue_ajouter(df: pd.DataFrame):
 
         prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
         prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
-                                   help="Doit normalement être ≤ au prix brut.")
-
-        # Calculs auto
+                                   help="Doit être ≤ prix brut.")
         charges_calc = max(prix_brut - prix_net, 0.0)
         pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
 
-        # Lecture seule
         st.number_input("Charges (€)", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
         st.number_input("Commission (%)", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
 
@@ -466,8 +225,7 @@ def vue_ajouter(df: pd.DataFrame):
             "%": round(pct_calc, 2),
             "nuitees": (depart - arrivee).days,
             "AAAA": arrivee.year,
-            "MM": arrivee.month,
-            "uid_ical": ""
+            "MM": arrivee.month
         }
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
         df2 = _trier_et_recoller_totaux(df2)
@@ -481,7 +239,8 @@ def vue_modifier(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune réservation.")
         return
-    df["identifiant"] = df["nom_client"].astype(str) + " | " + df["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+
+    df["identifiant"] = df["nom_client"].astype(str) + " | " + df["date_arrivee"].apply(format_date_str)
     choix = st.selectbox("Choisir une réservation", df["identifiant"])
     idx = df.index[df["identifiant"] == choix]
     if len(idx) == 0:
@@ -491,8 +250,9 @@ def vue_modifier(df: pd.DataFrame):
 
     with st.form("form_modif"):
         nom = st.text_input("Nom du client", df.at[i, "nom_client"])
-        plateforme = st.selectbox("Plateforme", ["Booking","Airbnb","Autre"],
-                                  index=["Booking","Airbnb","Autre"].index(df.at[i,"plateforme"]) if df.at[i,"plateforme"] in ["Booking","Airbnb","Autre"] else 2)
+        plateformes = ["Booking","Airbnb","Autre"]
+        index_pf = plateformes.index(df.at[i,"plateforme"]) if df.at[i,"plateforme"] in plateformes else 2
+        plateforme = st.selectbox("Plateforme", plateformes, index=index_pf)
         tel = st.text_input("Téléphone", df.at[i, "telephone"] if "telephone" in df.columns else "")
         arrivee = st.date_input("Arrivée", df.at[i, "date_arrivee"] if isinstance(df.at[i, "date_arrivee"], date) else date.today())
         depart = st.date_input("Départ", df.at[i, "date_depart"] if isinstance(df.at[i, "date_depart"], date) else arrivee + timedelta(days=1))
@@ -519,7 +279,6 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i, "AAAA"] = arrivee.year
         df.at[i, "MM"] = arrivee.month
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
-        df = _trier_et_recoller_totaux(df)
         sauvegarder_donnees(df)
         st.success("✅ Réservation modifiée")
         st.rerun()
@@ -527,7 +286,6 @@ def vue_modifier(df: pd.DataFrame):
     if b_del:
         df2 = df.drop(index=i)
         df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
-        df2 = _trier_et_recoller_totaux(df2)
         sauvegarder_donnees(df2)
         st.warning("🗑 Réservation supprimée")
         st.rerun()
@@ -538,6 +296,7 @@ def vue_calendrier(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune donnée.")
         return
+
     mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:], index=max(0, (date.today().month - 1)))
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     if not annees:
@@ -545,9 +304,11 @@ def vue_calendrier(df: pd.DataFrame):
         return
     annee = st.selectbox("Année", annees, index=max(0, len(annees) - 1))
     mois_index = list(calendar.month_name).index(mois_nom)
+
     jours = [date(annee, mois_index, j+1) for j in range(calendar.monthrange(annee, mois_index)[1])]
     planning = {j: [] for j in jours}
     couleurs = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
+
     for _, row in df.iterrows():
         d1 = row.get("date_arrivee")
         d2 = row.get("date_depart")
@@ -558,6 +319,8 @@ def vue_calendrier(df: pd.DataFrame):
                 icone = couleurs.get(row.get("plateforme", "Autre"), "⬜")
                 nom = str(row.get("nom_client", ""))
                 planning[j].append(f"{icone} {nom}")
+
+    # Table mois
     table = []
     for semaine in calendar.monthcalendar(annee, mois_index):
         ligne = []
@@ -569,6 +332,7 @@ def vue_calendrier(df: pd.DataFrame):
                 contenu = f"{jour}\n" + "\n".join(planning.get(d, []))
                 ligne.append(contenu)
         table.append(ligne)
+
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
@@ -577,6 +341,7 @@ def vue_rapport(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune donnée.")
         return
+
     col1, col2, col3 = st.columns(3)
     plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
     with col1:
@@ -589,6 +354,7 @@ def vue_rapport(df: pd.DataFrame):
     mois_options = ["Tous"] + [f"{i:02d} - {mois_map[i]}" for i in range(1, 13)]
     with col3:
         filtre_mois_label = st.selectbox("Mois", mois_options)
+
     data = df.copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
@@ -597,9 +363,11 @@ def vue_rapport(df: pd.DataFrame):
     if filtre_mois_label != "Tous":
         mois_num = int(filtre_mois_label.split(" - ")[0])
         data = data[data["MM"] == mois_num]
+
     if data.empty:
         st.info("Aucune donnée pour ces filtres.")
         return
+
     stats = (
         data.dropna(subset=["AAAA", "MM"])
             .groupby(["AAAA", "MM", "plateforme"], dropna=True)
@@ -613,26 +381,34 @@ def vue_rapport(df: pd.DataFrame):
     if stats.empty:
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
+
     stats["mois_txt"] = stats["MM"].astype(int).apply(lambda x: calendar.month_abbr[x])
     stats["periode"] = stats["mois_txt"] + " " + stats["AAAA"].astype(int).astype(str)
+
     st.dataframe(
         stats[["AAAA", "MM", "periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
+
     st.markdown("### 💰 Revenus bruts")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="prix_brut").fillna(0))
+
     st.markdown("### 💸 Charges")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="charges").fillna(0))
+
     st.markdown("### 🛌 Nuitées")
     st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="nuitees").fillna(0))
+
+    # Export XLSX
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             stats.to_excel(writer, index=False, sheet_name="Rapport")
         data_xlsx = out.getvalue()
-    except Exception:
-        st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
+    except Exception as e:
+        st.error(f"Export XLSX indisponible : {e}")
         data_xlsx = None
+
     if data_xlsx:
         st.download_button(
             "📥 Exporter le rapport (XLSX)",
@@ -647,9 +423,11 @@ def vue_clients(df: pd.DataFrame):
     if df.empty:
         st.info("Aucune donnée.")
         return
+
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     annee = st.selectbox("Année", annees) if annees else None
     mois = st.selectbox("Mois", ["Tous"] + list(range(1,13)))
+
     data = df.copy()
     if annee:
         data = data[data["AAAA"] == annee]
@@ -658,208 +436,28 @@ def vue_clients(df: pd.DataFrame):
     if data.empty:
         st.info("Aucune donnée pour cette période.")
         return
+
     with pd.option_context('mode.use_inf_as_na', True):
         if "nuitees" in data.columns and "prix_brut" in data.columns:
             data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).round(2).fillna(0)
         if "nuitees" in data.columns and "prix_net" in data.columns:
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).round(2).fillna(0)
+
     cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
             "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"]
     cols = [c for c in cols if c in data.columns]
+
     show = data.copy()
-    for col in ["date_arrivee","date_depart"]:
-        if col in show.columns:
-            show[col] = show[col].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
+    for c in ["date_arrivee","date_depart"]:
+        if c in show.columns:
+            show[c] = show[c].apply(format_date_str)
+
     st.dataframe(show[cols], use_container_width=True)
     st.download_button(
         "📥 Télécharger la liste (CSV)",
         data=show[cols].to_csv(index=False).encode("utf-8"),
         file_name="liste_clients.csv",
         mime="text/csv"
-    )
-
-# --------- iCal sources store ----------
-def load_ical_sources() -> list[dict]:
-    if not os.path.exists(ICAL_SOURCES_FILE):
-        defaults = [
-            {"plateforme": "Booking", "url": "https://admin.booking.com/hotel/hoteladmin/ical.html?t=9e698b04-6003-498e-ba23-9fb706154a1c"},
-            {"plateforme": "Airbnb", "url": "https://www.airbnb.fr/calendar/ical/2342615.ics?s=bf28ee09c81befe58bb2c12233de25be"},
-        ]
-        save_ical_sources(defaults)
-        return defaults
-    try:
-        with open(ICAL_SOURCES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-def save_ical_sources(sources: list[dict]):
-    try:
-        with open(ICAL_SOURCES_FILE, "w", encoding="utf-8") as f:
-            json.dump(sources, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.error(f"Impossible d’écrire {ICAL_SOURCES_FILE} : {e}")
-
-def add_ical_source(plateforme: str, url: str):
-    src = load_ical_sources()
-    src.append({"plateforme": plateforme.strip(), "url": url.strip()})
-    save_ical_sources(src)
-
-def remove_ical_sources(urls_to_remove: list[str]):
-    src = load_ical_sources()
-    src = [s for s in src if s.get("url") not in set(urls_to_remove)]
-    save_ical_sources(src)
-
-def vue_sync_ical(df: pd.DataFrame):
-    st.title("🔄 Synchroniser iCal (Airbnb / Booking / autres)")
-
-    st.subheader("📚 Sources iCal")
-    sources = load_ical_sources()
-    if sources:
-        st.dataframe(pd.DataFrame(sources), use_container_width=True)
-        urls_to_remove = st.multiselect("Sélectionner des sources à supprimer (par URL)", [s["url"] for s in sources])
-        if st.button("🗑 Supprimer la sélection"):
-            remove_ical_sources(urls_to_remove)
-            st.success("Sources supprimées.")
-            st.rerun()
-    else:
-        st.info("Aucune source iCal enregistrée.")
-
-    with st.expander("➕ Ajouter une plateforme iCal"):
-        colA, colB = st.columns([1,3])
-        with colA:
-            new_platform = st.text_input("Nom de la plateforme", placeholder="Ex: VRBO / Abritel / Autre")
-        with colB:
-            new_url = st.text_input("URL iCal")
-        if st.button("✅ Ajouter la source"):
-            if new_platform.strip() and new_url.strip():
-                add_ical_source(new_platform.strip(), new_url.strip())
-                st.success("Source ajoutée.")
-                st.rerun()
-            else:
-                st.error("Renseigne un nom et une URL.")
-
-    st.subheader("📥 Charger l’aperçu")
-    if st.button("Charger les réservations depuis toutes les sources actives"):
-        dfs = []
-        for s in load_ical_sources():
-            txt = fetch_ics(s["url"])
-            if not txt:
-                st.warning(f"Impossible de charger: {s['plateforme']} ({s['url']})")
-                continue
-            dfe = parse_ics(txt, s["plateforme"])
-            if dfe.empty:
-                st.info(f"Aucun événement exploitable pour {s['plateforme']}.")
-            else:
-                dfs.append(dfe)
-
-        if not dfs:
-            st.info("Rien à importer.")
-            return
-
-        df_new = pd.concat(dfs, ignore_index=True)
-
-        exist = ensure_schema(df.copy())
-        if "uid_ical" not in exist.columns:
-            exist["uid_ical"] = ""
-        uids_exist = set(exist["uid_ical"].dropna().astype(str))
-        df_new["uid_ical"] = df_new["uid_ical"].fillna("").astype(str)
-        df_new = df_new[~df_new["uid_ical"].isin(uids_exist)].copy()
-
-        if not df_new.empty:
-            key_cols = ["plateforme","date_arrivee","date_depart","nom_client"]
-            merged = df_new.merge(
-                exist[key_cols].assign(_exists=True),
-                on=key_cols, how="left"
-            )
-            df_new = merged[merged["_exists"] != True].drop(columns=["_exists"])
-
-        if df_new.empty:
-            st.success("✅ Tous les événements iCal sont déjà importés (aucun nouveau).")
-            return
-
-        df_new = df_new.copy()
-        df_new["arrivee_txt"] = df_new["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
-        df_new["depart_txt"]  = df_new["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d") if isinstance(d, date) else "")
-        df_new["sel_key"]     = df_new.apply(_make_sel_key, axis=1)
-        df_new["Importer"]    = True
-        df_new["⚠️ Nom manquant"] = df_new["nom_client"].fillna("").str.strip().eq("").astype(bool)
-
-        preview = df_new[["Importer","plateforme","nom_client","arrivee_txt","depart_txt","uid_ical","⚠️ Nom manquant"]].copy()
-        preview.index = df_new["sel_key"]
-        preview.index.name = "key_hidden"
-
-        st.caption("🟨 Les lignes avec **Nom manquant = True** sont à compléter (non bloquant).")
-
-        edited = st.data_editor(
-            preview,
-            use_container_width=True,
-            num_rows="fixed",
-            column_config={
-                "Importer": st.column_config.CheckboxColumn("Importer"),
-                "plateforme": st.column_config.TextColumn("Plateforme", disabled=True),
-                "nom_client": st.column_config.TextColumn("Nom client"),
-                "arrivee_txt": st.column_config.TextColumn("Arrivée", disabled=True),
-                "depart_txt": st.column_config.TextColumn("Départ", disabled=True),
-                "uid_ical": st.column_config.TextColumn("UID iCal", disabled=True),
-                "⚠️ Nom manquant": st.column_config.CheckboxColumn("⚠️ Nom manquant", disabled=True),
-            },
-            hide_index=True,
-            key="ical_preview_editor"
-        )
-
-        if st.button("✅ Importer dans Excel"):
-            if edited is None or edited.empty:
-                st.warning("Aucune ligne à importer.")
-                return
-
-            edited_checked = edited[edited["Importer"] == True].copy()
-            if edited_checked.empty:
-                st.warning("Aucune ligne sélectionnée.")
-                return
-
-            name_map = dict(zip(edited.index, edited["nom_client"].fillna("").astype(str)))
-            df_new["nom_client"] = df_new.apply(
-                lambda r: name_map.get(r["sel_key"], r["nom_client"]),
-                axis=1
-            )
-
-            chosen_keys = set(edited_checked.index)
-            a_importer = df_new[df_new["sel_key"].isin(chosen_keys)].copy()
-            a_importer.drop(columns=["Importer","arrivee_txt","depart_txt","sel_key","⚠️ Nom manquant"], inplace=True, errors="ignore")
-
-            if a_importer.empty:
-                st.warning("Aucune ligne à importer après filtrage.")
-                return
-
-            final = pd.concat([exist, a_importer], ignore_index=True)
-            sauvegarder_donnees(final)
-            st.success(f"✅ {len(a_importer)} réservation(s) importée(s).")
-            st.rerun()
-
-
-# -------------------- SMS (via ton téléphone : lien sms:) --------------------
-TEMPLATE_SMS = (
-    "VILLA TOBIAS\n"
-    "Plateforme : {plateforme}\n"
-    "Date d'arrivée : {date_arrivee}  Date départ : {date_depart}  Nombre de nuitées : {nuitees}\n\n"
-    "Bonjour {nom_client}\n\n"
-    "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivée. "
-    "Nous vous attendrons sur place pour vous remettre les clés de l'appartement et vous indiquer votre emplacement de parking. "
-    "Nous vous souhaitons un bon voyage et vous disons à demain.\n\n"
-    "Annick & Charley"
-)
-
-def _fmt_date(d):
-    return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
-
-def build_sms_from_row(row: dict) -> str:
-    return TEMPLATE_SMS.format(
-        plateforme=(row.get("plateforme") or ""),
-        date_arrivee=_fmt_date(row.get("date_arrivee")),
-        date_depart=_fmt_date(row.get("date_depart")),
-        nuitees=(row.get("nuitees") or 0),
-        nom_client=(row.get("nom_client") or "")
     )
 
 def vue_sms(df: pd.DataFrame):
@@ -869,7 +467,6 @@ def vue_sms(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # Filtrer: réservations à venir (arrivée aujourd'hui ou plus)
     today = date.today()
     data = df[(df["date_arrivee"].apply(lambda d: isinstance(d, date) and d >= today))].copy()
     if data.empty:
@@ -877,16 +474,35 @@ def vue_sms(df: pd.DataFrame):
         return
 
     st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
+    TEMPLATE_SMS = (
+        "VILLA TOBIAS\n"
+        "Plateforme : {plateforme}\n"
+        "Date d'arrivée : {date_arrivee}  Date départ : {date_depart}  Nombre de nuitées : {nuitees}\n\n"
+        "Bonjour {nom_client}\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivée. "
+        "Nous vous attendrons sur place pour vous remettre les clés de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons à demain.\n\n"
+        "Annick & Charley"
+    )
+
+    def build_sms(r):
+        return TEMPLATE_SMS.format(
+            plateforme=(r.get("plateforme") or ""),
+            date_arrivee=format_date_str(r.get("date_arrivee")),
+            date_depart=format_date_str(r.get("date_depart")),
+            nuitees=(r.get("nuitees") or 0),
+            nom_client=(r.get("nom_client") or "")
+        )
+
     for _, r in data.sort_values(by=["date_arrivee","nom_client"]).iterrows():
         nom = str(r.get("nom_client","")).strip() or "—"
         plate = str(r.get("plateforme","")).strip() or "—"
-        d1 = _fmt_date(r.get("date_arrivee"))
-        d2 = _fmt_date(r.get("date_depart"))
+        d1 = format_date_str(r.get("date_arrivee"))
+        d2 = format_date_str(r.get("date_depart"))
         nuit = r.get("nuitees") or 0
         tel = str(r.get("telephone") or "").strip()
 
-        message = build_sms_from_row(r)
-        # Lien sms: (Android ouvre Google Messages). On URL-encode le body.
+        message = build_sms(r)
         lien = f"sms:{tel}?&body={quote(message)}" if tel else None
 
         cols = st.columns([3,2,2,2,2,2])
@@ -901,50 +517,8 @@ def vue_sms(df: pd.DataFrame):
         else:
             cols[5].write("📵 N° manquant")
 
-        # Bouton admin (optionnel) : m'envoyer ce SMS via Free Mobile
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
-            if st.button(f"📩 M’envoyer ce SMS (Free Mobile) — {nom}"):
-                if not (FREE_USER and FREE_API_KEY):
-                    st.error("FREE_USER / FREE_API_KEY non configurés dans Secrets.")
-                else:
-                    ok = envoyer_sms_free_admin(message)
-                    if ok:
-                        st.success("✅ SMS envoyé sur ta ligne Free (notification).")
-                        enregistrer_sms(nom, "ADMIN", message)
-                    else:
-                        st.error("❌ Échec d’envoi via Free Mobile.")
-
-    # Historique
-    st.markdown("#### Historique des SMS (notifications Free Mobile uniquement)")
-    if os.path.exists(SMS_HISTO):
-        dfh = pd.read_csv(SMS_HISTO)
-        st.dataframe(dfh, use_container_width=True)
-        out = BytesIO()
-        try:
-            with pd.ExcelWriter(out, engine="openpyxl") as writer:
-                dfh.to_excel(writer, index=False, sheet_name="Historique_SMS")
-            data_xlsx = out.getvalue()
-        except Exception:
-            st.error("Export XLSX indisponible. Ajoute 'openpyxl' dans requirements.txt")
-            data_xlsx = None
-        if data_xlsx:
-            st.download_button(
-                "📥 Télécharger l’historique (XLSX)",
-                data=data_xlsx,
-                file_name="historique_sms.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        if st.button("🧹 Vider l’historique"):
-            try:
-                os.remove(SMS_HISTO)
-                st.success("Historique supprimé.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Impossible de supprimer : {e}")
-    else:
-        st.info("Aucun SMS (Free) enregistré pour le moment.")
-
 
 # -------------------- App --------------------
 def main():
@@ -955,29 +529,11 @@ def main():
     df = charger_donnees()
     bouton_telecharger(df)
 
-    # Bouton test GitHub
-    if st.sidebar.button("🔁 Tester la sauvegarde GitHub"):
-        df_now = charger_donnees()
-        if df_now.empty:
-            st.sidebar.warning("Aucune donnée à pousser.")
-        else:
-            try:
-                buf = BytesIO()
-                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                    _trier_et_recoller_totaux(ensure_schema(df_now)).to_excel(writer, index=False)
-                ok, msg = sauvegarde_github(buf.getvalue(), message="Test push manuel depuis l'app")
-                if ok:
-                    st.sidebar.success("✅ Sauvegarde GitHub OK (test)")
-                else:
-                    st.sidebar.error(f"❌ Échec GitHub (test) : {msg}")
-            except Exception as e:
-                st.sidebar.error(f"❌ Erreur test GitHub : {e}")
-
     st.sidebar.title("🧭 Navigation")
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","📱 SMS","🔄 Synchroniser iCal"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","📱 SMS"]
     )
 
     if onglet == "📋 Réservations":
@@ -994,8 +550,6 @@ def main():
         vue_clients(df)
     elif onglet == "📱 SMS":
         vue_sms(df)
-    elif onglet == "🔄 Synchroniser iCal":
-        vue_sync_ical(df)
 
 if __name__ == "__main__":
     main()
