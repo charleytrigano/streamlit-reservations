@@ -61,13 +61,20 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
     # Colonnes minimales
-    for col, default in [
-        ("plateforme", "Autre"),
-        ("nom_client", ""),
-        ("telephone", ""),
-    ]:
-        if col not in df.columns:
-            df[col] = default
+    if "plateforme" not in df.columns:
+        df["plateforme"] = "Autre"
+    if "nom_client" not in df.columns:
+        df["nom_client"] = ""
+    if "telephone" not in df.columns:
+        df["telephone"] = ""
+    else:
+        # Nettoyer téléphone : enlever éventuelle apostrophe utilisée pour forcer Excel
+        def _clean_tel(x):
+            s = "" if pd.isna(x) else str(x).strip()
+            if s.startswith("'"):
+                s = s[1:]
+            return s
+        df["telephone"] = df["telephone"].apply(_clean_tel)
 
     cols_order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
                   "prix_brut","prix_net","charges","%","AAAA","MM"]
@@ -126,10 +133,20 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
+    """Sauvegarde en Excel en forçant le format Texte pour la colonne téléphone (préfixe ' pour conserver le +)."""
     df = _trier_et_recoller_totaux(ensure_schema(df))
+    df_to_save = df.copy()
+    if "telephone" in df_to_save.columns:
+        def _to_excel_text(s):
+            s = "" if pd.isna(s) else str(s).strip()
+            if s and not s.startswith("'"):
+                s = "'" + s  # force Excel à garder le +
+            return s
+        df_to_save["telephone"] = df_to_save["telephone"].apply(_to_excel_text)
+
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False)
+            df_to_save.to_excel(writer, index=False)
         st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
@@ -444,7 +461,7 @@ def vue_clients(df: pd.DataFrame):
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).round(2).fillna(0)
 
     cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
-            "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"]
+            "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","telephone"]
     cols = [c for c in cols if c in data.columns]
 
     show = data.copy()
@@ -474,14 +491,14 @@ def vue_sms(df: pd.DataFrame):
         return
 
     st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
+
     TEMPLATE_SMS = (
-        "VILLA TOBIAS\n"
-        "Plateforme : {plateforme}\n"
-        "Date d'arrivée : {date_arrivee}  Date départ : {date_depart}  Nombre de nuitées : {nuitees}\n\n"
-        "Bonjour {nom_client}\n\n"
-        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivée. "
-        "Nous vous attendrons sur place pour vous remettre les clés de l'appartement et vous indiquer votre emplacement de parking. "
-        "Nous vous souhaitons un bon voyage et vous disons à demain.\n\n"
+        "VILLA TOBIAS    -  Plateforme : {plateforme}\n"
+        "Date d'arrivee : {date_arrivee}  Date depart : {date_depart}  Nombre de nuitées : {nuitees}\n\n"
+        "Bonjour {nom_client}                     Telephone : {telephone}\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
         "Annick & Charley"
     )
 
@@ -491,7 +508,8 @@ def vue_sms(df: pd.DataFrame):
             date_arrivee=format_date_str(r.get("date_arrivee")),
             date_depart=format_date_str(r.get("date_depart")),
             nuitees=(r.get("nuitees") or 0),
-            nom_client=(r.get("nom_client") or "")
+            nom_client=(r.get("nom_client") or ""),
+            telephone=(r.get("telephone") or "")
         )
 
     for _, r in data.sort_values(by=["date_arrivee","nom_client"]).iterrows():
