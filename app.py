@@ -78,7 +78,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Nettoyer téléphone : enlever éventuelle apostrophe utilisée pour forcer Excel à garder le '+'
+    # Nettoyer téléphone : enlever éventuelle apostrophe (utilisée pour préserver le '+')
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -243,7 +243,6 @@ def sidebar_github_controls(df: pd.DataFrame):
     st.sidebar.subheader("☁️ Sauvegarde GitHub (optionnel)")
     c1, c2 = st.sidebar.columns(2)
     if c1.button("Tester GitHub"):
-        # test simple : envoie le contenu courant (danger : écrase le fichier distant)
         buf_t = BytesIO()
         with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
             _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
@@ -431,30 +430,32 @@ def vue_calendrier(df: pd.DataFrame):
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
-    st.title("📊 Rapport")
+    st.title("📊 Rapport (une année à la fois)")
     df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    col1, col2, col3 = st.columns(3)
+    # 1 seule année obligatoire
+    annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
+    if not annees_uniques:
+        st.info("Aucune année disponible.")
+        return
+    annee = st.selectbox("Année", annees_uniques, index=len(annees_uniques)-1)
+
+    # Filtre plateforme & mois (optionnel)
     plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    col1, col2 = st.columns(2)
     with col1:
         filtre_plateforme = st.selectbox("Plateforme", plateformes)
-    annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    annees = ["Toutes"] + annees_uniques
-    with col2:
-        filtre_annee = st.selectbox("Année", annees)
     mois_map = {i: calendar.month_name[i] for i in range(1, 13)}
     mois_options = ["Tous"] + [f"{i:02d} - {mois_map[i]}" for i in range(1, 13)]
-    with col3:
+    with col2:
         filtre_mois_label = st.selectbox("Mois", mois_options)
 
-    data = df.copy()
+    data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
-    if filtre_annee != "Toutes":
-        data = data[data["AAAA"] == int(filtre_annee)]
     if filtre_mois_label != "Tous":
         mois_num = int(filtre_mois_label.split(" - ")[0])
         data = data[data["MM"] == mois_num]
@@ -477,24 +478,40 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
+    # Tri strict Jan->Déc pour l'année sélectionnée
+    stats = stats.sort_values(["MM", "plateforme"]).reset_index(drop=True)
     stats["mois_txt"] = stats["MM"].astype(int).apply(lambda x: calendar.month_abbr[x])
     stats["periode"] = stats["mois_txt"] + " " + stats["AAAA"].astype(int).astype(str)
+    # Clé pour tri index (01..12)
+    stats["periode_key"] = stats["MM"].astype(int)
 
+    # Tableau
     st.dataframe(
         stats[["AAAA", "MM", "periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
-    st.markdown("### 💰 Revenus bruts")
-    st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="prix_brut").fillna(0))
-    st.markdown("### 💸 Charges")
-    st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="charges").fillna(0))
-    st.markdown("### 🛌 Nuitées")
-    st.bar_chart(stats.pivot(index="periode", columns="plateforme", values="nuitees").fillna(0))
 
+    # Graphes triés Jan->Déc
+    def _plot_metric(metric_col, title):
+        pivot = (
+            stats.pivot(index="periode_key", columns="plateforme", values=metric_col)
+                 .sort_index()
+                 .fillna(0)
+        )
+        labels = {i: calendar.month_abbr[i] + f" {annee}" for i in range(1,13)}
+        pivot.index = pivot.index.map(lambda k: labels.get(k, str(k)))
+        st.markdown(title)
+        st.bar_chart(pivot)
+
+    _plot_metric("prix_brut", "### 💰 Revenus bruts")
+    _plot_metric("charges",  "### 💸 Charges")
+    _plot_metric("nuitees",  "### 🛌 Nuitées")
+
+    # Export XLSX
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            stats.to_excel(writer, index=False, sheet_name="Rapport")
+            stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
         data_xlsx = out.getvalue()
     except Exception as e:
         st.error(f"Export XLSX indisponible : {e}")
@@ -504,7 +521,7 @@ def vue_rapport(df: pd.DataFrame):
         st.download_button(
             "📥 Exporter le rapport (XLSX)",
             data=data_xlsx,
-            file_name="rapport_filtre.xlsx",
+            file_name=f"rapport_{annee}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
@@ -566,7 +583,6 @@ def vue_sms(df: pd.DataFrame):
 
     st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
 
-    # Modèle robuste pour SMS (évite espaces multiples compressés par les apps SMS)
     TEMPLATE_SMS = (
         "VILLA TOBIAS\n"
         "Plateforme : {plateforme}\n"
@@ -612,7 +628,6 @@ def vue_sms(df: pd.DataFrame):
         cols[4].markdown(f"**Nuitées**<br>{nuit}", unsafe_allow_html=True)
 
         if tel:
-            # smsto: + body= + encodage complet -> préremplit Messages
             lien = f"smsto:{tel}?body={quote(message)}"
             cols[5].markdown(f'<a href="{lien}">📲 Envoyer SMS</a>', unsafe_allow_html=True)
         else:
@@ -624,10 +639,9 @@ def vue_sms(df: pd.DataFrame):
 # ==================== iCal parsing (enrichi Booking/Airbnb) ====================
 
 def _parse_ics_datetime(val: str):
-    """Convertit DTSTART/DTEND ICS vers date() (UTC ignoré volontairement, on garde jour civil)."""
+    """Convertit DTSTART/DTEND ICS vers date() (UTC ignoré)."""
     if not val:
         return None
-    # Formats courants : 20250102, 20250102T150000Z, 20250102T150000
     m = re.match(r"(\d{4})(\d{2})(\d{2})", val)
     if not m:
         return None
@@ -648,10 +662,9 @@ def _guess_platform_from_url(url: str, fallback: str = "Autre") -> str:
     return fallback or "Autre"
 
 def _parse_price(txt: str):
-    """Retourne un float si on trouve un montant (formats 1234.56, 1 234,56, 1234,56 €, etc.). Sinon None."""
     if not txt:
         return None
-    t = txt.replace("\u00a0", " ")  # NBSP -> espace
+    t = txt.replace("\u00a0", " ")
     patts = [
         r"(?:Total(?:\s+price)?|Montant|Prix|Payout)\s*[:\-]?\s*(\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2})\s*(?:€|eur|euros)?",
         r"(?:€|eur|euros)\s*(\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2})",
@@ -669,7 +682,6 @@ def _parse_price(txt: str):
     return None
 
 def _parse_phone(txt: str):
-    """Extrait un numéro international type +33... ; sinon None."""
     if not txt:
         return None
     m = re.search(r"(\+\d{6,15})", txt)
@@ -681,31 +693,20 @@ def _parse_phone(txt: str):
     return None
 
 def _extract_name(summary: str, description: str):
-    """Heuristiques pour trouver le nom du client depuis SUMMARY ou DESCRIPTION (Booking/Airbnb)."""
     candidates = []
     for txt in [summary or "", description or ""]:
-        # Booking : "Guest name: John Doe", "Client: John Doe", "Name: John Doe"
         m = re.search(r"(?:Guest\s*name|Client|Nom|Name)\s*[:\-]\s*(.+)", txt, flags=re.I)
         if m: candidates.append(m.group(1).strip())
-
-        # "Reservation for John Doe" / "Réservation : John Doe"
         m = re.search(r"(?:Réservation|Reservation)\s*(?:for|:)?\s*(.+)", txt, flags=re.I)
         if m: candidates.append(m.group(1).strip())
-
-        # "John Doe - Booking" / "Airbnb — Jane"
         m = re.search(r"(.+?)\s*[-—]\s*(?:Booking|Airbnb|Abritel|VRBO|HomeAway)", txt, flags=re.I)
         if m: candidates.append(m.group(1).strip())
-
-        # Airbnb : "Airbnb (John Doe)", "Reservation Confirmed - John Doe"
         m = re.search(r"Airbnb\s*\((.+?)\)", txt, flags=re.I)
         if m: candidates.append(m.group(1).strip())
         m = re.search(r"Confirmed\s*[-–—]\s*(.+)$", txt, flags=re.I)
         if m: candidates.append(m.group(1).strip())
-
-        # Forme générique "John Doe (2 guests)" ou "(2 guests) John Doe"
         m = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*(?:\(|-|\Z)", txt)
         if m: candidates.append(m.group(1).strip())
-
     clean = []
     for c in candidates:
         c2 = re.sub(r"\b(booking|airbnb|abritel|vrbo|homeaway)\b", "", c, flags=re.I)
@@ -713,23 +714,19 @@ def _extract_name(summary: str, description: str):
         c2 = re.sub(r"\s{2,}", " ", c2).strip(" -:•|")
         if c2 and len(c2) >= 2:
             clean.append(c2)
-
     return clean[0] if clean else ""
 
 def _parse_event_fields(ev: dict):
-    """Renvoie un dict consolidé à partir d'un VEVENT brut: uid/start/end/summary/description + heuristiques Booking/Airbnb."""
     uid = ev.get("uid") or ev.get("UID") or ""
     summary = ev.get("summary") or ev.get("SUMMARY") or ""
     description = ev.get("description") or ev.get("DESCRIPTION") or ""
     start = ev.get("start")
     end = ev.get("end")
 
-    # Règles spécifiques Booking/Airbnb
     name = _extract_name(summary, description)
     tel = _parse_phone(description or summary)
     price = _parse_price(description or summary)
 
-    # Booking : parfois "Guest name: X" / "Phone: +33..." / "Total price: 123,45 EUR"
     if not name:
         m = re.search(r"Guest\s*name\s*:\s*(.+)", description, flags=re.I)
         if m: name = m.group(1).strip()
@@ -757,12 +754,9 @@ def _parse_event_fields(ev: dict):
     }
 
 def _parse_ics(text: str):
-    """Renvoie une liste d'événements dict enrichis: {uid,start,end,summary,description,guest_name,phone,price}"""
     events = []
     if not text:
         return events
-
-    # Dépliage des lignes (RFC5545)
     unfolded = []
     prev = ""
     for raw_line in text.splitlines():
@@ -774,7 +768,6 @@ def _parse_ics(text: str):
             prev = raw_line.strip()
     if prev:
         unfolded.append(prev)
-
     current = {}
     in_event = False
     for line in unfolded:
@@ -799,7 +792,7 @@ def _parse_ics(text: str):
         if in_event:
             if ":" in line:
                 k, v = line.split(":", 1)
-                k = k.split(";")[0]  # retire TZID etc.
+                k = k.split(";")[0]
                 current[k] = v.strip()
     return events
 
@@ -838,7 +831,6 @@ def vue_sync_ical(df: pd.DataFrame):
     plateforme_auto = _guess_platform_from_url(url, plateforme_input or "Autre")
     st.write(f"**Plateforme détectée** : {plateforme_auto}")
 
-    # UID existants
     uids_existants = set((df["ical_uid"].dropna().astype(str).unique()) if "ical_uid" in df.columns else [])
     a_importer = [ev for ev in events if ev.get("uid") and ev["uid"] not in uids_existants]
 
@@ -852,21 +844,20 @@ def vue_sync_ical(df: pd.DataFrame):
         depart = ev.get("end")
         nom = ev.get("guest_name") or ""
         tel = ev.get("phone") or ""
-        prix = ev.get("price")  # si présent
+        prix = ev.get("price")
 
         apercu.append({
             "ical_uid": ev.get("uid",""),
             "nom_client": nom,
-            "plateforme": plateforme_auto if not plateforme_input else plateforme_input,
+            "plateforme": plateforme_input if plateforme_input else plateforme_auto,
             "telephone": tel,
             "date_arrivee": arrivee,
             "date_depart": depart,
-            "prix_brut": prix,     # par défaut, on range dans prix_brut si renseigné
+            "prix_brut": prix,
             "prix_net": None,
         })
 
     df_prev = ensure_schema(pd.DataFrame(apercu)).copy()
-    # Affichage avec dates formatées
     for col in ["date_arrivee","date_depart"]:
         df_prev[col] = df_prev[col].apply(format_date_str)
 
@@ -875,7 +866,6 @@ def vue_sync_ical(df: pd.DataFrame):
                  use_container_width=True)
 
     if st.button(f"➡️ Importer {len(apercu)} réservation(s)"):
-        # Conversion pour enregistrement
         ajout = []
         for row in apercu:
             d1, d2 = row.get("date_arrivee"), row.get("date_depart")
