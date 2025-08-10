@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import altair as alt  # <-- pour trier chronologiquement les graphiques
 
 FICHIER = "reservations.xlsx"
 
@@ -449,7 +450,7 @@ def vue_rapport(df: pd.DataFrame):
         return
     annee = st.selectbox("Année", annees_uniques, index=len(annees_uniques)-1)
 
-    # Filtre plateforme & mois (optionnel)
+    # Filtres
     plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
@@ -487,45 +488,61 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
-    # Tri strict Jan->Déc et labels "Jan 2025"
-    stats = stats.sort_values(["MM", "plateforme"]).reset_index(drop=True)
-    stats["periode_key"] = stats["MM"].astype(int)                   # 1..12
-    stats["periode"] = stats["MM"].astype(int).apply(lambda m: f"{calendar.month_abbr[m]} {annee}")
+    # Tri + labels
+    stats["periode_key"] = stats["MM"].astype(int)  # 1..12
+    stats["periode_label"] = stats["MM"].astype(int).apply(lambda m: f"{calendar.month_abbr[m]} {annee}")
 
-    # Ordre de colonnes plateformes figé
+    # Ordre des plateformes
     ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
     stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
 
     # Tableau récap trié
     stats = stats.sort_values(["periode_key", "plateforme"]).reset_index(drop=True)
     st.dataframe(
-        stats[["periode", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats[["periode_label", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]]
+            .rename(columns={"periode_label": "Période"}),
         use_container_width=True
     )
 
-    # Fonction de tracé avec index numérique trié 1..12, puis remap label
-    def _plot_metric(metric_col, title):
-        pivot = (
-            stats.pivot(index="periode_key", columns="plateforme", values=metric_col)
-                 .reindex(index=list(range(1,13)))   # force l'ordre Jan..Dec (même si mois manquants)
-                 .fillna(0)
-        )
-        # Applique l'ordre de colonnes voulu
-        pivot = pivot.reindex(columns=ordered_cols, fill_value=0)
-        # Remap étiquettes X
-        pivot.index = pivot.index.map(lambda m: f"{calendar.month_abbr[m]} {annee}")
-        st.markdown(title)
-        st.bar_chart(pivot)
+    # Liste fixe des 12 mois (labels + order) pour l'année sélectionnée
+    mois_order = list(range(1, 13))
+    mois_labels = [f"{calendar.month_abbr[m]} {annee}" for m in mois_order]
 
-    _plot_metric("prix_brut", "### 💰 Revenus bruts")
-    _plot_metric("charges",  "### 💸 Charges")
-    _plot_metric("nuitees",  "### 🛌 Nuitées")
+    def chart_metric(metric_col: str, titre: str):
+        # Compléter les mois manquants à 0 pour toutes les plateformes
+        base = pd.MultiIndex.from_product([mois_order, ordered_cols], names=["periode_key", "plateforme"])
+        filled = (
+            stats.set_index(["periode_key", "plateforme"])[[metric_col]]
+                 .reindex(base, fill_value=0)
+                 .reset_index()
+        )
+        filled["periode_label"] = filled["periode_key"].map(lambda m: f"{calendar.month_abbr[m]} {annee}")
+
+        ch = (
+            alt.Chart(filled)
+               .mark_bar()
+               .encode(
+                   x=alt.X("periode_label:N", sort=mois_labels, title="Mois"),
+                   y=alt.Y(f"{metric_col}:Q", title=metric_col.replace("_", " ").title()),
+                   color=alt.Color("plateforme:N", sort=ordered_cols, title="Plateforme"),
+                   tooltip=["periode_label", "plateforme", alt.Tooltip(f"{metric_col}:Q", format=".2f")]
+               )
+               .properties(height=280)
+        )
+        st.markdown(titre)
+        st.altair_chart(ch, use_container_width=True)
+
+    chart_metric("prix_brut", "### 💰 Revenus bruts")
+    chart_metric("charges",  "### 💸 Charges")
+    chart_metric("nuitees",  "### 🛌 Nuitées")
 
     # Export XLSX
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
+            stats.drop(columns=["periode_key"], errors="ignore") \
+                 .rename(columns={"periode_label": "Periode"}) \
+                 .to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
         data_xlsx = out.getvalue()
     except Exception as e:
         st.error(f"Export XLSX indisponible : {e}")
