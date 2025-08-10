@@ -18,7 +18,6 @@ def to_date_only(x):
     if pd.isna(x) or x is None:
         return None
     try:
-        # gère 'YYYYMMDD', 'YYYY-MM-DD', datetimes, etc.
         return pd.to_datetime(x).date()
     except Exception:
         return None
@@ -87,6 +86,10 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
                 s = s[1:]
             return s
         df["telephone"] = df["telephone"].apply(_clean_tel)
+
+    # Préparer colonne ical_uid si absente
+    if "ical_uid" not in df.columns:
+        df["ical_uid"] = ""
 
     cols_order = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
                   "prix_brut","prix_net","charges","%","AAAA","MM","ical_uid"]
@@ -189,7 +192,7 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==================== GitHub Save ====================
+# ==================== GitHub Save (facultatif) ====================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
@@ -240,14 +243,12 @@ def sidebar_github_controls(df: pd.DataFrame):
     st.sidebar.subheader("☁️ Sauvegarde GitHub (optionnel)")
     c1, c2 = st.sidebar.columns(2)
     if c1.button("Tester GitHub"):
-        # test simple : envoie un petit fichier texte
-        test_bytes = b"Streamlit test " + datetime.now().isoformat().encode("utf-8")
-        # on n'écrase pas le XLSX en test, on tente juste un PUT sur le chemin défini
-        ok = github_save_file(test_bytes)
-        if ok:
-            st.sidebar.success("Test : OK (le contenu du fichier du repo a été remplacé par un test).")
-        else:
-            st.sidebar.error("Test : échec.")
+        # test simple : envoie le contenu courant (danger : écrase le fichier distant)
+        buf_t = BytesIO()
+        with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
+            _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
+        ok = github_save_file(buf_t.getvalue())
+        st.sidebar.write("Test effectué." if ok else "Test échoué.")
     if c2.button("Sauvegarder XLSX -> GitHub"):
         buf = BytesIO()
         try:
@@ -257,7 +258,7 @@ def sidebar_github_controls(df: pd.DataFrame):
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues ====================
+# ==================== Vues principales ====================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -319,7 +320,8 @@ def vue_ajouter(df: pd.DataFrame):
             "%": round(pct_calc, 2),
             "nuitees": (depart - arrivee).days,
             "AAAA": arrivee.year,
-            "MM": arrivee.month
+            "MM": arrivee.month,
+            "ical_uid": ""
         }
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
         df2 = _trier_et_recoller_totaux(df2)
@@ -619,6 +621,8 @@ def vue_sms(df: pd.DataFrame):
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
 
+# ==================== iCal parsing (enrichi Booking/Airbnb) ====================
+
 def _parse_ics_datetime(val: str):
     """Convertit DTSTART/DTEND ICS vers date() (UTC ignoré volontairement, on garde jour civil)."""
     if not val:
@@ -633,12 +637,132 @@ def _parse_ics_datetime(val: str):
     except Exception:
         return None
 
+def _guess_platform_from_url(url: str, fallback: str = "Autre") -> str:
+    u = (url or "").lower()
+    if "booking.com" in u:
+        return "Booking"
+    if "airbnb." in u:
+        return "Airbnb"
+    if "abritel" in u or "vrbo" in u or "homeaway" in u:
+        return "Abritel/VRBO"
+    return fallback or "Autre"
+
+def _parse_price(txt: str):
+    """Retourne un float si on trouve un montant (formats 1234.56, 1 234,56, 1234,56 €, etc.). Sinon None."""
+    if not txt:
+        return None
+    t = txt.replace("\u00a0", " ")  # NBSP -> espace
+    patts = [
+        r"(?:Total(?:\s+price)?|Montant|Prix|Payout)\s*[:\-]?\s*(\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2})\s*(?:€|eur|euros)?",
+        r"(?:€|eur|euros)\s*(\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2})",
+        r"(\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2})"
+    ]
+    for p in patts:
+        m = re.search(p, t, flags=re.I)
+        if m:
+            raw = m.group(1)
+            raw = raw.replace(" ", "").replace("\u00a0","").replace(".", "").replace(",", ".")
+            try:
+                return float(raw)
+            except Exception:
+                pass
+    return None
+
+def _parse_phone(txt: str):
+    """Extrait un numéro international type +33... ; sinon None."""
+    if not txt:
+        return None
+    m = re.search(r"(\+\d{6,15})", txt)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(\d{9,14})\b", txt)
+    if m:
+        return m.group(1)
+    return None
+
+def _extract_name(summary: str, description: str):
+    """Heuristiques pour trouver le nom du client depuis SUMMARY ou DESCRIPTION (Booking/Airbnb)."""
+    candidates = []
+    for txt in [summary or "", description or ""]:
+        # Booking : "Guest name: John Doe", "Client: John Doe", "Name: John Doe"
+        m = re.search(r"(?:Guest\s*name|Client|Nom|Name)\s*[:\-]\s*(.+)", txt, flags=re.I)
+        if m: candidates.append(m.group(1).strip())
+
+        # "Reservation for John Doe" / "Réservation : John Doe"
+        m = re.search(r"(?:Réservation|Reservation)\s*(?:for|:)?\s*(.+)", txt, flags=re.I)
+        if m: candidates.append(m.group(1).strip())
+
+        # "John Doe - Booking" / "Airbnb — Jane"
+        m = re.search(r"(.+?)\s*[-—]\s*(?:Booking|Airbnb|Abritel|VRBO|HomeAway)", txt, flags=re.I)
+        if m: candidates.append(m.group(1).strip())
+
+        # Airbnb : "Airbnb (John Doe)", "Reservation Confirmed - John Doe"
+        m = re.search(r"Airbnb\s*\((.+?)\)", txt, flags=re.I)
+        if m: candidates.append(m.group(1).strip())
+        m = re.search(r"Confirmed\s*[-–—]\s*(.+)$", txt, flags=re.I)
+        if m: candidates.append(m.group(1).strip())
+
+        # Forme générique "John Doe (2 guests)" ou "(2 guests) John Doe"
+        m = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*(?:\(|-|\Z)", txt)
+        if m: candidates.append(m.group(1).strip())
+
+    clean = []
+    for c in candidates:
+        c2 = re.sub(r"\b(booking|airbnb|abritel|vrbo|homeaway)\b", "", c, flags=re.I)
+        c2 = re.sub(r"[\|\-–—]+", " ", c2)
+        c2 = re.sub(r"\s{2,}", " ", c2).strip(" -:•|")
+        if c2 and len(c2) >= 2:
+            clean.append(c2)
+
+    return clean[0] if clean else ""
+
+def _parse_event_fields(ev: dict):
+    """Renvoie un dict consolidé à partir d'un VEVENT brut: uid/start/end/summary/description + heuristiques Booking/Airbnb."""
+    uid = ev.get("uid") or ev.get("UID") or ""
+    summary = ev.get("summary") or ev.get("SUMMARY") or ""
+    description = ev.get("description") or ev.get("DESCRIPTION") or ""
+    start = ev.get("start")
+    end = ev.get("end")
+
+    # Règles spécifiques Booking/Airbnb
+    name = _extract_name(summary, description)
+    tel = _parse_phone(description or summary)
+    price = _parse_price(description or summary)
+
+    # Booking : parfois "Guest name: X" / "Phone: +33..." / "Total price: 123,45 EUR"
+    if not name:
+        m = re.search(r"Guest\s*name\s*:\s*(.+)", description, flags=re.I)
+        if m: name = m.group(1).strip()
+    if not tel:
+        m = re.search(r"Phone\s*:\s*(\+\d{6,15})", description, flags=re.I)
+        if m: tel = m.group(1).strip()
+    if price is None:
+        m = re.search(r"(?:Total\s*price|Montant|Prix|Payout)\s*:\s*([0-9 .,\u00a0]+)\s*(?:€|eur|euros)?", description, flags=re.I)
+        if m:
+            raw = m.group(1).replace(" ", "").replace("\u00a0","").replace(".", "").replace(",", ".")
+            try:
+                price = float(raw)
+            except Exception:
+                price = None
+
+    return {
+        "uid": uid,
+        "start": start,
+        "end": end,
+        "summary": summary,
+        "description": description,
+        "guest_name": name,
+        "phone": tel,
+        "price": price,
+    }
+
 def _parse_ics(text: str):
-    """Renvoie une liste de dicts {uid, start, end, summary} pour chaque VEVENT."""
+    """Renvoie une liste d'événements dict enrichis: {uid,start,end,summary,description,guest_name,phone,price}"""
     events = []
     if not text:
         return events
-    # gestion des lignes repliées (ICS: si une ligne commence par espace/Tab, c'est la suite)
+
+    # Dépliage des lignes (RFC5545)
     unfolded = []
     prev = ""
     for raw_line in text.splitlines():
@@ -660,29 +784,32 @@ def _parse_ics(text: str):
             continue
         if line == "END:VEVENT":
             if in_event and ("DTSTART" in current or "DTEND" in current):
-                events.append({
-                    "uid": current.get("UID", ""),
-                    "start": _parse_ics_datetime(current.get("DTSTART","")),
-                    "end": _parse_ics_datetime(current.get("DTEND","")),
-                    "summary": current.get("SUMMARY",""),
-                })
+                events.append(
+                    _parse_event_fields({
+                        "uid": current.get("UID",""),
+                        "start": _parse_ics_datetime(current.get("DTSTART","")),
+                        "end": _parse_ics_datetime(current.get("DTEND","")),
+                        "summary": current.get("SUMMARY",""),
+                        "description": current.get("DESCRIPTION",""),
+                    })
+                )
             in_event = False
             current = {}
             continue
         if in_event:
             if ":" in line:
                 k, v = line.split(":", 1)
-                k = k.split(";")[0]  # retirer params type TZID
+                k = k.split(";")[0]  # retire TZID etc.
                 current[k] = v.strip()
     return events
 
 def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (Booking, Airbnb, autres)")
-    st.caption("Colle une ou plusieurs URLs .ics. Nous détectons les événements (UID) et évitons les doublons.")
+    st.caption("Colle une URL .ics. Nous détectons les réservations et évitons les doublons via l'UID iCal.")
 
     with st.form("ical_form"):
-        plateforme = st.text_input("Nom de la plateforme (ex. Booking, Airbnb, Abritel…)", value="Booking")
         url = st.text_input("URL du calendrier iCal")
+        plateforme_input = st.text_input("Nom de la plateforme (optionnel, sinon auto)", value="")
         submitted = st.form_submit_button("Charger & Prévisualiser")
 
     if not submitted:
@@ -708,59 +835,57 @@ def vue_sync_ical(df: pd.DataFrame):
         st.info("Aucun événement trouvé dans ce calendrier.")
         return
 
-    st.success(f"{len(events)} événements trouvés.")
+    plateforme_auto = _guess_platform_from_url(url, plateforme_input or "Autre")
+    st.write(f"**Plateforme détectée** : {plateforme_auto}")
+
     # UID existants
     uids_existants = set((df["ical_uid"].dropna().astype(str).unique()) if "ical_uid" in df.columns else [])
     a_importer = [ev for ev in events if ev.get("uid") and ev["uid"] not in uids_existants]
 
-    # Aperçu
+    if not a_importer:
+        st.info("Aucun nouvel événement (tous les UID sont déjà importés).")
+        return
+
     apercu = []
     for ev in a_importer:
         arrivee = ev.get("start")
         depart = ev.get("end")
-        summary = (ev.get("summary") or "").strip()
-        # Heuristique pour extraire un nom depuis SUMMARY
-        # Exemples : "John Doe - Booking", "Réservation: Alice", etc.
-        nom = summary
-        # Nettoyage sommaire
-        nom = re.sub(r"(booking|airbnb|reservation|réservation)\W*", "", nom, flags=re.I)
-        nom = nom.strip(" -:•|")
+        nom = ev.get("guest_name") or ""
+        tel = ev.get("phone") or ""
+        prix = ev.get("price")  # si présent
 
         apercu.append({
             "ical_uid": ev.get("uid",""),
             "nom_client": nom,
-            "plateforme": plateforme,
-            "telephone": "",
+            "plateforme": plateforme_auto if not plateforme_input else plateforme_input,
+            "telephone": tel,
             "date_arrivee": arrivee,
             "date_depart": depart,
-            "prix_brut": None,
+            "prix_brut": prix,     # par défaut, on range dans prix_brut si renseigné
             "prix_net": None,
         })
-    if not apercu:
-        st.info("Aucun nouvel événement (tous les UID sont déjà importés).")
-        return
 
-    df_prev = pd.DataFrame(apercu)
-    df_prev = ensure_schema(df_prev)
+    df_prev = ensure_schema(pd.DataFrame(apercu)).copy()
+    # Affichage avec dates formatées
     for col in ["date_arrivee","date_depart"]:
-        if col in df_prev.columns:
-            df_prev[col] = df_prev[col].apply(format_date_str)
+        df_prev[col] = df_prev[col].apply(format_date_str)
 
     st.markdown("**Aperçu des nouvelles réservations à importer**")
-    st.dataframe(df_prev[["nom_client","plateforme","date_arrivee","date_depart","ical_uid"]], use_container_width=True)
+    st.dataframe(df_prev[["nom_client","plateforme","telephone","date_arrivee","date_depart","prix_brut","ical_uid"]],
+                 use_container_width=True)
 
     if st.button(f"➡️ Importer {len(apercu)} réservation(s)"):
-        # Convertir dates string -> date à l’insertion
+        # Conversion pour enregistrement
+        ajout = []
         for row in apercu:
             d1, d2 = row.get("date_arrivee"), row.get("date_depart")
-            # d1/d2 sont déjà des date() via _parse_ics
             a = {
                 "nom_client": row["nom_client"],
                 "plateforme": row["plateforme"],
-                "telephone": "",
+                "telephone": row["telephone"] or "",
                 "date_arrivee": d1,
                 "date_depart": d2,
-                "prix_brut": None,
+                "prix_brut": row["prix_brut"],
                 "prix_net": None,
                 "charges": None,
                 "%": None,
@@ -769,9 +894,11 @@ def vue_sync_ical(df: pd.DataFrame):
                 "MM": d1.month if isinstance(d1, date) else None,
                 "ical_uid": row["ical_uid"]
             }
-            df.loc[len(df)] = a
-        df2 = _trier_et_recoller_totaux(ensure_schema(df))
-        sauvegarder_donnees(df2)
+            ajout.append(a)
+
+        df_new = pd.concat([df, pd.DataFrame(ajout)], ignore_index=True)
+        df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
+        sauvegarder_donnees(df_new)
         st.success("✅ Import iCal effectué.")
         st.rerun()
 
