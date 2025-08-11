@@ -445,32 +445,49 @@ def vue_rapport(df: pd.DataFrame):
             .reset_index()
     )
 
-    # Compléter mois manquants sans fausser les totaux
+    # Compléter pour les GRAPHIQUES (12 mois) mais garder un tableau "nettoyé"
     plats = sorted(stats["plateforme"].unique().tolist())
-    full = []
+    full_rows = []
     for m in range(1, 13):
         for p in plats:
             row = stats[(stats["MM"] == m) & (stats["plateforme"] == p)]
             if row.empty:
-                full.append({"MM": m, "plateforme": p, "prix_brut": 0.0, "prix_net": 0.0, "charges": 0.0, "nuitees": 0})
+                full_rows.append({"MM": m, "plateforme": p, "prix_brut": 0.0, "prix_net": 0.0, "charges": 0.0, "nuitees": 0})
             else:
-                full.append(row.iloc[0].to_dict())
-    stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
+                full_rows.append(row.iloc[0].to_dict())
+    stats_full = pd.DataFrame(full_rows).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # Tableau + total annuel
-    stats_display = stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]]
-    total_row = pd.DataFrame({
-        "Mois": ["Total"],
-        "plateforme": [filtre_plateforme if filtre_plateforme != "Toutes" else "Toutes plateformes"],
-        "prix_brut": [stats["prix_brut"].sum()],
-        "prix_net": [stats["prix_net"].sum()],
-        "charges": [stats["charges"].sum()],
-        "nuitees": [stats["nuitees"].sum()],
-    })
+    # Tableau sans lignes à zéro
+    stats_table = stats_full[
+        ~(
+            (stats_full["prix_brut"].round(2) == 0) &
+            (stats_full["prix_net"].round(2) == 0) &
+            (stats_full["charges"].round(2)  == 0) &
+            (stats_full["nuitees"].round(2) == 0)
+        )
+    ].copy()
+
+    # Tableau
     st.subheader(f"Détail {annee}")
-    st.dataframe(pd.concat([stats_display, total_row], ignore_index=True), use_container_width=True)
+    affiche = stats_table.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]]
+    st.dataframe(affiche, use_container_width=True)
 
-    # Graphes matplotlib : X = 1..12 (ordre chronologique)
+    # Totaux affichés = CALCUL DIRECT (sur data filtrée)
+    tot_ctrl = {
+        "prix_brut": float(data["prix_brut"].sum()),
+        "prix_net":  float(data["prix_net"].sum()),
+        "charges":   float(data["charges"].sum()),
+        "nuitees":   float(data["nuitees"].sum()),
+    }
+
+    st.markdown("#### Totaux (calcul direct)")
+    colA, colB, colC, colD = st.columns(4)
+    colA.metric("Prix brut (€)", f"{tot_ctrl['prix_brut']:.2f}")
+    colB.metric("Prix net (€)",  f"{tot_ctrl['prix_net']:.2f}")
+    colC.metric("Charges (€)",   f"{tot_ctrl['charges']:.2f}")
+    colD.metric("Nuitées",       f"{int(tot_ctrl['nuitees'])}")
+
+    # Graphes matplotlib : X = 1..12 (ordre chronologique) basés sur stats_full
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -479,7 +496,7 @@ def vue_rapport(df: pd.DataFrame):
 
         fig, ax = plt.subplots(figsize=(10, 4))
         for i, p in enumerate(plats_sorted):
-            sub = stats[stats["plateforme"] == p]
+            sub = stats_full[stats_full["plateforme"] == p]
             vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
             y = np.array([vals.get(m, 0.0) for m in months], dtype=float)
             x = base_x + (i - (len(plats_sorted)-1)/2) * width
@@ -497,6 +514,7 @@ def vue_rapport(df: pd.DataFrame):
         st.pyplot(fig)
         plt.close(fig)
 
+    st.markdown("---")
     plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
     plot_grouped_bars("charges", "💸 Charges", "€")
     plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
