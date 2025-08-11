@@ -216,9 +216,30 @@ def bouton_telecharger(df: pd.DataFrame):
 
 # =========================  BANDEAU "EN COURS"  ============================
 
+def sms_message(row: pd.Series) -> str:
+    arrivee = format_date_str(row.get("date_arrivee"))
+    depart = format_date_str(row.get("date_depart"))
+    nuitees = int(row.get("nuitees") or 0)
+    plateforme = str(row.get("plateforme") or "")
+    nom = str(row.get("nom_client") or "")
+    tel = str(row.get("telephone") or "")
+    msg = (
+        "VILLA TOBIAS\n"
+        f"Plateforme : {plateforme}\n"
+        f"Date d'arrivee : {arrivee}  Date depart : {depart}  Nombre de nuitées : {nuitees}\n\n"
+        f"Bonjour {nom}\n"
+        f"Telephone : {tel}\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
+        "Annick & Charley"
+    )
+    return msg
+
 def vue_en_cours_banner(df: pd.DataFrame):
     if df is None or df.empty:
         return
+
     dft = ensure_schema(df).copy()
     mask_total = _marque_totaux(dft)
     today = date.today()
@@ -239,19 +260,36 @@ def vue_en_cours_banner(df: pd.DataFrame):
         st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
         return
 
-    en_cours = en_cours.sort_values(["date_depart", "nom_client"])
-    en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
-    en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
+    # Tri et formatage des dates
+    en_cours = en_cours.sort_values(["date_depart", "nom_client"]).copy()
+    en_cours["date_arrivee_fmt"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
+    en_cours["date_depart_fmt"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
-    en_cours["telephone"] = en_cours["telephone"].apply(
-        lambda x: (lambda u: f'<a href="{u}">📞 Appeler</a>')(tel_to_uri(x)) if str(x).strip() != "" else ""
-    )
+    # 🔗 Liens Appeler + SMS
+    def _make_links(row):
+        tel_raw = str(row.get("telephone") or "").strip()
+        tel_ui  = tel_to_uri(tel_raw)  # tel:+33...
+        sms_txt = sms_message(row)     # message complet
+        tel_clean = re.sub(r"[ \-\.]", "", clean_tel_display(tel_raw))
+        sms_uri = f"sms:{tel_clean}?&body={quote(sms_txt)}" if tel_clean else ""
+        link_tel = f'<a href="{tel_ui}">📞 Appeler</a>' if tel_ui else ""
+        link_sms = f'<a href="{sms_uri}">📲 SMS</a>' if sms_uri else ""
+        return link_tel, link_sms
 
-    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone"]
-    cols = [c for c in cols if c in en_cours.columns]
+    links = en_cours.apply(_make_links, axis=1, result_type="expand")
+    en_cours["📞 Appeler"] = links[0]
+    en_cours["📲 SMS"]     = links[1]
 
+    # Colonnes à afficher
+    cols = ["plateforme","nom_client","date_arrivee_fmt","date_depart_fmt","nuitees","📞 Appeler","📲 SMS"]
+    en_cours = en_cours.rename(columns={
+        "date_arrivee_fmt": "date_arrivee",
+        "date_depart_fmt":  "date_depart"
+    })
+
+    # Rendu HTML pour conserver les liens
     st.markdown(
-        en_cours[cols].rename(columns={"telephone": "📞 Appeler"}).to_html(index=False, escape=False),
+        en_cours[cols].to_html(index=False, escape=False),
         unsafe_allow_html=True
     )
 
@@ -711,26 +749,6 @@ def vue_clients(df: pd.DataFrame):
 
 # =========================  SMS (manuel amélioré)  ==============================
 
-def sms_message(row: pd.Series) -> str:
-    arrivee = format_date_str(row.get("date_arrivee"))
-    depart = format_date_str(row.get("date_depart"))
-    nuitees = int(row.get("nuitees") or 0)
-    plateforme = str(row.get("plateforme") or "")
-    nom = str(row.get("nom_client") or "")
-    tel = str(row.get("telephone") or "")
-    msg = (
-        "VILLA TOBIAS\n"
-        f"Plateforme : {plateforme}\n"
-        f"Date d'arrivee : {arrivee}  Date depart : {depart}  Nombre de nuitées : {nuitees}\n\n"
-        f"Bonjour {nom}\n"
-        f"Telephone : {tel}\n\n"
-        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
-        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
-        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
-        "Annick & Charley"
-    )
-    return msg
-
 def log_sms(nom, telephone, message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     ligne = {"nom": nom, "telephone": telephone, "message": message, "horodatage": now}
@@ -933,16 +951,19 @@ def vue_sync_ical(df: pd.DataFrame):
                 st.success("Calendrier ajouté.")
                 st.rerun()
 
-    st.divider()
+    st.subheader("Importer un calendrier")
+    if not cals:
+        st.info("Ajoutez d’abord un calendrier ci-dessus.")
+        return
 
     col_all1, col_all2 = st.columns(2)
     with col_all1:
         if st.button("📥 Tout importer (tous les calendriers)"):
+            total_new, total_skip = 0, 0
+            df_work = df.copy()
             if not cals:
                 st.warning("Aucun calendrier à importer.")
             else:
-                total_new, total_skip = 0, 0
-                df_work = df.copy()
                 for c in cals:
                     try:
                         r = requests.get(c["url"], timeout=20)
@@ -955,14 +976,8 @@ def vue_sync_ical(df: pd.DataFrame):
                 sauvegarder_donnees(df_work)
                 st.success(f"Import terminé : +{total_new} ajoutés, {total_skip} ignorés (UID déjà présents).")
                 st.rerun()
-
     with col_all2:
         st.caption("Astuce : utilisez les boutons d’action à côté de chaque calendrier pour importer individuellement.")
-
-    st.subheader("Importer un calendrier")
-    if not cals:
-        st.info("Ajoutez d’abord un calendrier ci-dessus.")
-        return
 
     choix = st.selectbox("Calendrier à importer", list(range(len(cals))), format_func=lambda i: f"{cals[i]['plateforme']} — {cals[i]['url']}")
     if st.button("Importer ce calendrier"):
@@ -996,6 +1011,7 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
+    # Paramètre d’URL ?clear=1 pour vider le cache
     params = st.query_params
     clear_val = params.get("clear", ["0"])[0] if isinstance(params.get("clear"), list) else params.get("clear")
     if clear_val == "1":
