@@ -249,22 +249,23 @@ def vue_en_cours_banner(df: pd.DataFrame):
         st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
         return
 
-    # Tri et formats
+    # Tri + formatage dates
     en_cours = en_cours.sort_values(["date_depart", "nom_client"])
     en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
     en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
-    # Colonne lien téléphone
-    en_cours["📞 Appeler"] = en_cours["telephone"].apply(tel_to_uri)
+    # Colonne téléphone -> lien "📞 Appeler"
+    en_cours["telephone"] = en_cours["telephone"].apply(
+        lambda x: (lambda u: f'<a href="{u}">📞 Appeler</a>')(tel_to_uri(x)) if str(x).strip() != "" else ""
+    )
 
-    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone","📞 Appeler"]
+    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone"]
     cols = [c for c in cols if c in en_cours.columns]
-    st.dataframe(
-        en_cours[cols],
-        use_container_width=True,
-        column_config={
-            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
-        }
+
+    # Affichage HTML pour autoriser le lien tel:
+    st.markdown(
+        en_cours[cols].rename(columns={"telephone": "📞 Appeler"}).to_html(index=False, escape=False),
+        unsafe_allow_html=True
     )
 
 # =========================  VUES  ==========================================
@@ -332,9 +333,29 @@ def vue_reservations(df: pd.DataFrame):
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
 
-    # Lien téléphone
-    to_display["📞 Appeler"] = to_display["telephone"].apply(tel_to_uri)
+    # Dates formatées + lien "📞 Appeler" à la place du n° brut
+    show = to_display.sort_values(["date_arrivee","nom_client"], na_position="last").copy()
+    for col in ["date_arrivee","date_depart"]:
+        if col in show.columns:
+            show[col] = show[col].apply(format_date_str)
+    if "telephone" in show.columns:
+        show["telephone"] = show["telephone"].apply(
+            lambda x: (lambda u: f'<a href="{u}">📞 Appeler</a>')(tel_to_uri(x)) if str(x).strip() != "" else ""
+        )
 
+    cols = [
+        "nom_client","plateforme","date_arrivee","date_depart","nuitees",
+        "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM","telephone"
+    ]
+    cols = [c for c in cols if c in show.columns]
+
+    # Affichage HTML pour autoriser le lien tel:
+    st.markdown(
+        show[cols].rename(columns={"telephone":"📞 Appeler"}).to_html(index=False, escape=False),
+        unsafe_allow_html=True
+    )
+
+    # Totaux affichés
     tot_ctrl = {
         "prix_brut": float(core["prix_brut"].sum()),
         "prix_net":  float(core["prix_net"].sum()),
@@ -344,28 +365,6 @@ def vue_reservations(df: pd.DataFrame):
     }
     tot_ctrl["brut/nuit"] = round((tot_ctrl["prix_brut"] / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
     tot_ctrl["net/nuit"]  = round((tot_ctrl["prix_net"]  / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
-
-    # Affichage : tri + format dates
-    core_sorted = to_display.sort_values(["date_arrivee","nom_client"], na_position="last")
-    show = core_sorted.copy()
-    for col in ["date_arrivee","date_depart"]:
-        if col in show.columns:
-            show[col] = show[col].apply(format_date_str)
-
-    cols = [
-        "nom_client","plateforme","telephone","📞 Appeler",
-        "date_arrivee","date_depart","nuitees",
-        "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM"
-    ]
-    cols = [c for c in cols if c in show.columns]
-
-    st.dataframe(
-        show[cols],
-        use_container_width=True,
-        column_config={
-            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
-        }
-    )
 
     st.markdown("#### Totaux (calcul direct sur les lignes filtrées, hors 'Total')")
     cA, cB, cC, cD, cE, cF, cG = st.columns(7)
@@ -377,8 +376,8 @@ def vue_reservations(df: pd.DataFrame):
     cF.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
     cG.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
 
-    # Export
-    csv = show[cols].to_csv(index=False).encode("utf-8")
+    # Export CSV
+    csv = show[cols].rename(columns={"telephone":"📞 Appeler"}).to_csv(index=False).encode("utf-8")
     st.download_button(
         "📥 Télécharger la sélection (CSV)",
         data=csv,
@@ -729,13 +728,10 @@ def vue_clients(df: pd.DataFrame):
         if "nuitees" in data.columns and "prix_net" in data.columns:
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
 
-    # Lien téléphone
-    data["📞 Appeler"] = data["telephone"].apply(tel_to_uri)
-
     cols = ["nom_client","plateforme",
             "date_arrivee","date_depart","nuitees",
             "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit",
-            "telephone","📞 Appeler"]
+            "telephone"]
     cols = [c for c in cols if c in data.columns]
 
     show = data.copy()
@@ -743,13 +739,7 @@ def vue_clients(df: pd.DataFrame):
         if c in show.columns:
             show[c] = show[c].apply(format_date_str)
 
-    st.dataframe(
-        show[cols],
-        use_container_width=True,
-        column_config={
-            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
-        }
-    )
+    st.dataframe(show[cols], use_container_width=True)
 
     st.download_button(
         "📥 Télécharger la liste (CSV)",
