@@ -9,7 +9,7 @@ import base64
 import json
 import os
 import re
-import altair as alt  # <-- pour trier chronologiquement les graphiques
+import altair as alt  # pour un tri chronologique fiable des graphiques
 
 FICHIER = "reservations.xlsx"
 
@@ -516,16 +516,26 @@ def vue_rapport(df: pd.DataFrame):
                  .reindex(base, fill_value=0)
                  .reset_index()
         )
-        filled["periode_label"] = filled["periode_key"].map(lambda m: f"{calendar.month_abbr[m]} {annee}")
 
+        # Construit les libellés "Jan 2025", "Feb 2025", ... ET les rend catégoriels ordonnés
+        filled["periode_label"] = filled["periode_key"].map(lambda m: f"{calendar.month_abbr[m]} {annee}")
+        filled["periode_label"] = pd.Categorical(filled["periode_label"], categories=mois_labels, ordered=True)
+
+        # Altair : impose l’ordre via Sort(values=...) et conserve l’ordre de plateformes
         ch = (
             alt.Chart(filled)
                .mark_bar()
                .encode(
-                   x=alt.X("periode_label:N", sort=mois_labels, title="Mois"),
+                   x=alt.X("periode_label:N",
+                           sort=alt.Sort(values=mois_labels),
+                           title="Mois"),
                    y=alt.Y(f"{metric_col}:Q", title=metric_col.replace("_", " ").title()),
                    color=alt.Color("plateforme:N", sort=ordered_cols, title="Plateforme"),
-                   tooltip=["periode_label", "plateforme", alt.Tooltip(f"{metric_col}:Q", format=".2f")]
+                   tooltip=[
+                       alt.Tooltip("periode_label:N", title="Période"),
+                       alt.Tooltip("plateforme:N", title="Plateforme"),
+                       alt.Tooltip(f"{metric_col}:Q", format=".2f", title=metric_col.replace("_", " ").title())
+                   ],
                )
                .properties(height=280)
         )
