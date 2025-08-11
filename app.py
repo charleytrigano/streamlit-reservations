@@ -44,6 +44,22 @@ def to_date_only(x):
 def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
+def clean_tel_display(x: str) -> str:
+    """Retourne un numéro 'propre' pour affichage (on ne force pas le +)."""
+    if pd.isna(x) or x is None:
+        return ""
+    s = str(x).strip()
+    return s[1:] if s.startswith("'") else s
+
+def tel_to_uri(x: str) -> str:
+    """Transforme un numéro en URI tel: (garde + si présent)."""
+    s = clean_tel_display(x)
+    # Enlève espaces et tirets
+    s = re.sub(r"[ \-\.]", "", s)
+    if not s:
+        return ""
+    return f"tel:{s}"
+
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     """Nettoie et normalise le schéma + types."""
     if df is None or df.empty:
@@ -97,10 +113,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     # Téléphone : enlever l'apostrophe (on la remettra à la sauvegarde)
     if "telephone" in df.columns:
-        def _clean_tel(x):
-            s = "" if pd.isna(x) else str(x).strip()
-            return s[1:] if s.startswith("'") else s
-        df["telephone"] = df["telephone"].apply(_clean_tel)
+        df["telephone"] = df["telephone"].apply(clean_tel_display)
 
     if "ical_uid" not in df.columns:
         df["ical_uid"] = ""
@@ -241,9 +254,18 @@ def vue_en_cours_banner(df: pd.DataFrame):
     en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
     en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
-    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone"]
+    # Colonne lien téléphone
+    en_cours["📞 Appeler"] = en_cours["telephone"].apply(tel_to_uri)
+
+    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone","📞 Appeler"]
     cols = [c for c in cols if c in en_cours.columns]
-    st.dataframe(en_cours[cols], use_container_width=True)
+    st.dataframe(
+        en_cours[cols],
+        use_container_width=True,
+        column_config={
+            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
+        }
+    )
 
 # =========================  VUES  ==========================================
 
@@ -298,7 +320,7 @@ def vue_reservations(df: pd.DataFrame):
     for c in ["prix_brut","prix_net","charges","nuitees"]:
         core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
-    # Colonnes €/nuit
+    # €/nuit
     to_display["prix_brut/nuit"] = (
         (pd.to_numeric(to_display["prix_brut"], errors="coerce") /
          pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
@@ -309,6 +331,9 @@ def vue_reservations(df: pd.DataFrame):
          pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
+
+    # Lien téléphone
+    to_display["📞 Appeler"] = to_display["telephone"].apply(tel_to_uri)
 
     tot_ctrl = {
         "prix_brut": float(core["prix_brut"].sum()),
@@ -328,13 +353,19 @@ def vue_reservations(df: pd.DataFrame):
             show[col] = show[col].apply(format_date_str)
 
     cols = [
-        "nom_client","plateforme","telephone",
+        "nom_client","plateforme","telephone","📞 Appeler",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM"
     ]
     cols = [c for c in cols if c in show.columns]
 
-    st.dataframe(show[cols], use_container_width=True)
+    st.dataframe(
+        show[cols],
+        use_container_width=True,
+        column_config={
+            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
+        }
+    )
 
     st.markdown("#### Totaux (calcul direct sur les lignes filtrées, hors 'Total')")
     cA, cB, cC, cD, cE, cF, cG = st.columns(7)
@@ -594,7 +625,7 @@ def vue_rapport(df: pd.DataFrame):
                 full_rows.append(row.iloc[0].to_dict())
     stats_full = pd.DataFrame(full_rows).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # €/nuit (par groupe) — somme(prix) / somme(nuitées)
+    # €/nuit (par groupe)
     stats_full["brut/nuit"] = (
         (pd.to_numeric(stats_full["prix_brut"], errors="coerce") /
          pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
@@ -698,8 +729,13 @@ def vue_clients(df: pd.DataFrame):
         if "nuitees" in data.columns and "prix_net" in data.columns:
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
 
-    cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
-            "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","telephone"]
+    # Lien téléphone
+    data["📞 Appeler"] = data["telephone"].apply(tel_to_uri)
+
+    cols = ["nom_client","plateforme",
+            "date_arrivee","date_depart","nuitees",
+            "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit",
+            "telephone","📞 Appeler"]
     cols = [c for c in cols if c in data.columns]
 
     show = data.copy()
@@ -707,7 +743,14 @@ def vue_clients(df: pd.DataFrame):
         if c in show.columns:
             show[c] = show[c].apply(format_date_str)
 
-    st.dataframe(show[cols], use_container_width=True)
+    st.dataframe(
+        show[cols],
+        use_container_width=True,
+        column_config={
+            "📞 Appeler": st.column_config.LinkColumn("📞 Appeler", help="Cliquer pour appeler")
+        }
+    )
+
     st.download_button(
         "📥 Télécharger la liste (CSV)",
         data=show[cols].to_csv(index=False).encode("utf-8"),
@@ -765,20 +808,28 @@ def vue_sms(df: pd.DataFrame):
         if arrivees_demain.empty:
             st.info("Aucune arrivée demain.")
             return
-        cible = st.selectbox("Réservation", arrivees_demain.index, format_func=lambda i: f"{arrivees_demain.at[i,'nom_client']} | {format_date_str(arrivees_demain.at[i,'date_arrivee'])}")
+        cible = st.selectbox(
+            "Réservation",
+            arrivees_demain.index,
+            format_func=lambda i: f"{arrivees_demain.at[i,'nom_client']} | {format_date_str(arrivees_demain.at[i,'date_arrivee'])}"
+        )
         row = arrivees_demain.loc[cible]
     else:
-        cible = st.selectbox("Réservation", df.index, format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])}")
+        cible = st.selectbox(
+            "Réservation",
+            df.index,
+            format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])}"
+        )
         row = df.loc[cible]
 
     message = sms_message(row)
     st.text_area("Message SMS", value=message, height=220)
-    tel = str(row.get("telephone") or "").strip()
+    tel = clean_tel_display(row.get("telephone"))
 
     col1, col2 = st.columns(2)
     with col1:
         if tel:
-            url = f"sms:{tel}?&body={quote(message)}"
+            url = f"sms:{re.sub(r'[ \\-\\.]','',tel)}?&body={quote(message)}"
             st.markdown(f"[📲 Ouvrir SMS sur votre mobile]({url})", unsafe_allow_html=True)
         else:
             st.warning("Pas de numéro de téléphone enregistré.")
