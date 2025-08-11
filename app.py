@@ -9,6 +9,54 @@ import matplotlib.pyplot as plt
 
 FICHIER = "reservations.xlsx"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔧 BANDEAU PANIC : bouton "Vider le cache" + kill-switch URL
+# À placer juste après les imports, avant toute fonction.
+
+import time as _time
+
+try:
+    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+except Exception:
+    # set_page_config ne doit être appelé qu'une fois ; si déjà fait, on ignore.
+    pass
+
+# Version visible pour vérifier que le déploiement est bien à jour
+st.markdown(
+    f"""
+    <div style="padding:8px;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:10px;background:#fafafa">
+      <b>Version chargée :</b> {pd.Timestamp.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Kill-switch par URL : ajoute ?clear=1
+_params = st.experimental_get_query_params()
+if _params.get("clear", ["0"])[0] == "1":
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    # enlève le paramètre pour éviter les boucles
+    st.experimental_set_query_params()
+    st.success("✅ Cache vidé via l’URL (?clear=1). Redémarrage…")
+    st.rerun()
+
+# Bouton énorme en haut de page (pas dans la sidebar)
+cols = st.columns([1,1,6])
+with cols[0]:
+    if st.button("♻️ Vider le cache", key="panic_clear"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        # petit cache-buster de secours
+        st.experimental_set_query_params(_=_time.time())
+        st.success("✅ Cache vidé. Redémarrage…")
+        st.rerun()
+
+with cols[1]:
+    if st.button("🔄 Recharger la page", key="panic_reload"):
+        st.experimental_set_query_params(_=_time.time())
+
+# ───────────────────────────────────────
 # ==============================  OUTILS / UTILS  ============================
 
 def to_date_only(x):
