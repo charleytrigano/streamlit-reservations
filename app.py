@@ -16,6 +16,19 @@ SMS_LOG = "historique_sms.csv"
 
 # ==============================  UTILS  =====================================
 
+_money_re = re.compile(r"[^0-9,.\-]")
+
+def to_money(x):
+    """Nettoie '1 234,50 €' -> 1234.50 (float)."""
+    if pd.isna(x) or x is None:
+        return np.nan
+    s = str(x).strip()
+    s = _money_re.sub("", s).replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return np.nan
+
 def to_date_only(x):
     if pd.isna(x) or x is None:
         return None
@@ -37,18 +50,19 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(to_date_only)
 
-    # Numériques
+    # Numériques propres (gère € et virgules)
     for col in ["prix_brut", "prix_net", "charges", "%"]:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            if df[col].dtype == object or (df[col].dtype.kind not in "fi"):
+                df[col] = df[col].apply(to_money)
+            else:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Calculs charges / %
+    # Recalcul charges / %
     if "prix_brut" in df.columns and "prix_net" in df.columns:
-        if "charges" not in df.columns:
-            df["charges"] = df["prix_brut"] - df["prix_net"]
-        if "%" not in df.columns:
-            with pd.option_context("mode.use_inf_as_na", True):
-                df["%"] = (df["charges"] / df["prix_brut"] * 100).fillna(0)
+        df["charges"] = (df["prix_brut"].fillna(0) - df["prix_net"].fillna(0))
+        with pd.option_context("mode.use_inf_as_na", True):
+            df["%"] = (df["charges"] / df["prix_brut"].replace(0, np.nan) * 100).fillna(0)
 
     for col in ["prix_brut", "prix_net", "charges", "%"]:
         if col in df.columns:
@@ -57,9 +71,10 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     # Nuitées
     if "date_arrivee" in df.columns and "date_depart" in df.columns:
         df["nuitees"] = [
-            (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else None
+            (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else np.nan
             for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
         ]
+        df["nuitees"] = pd.to_numeric(df["nuitees"], errors="coerce").fillna(0).astype(int)
 
     # AAAA / MM
     if "date_arrivee" in df.columns:
@@ -124,7 +139,7 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float, cache_buster: int):
-    _ = cache_buster  # inclus dans la clé de cache
+    _ = cache_buster  # inclut dans la clé de cache
     return pd.read_excel(path)
 
 def charger_donnees(cache_buster: int = 0) -> pd.DataFrame:
@@ -361,11 +376,13 @@ def vue_calendrier(df: pd.DataFrame):
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
+# ---------- Rapport : pipeline propre ----------
+
 def _df_agreg_rapport(df: pd.DataFrame) -> pd.DataFrame:
     """ Nettoyage strict pour des chiffres fiables (exclut 'Total', na, etc.). """
     if df is None or df.empty:
         return pd.DataFrame()
-    core = df.copy()
+    core = ensure_schema(df).copy()
 
     # Exclure 'Total' / lignes sans dates
     is_total = _marque_totaux(core)
@@ -376,8 +393,7 @@ def _df_agreg_rapport(df: pd.DataFrame) -> pd.DataFrame:
 
     # Numériques sûrs
     for c in ["prix_brut","prix_net","charges","nuitees"]:
-        if c in core.columns:
-            core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
+        core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
     # AAAA/MM sûrs
     core["AAAA"] = pd.to_numeric(core["AAAA"], errors="coerce")
@@ -386,11 +402,14 @@ def _df_agreg_rapport(df: pd.DataFrame) -> pd.DataFrame:
     core["AAAA"] = core["AAAA"].astype(int)
     core["MM"]   = core["MM"].astype(int)
 
+    # Plateforme propre
+    core["plateforme"] = core["plateforme"].fillna("Autre").astype(str)
+
     return core
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois) — chiffres fiables")
-    core = _df_agreg_rapport(ensure_schema(df))
+    core = _df_agreg_rapport(df)
     if core.empty:
         st.info("Aucune donnée exploitable.")
         return
@@ -426,7 +445,7 @@ def vue_rapport(df: pd.DataFrame):
             .reset_index()
     )
 
-    # Compléter mois manquants (sans gonfler les totaux affichés par ligne)
+    # Compléter mois manquants sans fausser les totaux
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -438,11 +457,18 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
+    # Tableau + total annuel
+    stats_display = stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]]
+    total_row = pd.DataFrame({
+        "Mois": ["Total"],
+        "plateforme": [filtre_plateforme if filtre_plateforme != "Toutes" else "Toutes plateformes"],
+        "prix_brut": [stats["prix_brut"].sum()],
+        "prix_net": [stats["prix_net"].sum()],
+        "charges": [stats["charges"].sum()],
+        "nuitees": [stats["nuitees"].sum()],
+    })
     st.subheader(f"Détail {annee}")
-    st.dataframe(
-        stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
-        use_container_width=True
-    )
+    st.dataframe(pd.concat([stats_display, total_row], ignore_index=True), use_container_width=True)
 
     # Graphes matplotlib : X = 1..12 (ordre chronologique)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
@@ -521,7 +547,6 @@ def vue_clients(df: pd.DataFrame):
 # ==============================  SMS  =======================================
 
 def sms_message(row: pd.Series) -> str:
-    # Génère le message demandé, avec toutes les infos
     arrivee = format_date_str(row.get("date_arrivee"))
     depart = format_date_str(row.get("date_depart"))
     nuitees = int(row.get("nuitees") or 0)
@@ -544,24 +569,19 @@ def sms_message(row: pd.Series) -> str:
 def log_sms(nom, telephone, message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     ligne = {"nom": nom, "telephone": telephone, "message": message, "horodatage": now}
-    df_hist = pd.DataFrame([ligne])
-    if os.path.exists(SMS_LOG):
-        try:
-            df_hist = pd.concat([pd.read_excel(SMS_LOG) if SMS_LOG.endswith(".xlsx") else pd.read_csv(SMS_LOG), df_hist], ignore_index=True)
-        except Exception:
-            pass
-    # On stocke en CSV (léger)
     try:
         if os.path.exists(SMS_LOG):
             old = pd.read_csv(SMS_LOG)
-            df_out = pd.concat([old, df_hist], ignore_index=True)
-            df_out.to_csv(SMS_LOG, index=False)
+            df_out = pd.concat([old, pd.DataFrame([ligne])], ignore_index=True)
         else:
-            df_hist.to_csv(SMS_LOG, index=False)
+            df_out = pd.DataFrame([ligne])
+        df_out.to_csv(SMS_LOG, index=False)
     except Exception:
-        # fallback xlsx si csv non autorisé
-        with pd.ExcelWriter("historique_sms.xlsx", engine="openpyxl") as w:
-            df_hist.to_excel(w, index=False)
+        try:
+            with pd.ExcelWriter("historique_sms.xlsx", engine="openpyxl") as w:
+                pd.DataFrame([ligne]).to_excel(w, index=False)
+        except Exception:
+            pass
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (préparation)")
@@ -570,7 +590,6 @@ def vue_sms(df: pd.DataFrame):
         st.info("Aucune réservation pour SMS.")
         return
 
-    # Choix : arrivées de demain ou sélection libre
     demain = date.today() + timedelta(days=1)
     arrivees_demain = df[df["date_arrivee"] == demain]
     mode = st.radio("Sélection", ["Arrivées demain", "Choisir une réservation"])
@@ -586,7 +605,7 @@ def vue_sms(df: pd.DataFrame):
         row = df.loc[cible]
 
     message = sms_message(row)
-    st.text_area("Message SMS", value=message, height=200)
+    st.text_area("Message SMS", value=message, height=220)
     tel = str(row.get("telephone") or "").strip()
 
     col1, col2 = st.columns(2)
@@ -607,27 +626,19 @@ def vue_sms(df: pd.DataFrame):
         try:
             st.dataframe(pd.read_csv(SMS_LOG))
         except Exception:
-            try:
-                st.dataframe(pd.read_excel("historique_sms.xlsx"))
-            except Exception:
-                st.info("Historique non lisible.")
+            st.info("Historique non lisible.")
 
-# ==============================  iCal import  ===============================
+# ==============================  iCal import (simple)  ======================
 
 def parse_ics(text: str):
-    """
-    Parse très simple : récupère DTSTART/DTEND (date ou datetime), SUMMARY
-    Retourne une liste de dicts {start, end, summary}
-    """
+    """Parse minimal : DTSTART/DTEND (date|datetime), SUMMARY -> {start, end, summary}."""
     events = []
-    # Découpe par BEGIN:VEVENT ... END:VEVENT
     blocks = re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", text, flags=re.S)
     for b in blocks:
         dtstart = re.search(r"DTSTART(?:;[^:\n]*)?:(.+)", b)
         dtend   = re.search(r"DTEND(?:;[^:\n]*)?:(.+)", b)
         summary = re.search(r"SUMMARY:(.+)", b)
         def _to_date(s):
-            # formats possibles: YYYYMMDD ou YYYYMMDDTHHMMSSZ
             s = s.strip()
             try:
                 if "T" in s:
@@ -695,7 +706,7 @@ def vue_sync_ical(df: pd.DataFrame):
                                 "nuitees": (end - start).days,
                                 "AAAA": start.year,
                                 "MM": start.month,
-                                "ical_uid": ""  # on n’extrait pas l’UID dans ce parseur simple
+                                "ical_uid": ""
                             })
                         df2 = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
                         df2 = _trier_et_recoller_totaux(df2)
@@ -724,7 +735,7 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Kill-switch URL : ?clear=1  (API moderne)
+    # Kill-switch URL : ?clear=1 (API moderne)
     params = st.query_params
     clear_val = params.get("clear", ["0"])[0] if isinstance(params.get("clear"), list) else params.get("clear")
     if clear_val == "1":
