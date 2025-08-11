@@ -263,6 +263,18 @@ def vue_reservations(df: pd.DataFrame):
     for c in ["prix_brut","prix_net","charges","nuitees"]:
         core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
+    # Colonnes €/nuit (sécurisé)
+    to_display["prix_brut/nuit"] = (
+        (pd.to_numeric(to_display["prix_brut"], errors="coerce") /
+         pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
+        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+    )
+    to_display["prix_net/nuit"] = (
+        (pd.to_numeric(to_display["prix_net"], errors="coerce") /
+         pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
+        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+    )
+
     tot_ctrl = {
         "prix_brut": float(core["prix_brut"].sum()),
         "prix_net":  float(core["prix_net"].sum()),
@@ -270,6 +282,8 @@ def vue_reservations(df: pd.DataFrame):
         "nuitees":   int(core["nuitees"].sum()),
         "reservations": int(len(core))
     }
+    tot_ctrl["brut/nuit"] = round((tot_ctrl["prix_brut"] / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
+    tot_ctrl["net/nuit"]  = round((tot_ctrl["prix_net"]  / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
 
     # Affichage : tri + format dates
     core_sorted = to_display.sort_values(["date_arrivee","nom_client"], na_position="last")
@@ -281,19 +295,21 @@ def vue_reservations(df: pd.DataFrame):
     cols = [
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
-        "prix_brut","prix_net","charges","%","AAAA","MM"
+        "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM"
     ]
     cols = [c for c in cols if c in show.columns]
 
     st.dataframe(show[cols], use_container_width=True)
 
     st.markdown("#### Totaux (calcul direct sur les lignes filtrées, hors 'Total')")
-    cA, cB, cC, cD, cE = st.columns(5)
+    cA, cB, cC, cD, cE, cF, cG = st.columns(7)
     cA.metric("Prix brut (€)", f"{tot_ctrl['prix_brut']:.2f}")
     cB.metric("Prix net (€)",  f"{tot_ctrl['prix_net']:.2f}")
     cC.metric("Charges (€)",   f"{tot_ctrl['charges']:.2f}")
     cD.metric("Nuitées",       f"{tot_ctrl['nuitees']}")
     cE.metric("Réservations",  f"{tot_ctrl['reservations']}")
+    cF.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
+    cG.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
 
     # Export
     csv = show[cols].to_csv(index=False).encode("utf-8")
@@ -521,7 +537,7 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Agrégation
+    # Agrégation par (MM, plateforme)
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -531,7 +547,7 @@ def vue_rapport(df: pd.DataFrame):
             .reset_index()
     )
 
-    # Compléter pour les GRAPHIQUES (12 mois) mais garder un tableau "nettoyé"
+    # Compléter pour GRAPHIQUES (12 mois) + calcul €/nuit par groupe
     plats = sorted(stats["plateforme"].unique().tolist())
     full_rows = []
     for m in range(1, 13):
@@ -543,7 +559,19 @@ def vue_rapport(df: pd.DataFrame):
                 full_rows.append(row.iloc[0].to_dict())
     stats_full = pd.DataFrame(full_rows).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # Tableau sans lignes à zéro
+    # €/nuit (par groupe) — somme(prix) / somme(nuitées)
+    stats_full["brut/nuit"] = (
+        (pd.to_numeric(stats_full["prix_brut"], errors="coerce") /
+         pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
+        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+    )
+    stats_full["net/nuit"] = (
+        (pd.to_numeric(stats_full["prix_net"], errors="coerce") /
+         pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
+        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+    )
+
+    # Tableau sans lignes totalement à zéro
     stats_table = stats_full[
         ~(
             (stats_full["prix_brut"].round(2) == 0) &
@@ -555,23 +583,29 @@ def vue_rapport(df: pd.DataFrame):
 
     # Tableau
     st.subheader(f"Détail {annee}")
-    affiche = stats_table.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]]
+    affiche = stats_table.rename(columns={"MM": "Mois"})[
+        ["Mois","plateforme","prix_brut","prix_net","charges","nuitees","brut/nuit","net/nuit"]
+    ]
     st.dataframe(affiche, use_container_width=True)
 
-    # Totaux (calcul direct)
+    # Totaux (calcul direct sur data filtrées) + €/nuit global
     tot_ctrl = {
         "prix_brut": float(data["prix_brut"].sum()),
         "prix_net":  float(data["prix_net"].sum()),
         "charges":   float(data["charges"].sum()),
         "nuitees":   float(data["nuitees"].sum()),
     }
+    tot_ctrl["brut/nuit"] = round((tot_ctrl["prix_brut"] / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
+    tot_ctrl["net/nuit"]  = round((tot_ctrl["prix_net"]  / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
 
     st.markdown("#### Totaux (calcul direct)")
-    colA, colB, colC, colD = st.columns(4)
+    colA, colB, colC, colD, colE, colF = st.columns(6)
     colA.metric("Prix brut (€)", f"{tot_ctrl['prix_brut']:.2f}")
     colB.metric("Prix net (€)",  f"{tot_ctrl['prix_net']:.2f}")
     colC.metric("Charges (€)",   f"{tot_ctrl['charges']:.2f}")
     colD.metric("Nuitées",       f"{int(tot_ctrl['nuitees'])}")
+    colE.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
+    colF.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
 
     # Graphes matplotlib : X = 1..12
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
