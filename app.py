@@ -2,15 +2,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
+from urllib.parse import quote
+import requests
+import re
 import os
 import matplotlib.pyplot as plt
 import time
 
 FICHIER = "reservations.xlsx"
+SMS_LOG = "historique_sms.csv"
 
-# ==============================  OUTILS / UTILS  ============================
+# ==============================  UTILS  =====================================
 
 def to_date_only(x):
     if pd.isna(x) or x is None:
@@ -69,7 +73,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : retirer éventuelle apostrophe (on la remettra à la sauvegarde)
+    # Nettoyage téléphone (on remettra l’apostrophe à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -120,8 +124,7 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float, cache_buster: int):
-    # on "utilise" cache_buster pour intégrer sa valeur à la clé du cache
-    _ = cache_buster
+    _ = cache_buster  # inclus dans la clé de cache
     return pd.read_excel(path)
 
 def charger_donnees(cache_buster: int = 0) -> pd.DataFrame:
@@ -150,7 +153,6 @@ def sauvegarder_donnees(df: pd.DataFrame):
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df_to_save.to_excel(writer, index=False)
-        # Invalider le cache immédiatement
         st.cache_data.clear()
         if "cache_buster" in st.session_state:
             st.session_state.cache_buster += 1
@@ -359,31 +361,45 @@ def vue_calendrier(df: pd.DataFrame):
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
+def _df_agreg_rapport(df: pd.DataFrame) -> pd.DataFrame:
+    """ Nettoyage strict pour des chiffres fiables (exclut 'Total', na, etc.). """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    core = df.copy()
+
+    # Exclure 'Total' / lignes sans dates
+    is_total = _marque_totaux(core)
+    core = core[~is_total].copy()
+
+    # Garder lignes avec arrivee valide
+    core = core[core["date_arrivee"].apply(lambda d: isinstance(d, date))].copy()
+
+    # Numériques sûrs
+    for c in ["prix_brut","prix_net","charges","nuitees"]:
+        if c in core.columns:
+            core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
+
+    # AAAA/MM sûrs
+    core["AAAA"] = pd.to_numeric(core["AAAA"], errors="coerce")
+    core["MM"]   = pd.to_numeric(core["MM"], errors="coerce")
+    core = core.dropna(subset=["AAAA","MM"])
+    core["AAAA"] = core["AAAA"].astype(int)
+    core["MM"]   = core["MM"].astype(int)
+
+    return core
+
 def vue_rapport(df: pd.DataFrame):
-    st.title("📊 Rapport (une année à la fois)")
-    df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
-    if df.empty:
-        st.info("Aucune donnée.")
+    st.title("📊 Rapport (une année à la fois) — chiffres fiables")
+    core = _df_agreg_rapport(ensure_schema(df))
+    if core.empty:
+        st.info("Aucune donnée exploitable.")
         return
 
-    if "AAAA" not in df.columns or "MM" not in df.columns:
-        df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
-        df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
-
-    df["AAAA"] = pd.to_numeric(df["AAAA"], errors="coerce")
-    df["MM"]   = pd.to_numeric(df["MM"], errors="coerce")
-    df = df.dropna(subset=["AAAA","MM"]).copy()
-    df["AAAA"] = df["AAAA"].astype(int)
-    df["MM"]   = df["MM"].astype(int)
-
-    annees = sorted(df["AAAA"].unique().tolist())
-    if not annees:
-        st.info("Aucune année disponible.")
-        return
+    # Filtres
+    annees = sorted(core["AAAA"].unique().tolist())
     annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
-    data = df[df["AAAA"] == int(annee)].copy()
-
+    data = core[core["AAAA"] == int(annee)].copy()
     plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
@@ -400,7 +416,7 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
+    # Agrégation propre
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -409,10 +425,8 @@ def vue_rapport(df: pd.DataFrame):
                  nuitees=("nuitees","sum"))
             .reset_index()
     )
-    if stats.empty:
-        st.info("Aucune donnée après agrégation.")
-        return
 
+    # Compléter mois manquants (sans gonfler les totaux affichés par ligne)
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -424,6 +438,7 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
+    st.subheader(f"Détail {annee}")
     st.dataframe(
         stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
@@ -482,9 +497,9 @@ def vue_clients(df: pd.DataFrame):
 
     with pd.option_context('mode.use_inf_as_na', True):
         if "nuitees" in data.columns and "prix_brut" in data.columns:
-            data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).round(2).fillna(0)
+            data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
         if "nuitees" in data.columns and "prix_net" in data.columns:
-            data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).round(2).fillna(0)
+            data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
 
     cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
             "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","telephone"]
@@ -503,12 +518,199 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
+# ==============================  SMS  =======================================
+
+def sms_message(row: pd.Series) -> str:
+    # Génère le message demandé, avec toutes les infos
+    arrivee = format_date_str(row.get("date_arrivee"))
+    depart = format_date_str(row.get("date_depart"))
+    nuitees = int(row.get("nuitees") or 0)
+    plateforme = str(row.get("plateforme") or "")
+    nom = str(row.get("nom_client") or "")
+    tel = str(row.get("telephone") or "")
+    msg = (
+        "VILLA TOBIAS\n"
+        f"Plateforme : {plateforme}\n"
+        f"Date d'arrivee : {arrivee}  Date depart : {depart}  Nombre de nuitées : {nuitees}\n\n"
+        f"Bonjour {nom}\n"
+        f"Telephone : {tel}\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
+        "Annick & Charley"
+    )
+    return msg
+
+def log_sms(nom, telephone, message):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ligne = {"nom": nom, "telephone": telephone, "message": message, "horodatage": now}
+    df_hist = pd.DataFrame([ligne])
+    if os.path.exists(SMS_LOG):
+        try:
+            df_hist = pd.concat([pd.read_excel(SMS_LOG) if SMS_LOG.endswith(".xlsx") else pd.read_csv(SMS_LOG), df_hist], ignore_index=True)
+        except Exception:
+            pass
+    # On stocke en CSV (léger)
+    try:
+        if os.path.exists(SMS_LOG):
+            old = pd.read_csv(SMS_LOG)
+            df_out = pd.concat([old, df_hist], ignore_index=True)
+            df_out.to_csv(SMS_LOG, index=False)
+        else:
+            df_hist.to_csv(SMS_LOG, index=False)
+    except Exception:
+        # fallback xlsx si csv non autorisé
+        with pd.ExcelWriter("historique_sms.xlsx", engine="openpyxl") as w:
+            df_hist.to_excel(w, index=False)
+
+def vue_sms(df: pd.DataFrame):
+    st.title("✉️ SMS (préparation)")
+    df = _trier_et_recoller_totaux(ensure_schema(df))
+    if df.empty:
+        st.info("Aucune réservation pour SMS.")
+        return
+
+    # Choix : arrivées de demain ou sélection libre
+    demain = date.today() + timedelta(days=1)
+    arrivees_demain = df[df["date_arrivee"] == demain]
+    mode = st.radio("Sélection", ["Arrivées demain", "Choisir une réservation"])
+
+    if mode == "Arrivées demain":
+        if arrivees_demain.empty:
+            st.info("Aucune arrivée demain.")
+            return
+        cible = st.selectbox("Réservation", arrivees_demain.index, format_func=lambda i: f"{arrivees_demain.at[i,'nom_client']} | {format_date_str(arrivees_demain.at[i,'date_arrivee'])}")
+        row = arrivees_demain.loc[cible]
+    else:
+        cible = st.selectbox("Réservation", df.index, format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])}")
+        row = df.loc[cible]
+
+    message = sms_message(row)
+    st.text_area("Message SMS", value=message, height=200)
+    tel = str(row.get("telephone") or "").strip()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if tel:
+            url = f"sms:{tel}?&body={quote(message)}"
+            st.markdown(f"[📲 Ouvrir SMS sur votre mobile]({url})", unsafe_allow_html=True)
+        else:
+            st.warning("Pas de numéro de téléphone enregistré.")
+    with col2:
+        if st.button("✅ Marquer comme envoyé (journal)"):
+            log_sms(str(row.get("nom_client") or ""), tel, message)
+            st.success("Journal SMS mis à jour.")
+
+    st.divider()
+    st.subheader("Historique SMS (CSV)")
+    if os.path.exists(SMS_LOG):
+        try:
+            st.dataframe(pd.read_csv(SMS_LOG))
+        except Exception:
+            try:
+                st.dataframe(pd.read_excel("historique_sms.xlsx"))
+            except Exception:
+                st.info("Historique non lisible.")
+
+# ==============================  iCal import  ===============================
+
+def parse_ics(text: str):
+    """
+    Parse très simple : récupère DTSTART/DTEND (date ou datetime), SUMMARY
+    Retourne une liste de dicts {start, end, summary}
+    """
+    events = []
+    # Découpe par BEGIN:VEVENT ... END:VEVENT
+    blocks = re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", text, flags=re.S)
+    for b in blocks:
+        dtstart = re.search(r"DTSTART(?:;[^:\n]*)?:(.+)", b)
+        dtend   = re.search(r"DTEND(?:;[^:\n]*)?:(.+)", b)
+        summary = re.search(r"SUMMARY:(.+)", b)
+        def _to_date(s):
+            # formats possibles: YYYYMMDD ou YYYYMMDDTHHMMSSZ
+            s = s.strip()
+            try:
+                if "T" in s:
+                    return pd.to_datetime(s).date()
+                else:
+                    return datetime.strptime(s, "%Y%m%d").date()
+            except Exception:
+                try:
+                    return pd.to_datetime(s).date()
+                except Exception:
+                    return None
+        start = _to_date(dtstart.group(1)) if dtstart else None
+        end   = _to_date(dtend.group(1)) if dtend else None
+        summ  = summary.group(1).strip() if summary else ""
+        if isinstance(start, date) and isinstance(end, date) and start < end:
+            events.append({"start": start, "end": end, "summary": summ})
+    return events
+
+def vue_sync_ical(df: pd.DataFrame):
+    st.title("🔄 Synchroniser iCal")
+    st.caption("Collez une URL .ics (Booking, Airbnb, …) puis importez. Les événements deviennent des réservations sans prix.")
+
+    plateforme = st.text_input("Nom de la plateforme (ex. Booking, Airbnb, Autre)", value="Autre")
+    url = st.text_input("URL iCal (.ics)")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("📥 Prévisualiser"):
+            if not url:
+                st.warning("Veuillez saisir une URL.")
+            else:
+                try:
+                    r = requests.get(url, timeout=15)
+                    r.raise_for_status()
+                    evts = parse_ics(r.text)
+                    st.success(f"{len(evts)} événements trouvés.")
+                    st.dataframe(pd.DataFrame(evts))
+                except Exception as e:
+                    st.error(f"Erreur de téléchargement/lecture : {e}")
+    with col_b:
+        if st.button("✅ Importer dans Excel"):
+            if not url:
+                st.warning("Veuillez saisir une URL.")
+            else:
+                try:
+                    r = requests.get(url, timeout=15)
+                    r.raise_for_status()
+                    evts = parse_ics(r.text)
+                    if not evts:
+                        st.warning("Aucun événement exploitable.")
+                    else:
+                        rows = []
+                        for e in evts:
+                            nom = e["summary"] if e["summary"] else ""
+                            start = e["start"]; end = e["end"]
+                            rows.append({
+                                "nom_client": nom,
+                                "plateforme": plateforme,
+                                "telephone": "",
+                                "date_arrivee": start,
+                                "date_depart": end,
+                                "prix_brut": 0.0,
+                                "prix_net": 0.0,
+                                "charges": 0.0,
+                                "%": 0.0,
+                                "nuitees": (end - start).days,
+                                "AAAA": start.year,
+                                "MM": start.month,
+                                "ical_uid": ""  # on n’extrait pas l’UID dans ce parseur simple
+                            })
+                        df2 = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+                        df2 = _trier_et_recoller_totaux(df2)
+                        sauvegarder_donnees(df2)
+                        st.success(f"{len(rows)} réservations importées.")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Erreur d’import : {e}")
+
 # ==============================  APP  ======================================
 
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # --- Cache buster en session + bouton Sidebar ---
+    # --- Cache-buster + bouton Sidebar ---
     if "cache_buster" not in st.session_state:
         st.session_state.cache_buster = 0
 
@@ -522,16 +724,15 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Option via l’URL : .../?clear=1  (remplace experimental_get/experimental_set par query_params)
-    params = st.query_params  # dict-like
-    if params.get("clear", ["0"])[0] == "1" if isinstance(params.get("clear"), list) else params.get("clear") == "1":
+    # Kill-switch URL : ?clear=1  (API moderne)
+    params = st.query_params
+    clear_val = params.get("clear", ["0"])[0] if isinstance(params.get("clear"), list) else params.get("clear")
+    if clear_val == "1":
         st.cache_data.clear()
         st.cache_resource.clear()
         st.session_state.cache_buster += 1
-        # retirer le paramètre pour éviter de revider en boucle
         if "clear" in st.query_params:
             del st.query_params["clear"]
-        # petit _ cache-buster
         st.query_params["_"] = str(time.time())
         st.success("Cache vidé via l’URL ✅")
         st.rerun()
@@ -545,7 +746,7 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","✉️ SMS","🔄 Synchroniser iCal"]
     )
 
     if onglet == "📋 Réservations":
@@ -560,6 +761,10 @@ def main():
         vue_rapport(df)
     elif onglet == "👥 Liste clients":
         vue_clients(df)
+    elif onglet == "✉️ SMS":
+        vue_sms(df)
+    elif onglet == "🔄 Synchroniser iCal":
+        vue_sync_ical(df)
 
 if __name__ == "__main__":
     main()
