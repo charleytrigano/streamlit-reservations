@@ -4,25 +4,10 @@ import numpy as np
 import calendar
 from datetime import date, timedelta
 from io import BytesIO
-from urllib.parse import quote
-import requests
-import base64
-import json
 import os
-import re
 import matplotlib.pyplot as plt
 
 FICHIER = "reservations.xlsx"
-
-# ==============================  BOUTON CACHE  ==============================
-
-def render_cache_button_sidebar():
-    st.sidebar.markdown("## 🧰 Maintenance")
-    if st.sidebar.button("♻️ Vider le cache et relancer"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.sidebar.success("Cache vidé. Redémarrage…")
-        st.rerun()
 
 # ==============================  OUTILS / UTILS  ============================
 
@@ -42,7 +27,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     df = df.copy()
 
-    # Dates en date pure
+    # Dates -> date pure
     for col in ["date_arrivee", "date_depart"]:
         if col in df.columns:
             df[col] = df[col].apply(to_date_only)
@@ -83,7 +68,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone sans apostrophe (on la remettra à la sauvegarde)
+    # Téléphone : retirer éventuelle apostrophe (on la remettra à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -130,18 +115,20 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
     return pd.concat([df_core, df_total], ignore_index=True)
 
-# ==============================  EXCEL I/O  ================================
+# ==============================  EXCEL I/O + CACHE  ========================
 
 @st.cache_data(show_spinner=False)
-def _read_excel_cached(path: str, mtime: float):
+def _read_excel_cached(path: str, mtime: float, cache_buster: int):
+    # on "utilise" cache_buster pour intégrer sa valeur à la clé du cache
+    _ = cache_buster
     return pd.read_excel(path)
 
-def charger_donnees() -> pd.DataFrame:
+def charger_donnees(cache_buster: int = 0) -> pd.DataFrame:
     if not os.path.exists(FICHIER):
         return pd.DataFrame()
     try:
         mtime = os.path.getmtime(FICHIER)
-        df = _read_excel_cached(FICHIER, mtime)
+        df = _read_excel_cached(FICHIER, mtime, cache_buster)
         df = ensure_schema(df)
         df = _trier_et_recoller_totaux(df)
         return df
@@ -162,7 +149,10 @@ def sauvegarder_donnees(df: pd.DataFrame):
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df_to_save.to_excel(writer, index=False)
+        # Invalider le cache immédiatement
         st.cache_data.clear()
+        if "cache_buster" in st.session_state:
+            st.session_state.cache_buster += 1
         st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
@@ -438,7 +428,7 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
-    # Graphes matplotlib : X = 1..12
+    # Graphes matplotlib : X = 1..12 (ordre chronologique)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -517,30 +507,33 @@ def vue_clients(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # 🔧 Bouton cache ultra-visible (dans la page)
-    st.markdown("## 🧰 Maintenance")
-    if st.button("♻️ Vider le cache et relancer (PAGE)"):
+    # --- Cache buster en session + bouton Sidebar ---
+    if "cache_buster" not in st.session_state:
+        st.session_state.cache_buster = 0
+
+    st.sidebar.markdown("## 🧰 Maintenance")
+    c1, c2 = st.sidebar.columns([3, 1])
+    c1.caption(f"Cache buster : {st.session_state.cache_buster}")
+    if c2.button("♻️ Vider"):
         st.cache_data.clear()
         st.cache_resource.clear()
-        st.success("Cache vidé. Redémarrage…")
+        st.session_state.cache_buster += 1
+        st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # 🔗 Option via l’URL : ajoute ?clear=1 pour vider le cache
+    # Option via l’URL : .../?clear=1
     params = st.experimental_get_query_params()
     if params.get("clear", ["0"])[0] == "1":
         st.cache_data.clear()
         st.cache_resource.clear()
-        st.success("Cache vidé via l’URL (?clear=1).")
-        # Nettoie l’URL pour éviter de revider en boucle
-        st.experimental_set_query_params()
+        st.session_state.cache_buster += 1
+        st.experimental_set_query_params()  # retire clear=1 de l’URL
+        st.success("Cache vidé via l’URL ✅")
         st.rerun()
-
-    # Bouton de cache (sidebar)
-    render_cache_button_sidebar()
 
     st.sidebar.title("📁 Fichier")
     bouton_restaurer()
-    df = charger_donnees()
+    df = charger_donnees(st.session_state.cache_buster)
     bouton_telecharger(df)
 
     st.sidebar.title("🧭 Navigation")
