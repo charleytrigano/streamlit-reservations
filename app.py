@@ -10,11 +10,11 @@ import base64
 import json
 import os
 import re
-import matplotlib.pyplot as plt  # Graphiques matplotlib (axe numérique)
+import matplotlib.pyplot as plt
 
 FICHIER = "reservations.xlsx"
 
-# ==================== Utils généraux ====================
+# ==================== Utilitaires ====================
 
 def to_date_only(x):
     if pd.isna(x) or x is None:
@@ -28,12 +28,12 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie/complète : dates -> date(); montants 2 décimales; charges/% ; nuitées; AAAA/MM; colonnes minimales."""
+    """Normalise le schéma : dates (date), montants (2 déc.), charges/% calculés, nuitées, AAAA/MM, téléphone texte."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
 
-    # Dates -> date (strip heure)
+    # Dates -> date
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
@@ -76,7 +76,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : enlever éventuelle apostrophe d’Excel (on la remettra à la sauvegarde)
+    # Téléphone : supprimer éventuelle apostrophe d’Excel (on la remettra à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -96,14 +96,12 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte une ligne 'total' pour la repousser en bas (par ex. nom_client='total')."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
-            m = df[col].astype(str).str.strip().str.lower().eq("total")
-            mask = mask | m
+            mask |= df[col].astype(str).str.strip().str.lower().eq("total")
     has_no_dates = pd.Series(True, index=df.index)
     if "date_arrivee" in df.columns:
         has_no_dates &= df["date_arrivee"].isna()
@@ -125,8 +123,7 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     by_cols = [c for c in ["date_arrivee","nom_client"] if c in df_core.columns]
     if by_cols:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
-    out = pd.concat([df_core, df_total], ignore_index=True)
-    return out
+    return pd.concat([df_core, df_total], ignore_index=True)
 
 # ==================== Excel I/O ====================
 
@@ -143,7 +140,6 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    """Sauvegarde en Excel; force colonne téléphone en texte grâce à l'apostrophe (préserve le '+')."""
     df = _trier_et_recoller_totaux(ensure_schema(df))
     df_to_save = df.copy()
     if "telephone" in df_to_save.columns:
@@ -190,35 +186,26 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==================== GitHub Save (optionnel) ====================
+# ==================== Sauvegarde GitHub (optionnel) ====================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 
 def github_save_file(binary: bytes):
-    """Enregistre reservations.xlsx dans un repo GitHub via l'API. Nécessite st.secrets:
-       GITHUB_TOKEN, GITHUB_REPO (owner/repo), GITHUB_BRANCH, GITHUB_PATH
-    """
     try:
         token = st.secrets["GITHUB_TOKEN"]
         repo = st.secrets["GITHUB_REPO"]
         branch = st.secrets.get("GITHUB_BRANCH", "main")
         path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     except Exception:
-        # Secrets non configurés : ne pas bloquer l'app
         return False
 
     api_base = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = _github_headers(token)
 
-    # 1) Récupérer le SHA si le fichier existe
-    params = {"ref": branch}
-    r_get = requests.get(api_base, headers=headers, params=params)
-    sha = None
-    if r_get.status_code == 200:
-        sha = r_get.json().get("sha")
+    r_get = requests.get(api_base, headers=headers, params={"ref": branch})
+    sha = r_get.json().get("sha") if r_get.status_code == 200 else None
 
-    # 2) PUT
     content_b64 = base64.b64encode(binary).decode("utf-8")
     payload = {"message": f"Update {path} via Streamlit", "content": content_b64, "branch": branch}
     if sha:
@@ -247,7 +234,7 @@ def sidebar_github_controls(df: pd.DataFrame):
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues principales ====================
+# ==================== Vues ====================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -421,13 +408,13 @@ def vue_calendrier(df: pd.DataFrame):
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois)")
 
-    # 1) Nettoyage + schéma
+    # Nettoyage
     df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    # 2) (Re)générer AAAA/MM depuis date_arrivee, puis forcer en int
+    # AAAA/MM sûrs
     if "AAAA" not in df.columns or "MM" not in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
@@ -438,24 +425,22 @@ def vue_rapport(df: pd.DataFrame):
     df["AAAA"] = df["AAAA"].astype(int)
     df["MM"]   = df["MM"].astype(int)
 
-    # 3) Choix d'une seule année (par défaut la plus récente)
+    # Sélection année (par défaut la plus récente)
     annees = sorted(df["AAAA"].unique().tolist())
     if not annees:
         st.info("Aucune année disponible.")
         return
     annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
-    # 4) FILTRE STRICT PAR ANNÉE AVANT TOUT
+    # Filtre strict par année
     data = df[df["AAAA"] == int(annee)].copy()
-
-    # Sécurité : si plus d’une année remonte (ça ne doit JAMAIS arriver)
     years_left = sorted(data["AAAA"].unique().tolist())
     st.caption(f"🔎 Année sélectionnée: {annee} | Années trouvées après filtre: {years_left}")
     if len(years_left) != 1 or years_left[0] != int(annee):
-        st.error("Le filtrage par année n'est pas strict. Fais Settings → Clear cache puis Rerun. Si ça persiste, copie ici la ligne ci-dessus.")
+        st.error("Le filtrage par année n'est pas strict. Settings → Clear cache puis Rerun.")
         st.stop()
 
-    # 5) Filtres complémentaires
+    # Filtres plateforme / mois
     plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
@@ -472,7 +457,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # 6) Bornage + agrégation
     data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
@@ -486,7 +470,7 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée après agrégation.")
         return
 
-    # 7) Compléter tous les mois 1..12 pour chaque plateforme
+    # Compléter tous les mois 1..12 par plateforme
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -498,22 +482,20 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # 8) Tableau (ordre 1→12 garanti)
+    # Tableau
     st.dataframe(
         stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
     )
 
-    # --------- Graphes matplotlib : X = 1..12 (axe numérique figé, pas de tri alpha) ----------
+    # Graphes matplotlib : X = 1..12 figé (pas de tri alpha)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)  # 0..11
-        plats_sorted = sorted(plats)  # ordre de légende stable
+        plats_sorted = sorted(plats)
         width = 0.8 / max(1, len(plats_sorted))
 
         fig, ax = plt.subplots(figsize=(10, 4))
-
-        # y aligné strictement sur months = [1..12]
         for i, p in enumerate(plats_sorted):
             sub = stats[stats["plateforme"] == p]
             vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
@@ -521,7 +503,6 @@ def vue_rapport(df: pd.DataFrame):
             x = base_x + (i - (len(plats_sorted)-1)/2) * width
             ax.bar(x, y, width=width, label=p)
 
-        # Axe X numérique figé
         ax.set_xlim(-0.5, 11.5)
         ax.set_xticks(base_x)
         ax.set_xticklabels([f"{m:02d}" for m in months])
@@ -534,24 +515,9 @@ def vue_rapport(df: pd.DataFrame):
         st.pyplot(fig)
         plt.close(fig)
 
-    # Appels des 3 graphes
     plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
     plot_grouped_bars("charges", "💸 Charges", "€")
     plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
-
-    # 10) Export XLSX
-    out = BytesIO()
-    try:
-        with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
-        st.download_button(
-            "📥 Exporter le rapport (XLSX)",
-            data=out.getvalue(),
-            file_name=f"rapport_{annee}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    except Exception as e:
-        st.error(f"Export XLSX indisponible : {e}")
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
@@ -837,7 +803,7 @@ def vue_sync_ical(df: pd.DataFrame):
         st.info("Aucun événement trouvé dans ce calendrier.")
         return
 
-    # détection plateforme
+    # Détection plateforme
     u = (url or "").lower()
     if "booking.com" in u:
         plateforme_auto = "Booking"
