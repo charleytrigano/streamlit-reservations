@@ -209,6 +209,42 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
+# =========================  BANDEAU "EN COURS"  ============================
+
+def vue_en_cours_banner(df: pd.DataFrame):
+    """Bandeau des séjours en cours aujourd'hui (avant la navigation)."""
+    if df is None or df.empty:
+        return
+    dft = ensure_schema(df).copy()
+    # Exclure les lignes 'Total'
+    mask_total = _marque_totaux(dft)
+    today = date.today()
+
+    def is_date(x):
+        return isinstance(x, date)
+
+    en_cours = dft[
+        (~mask_total) &
+        dft["date_arrivee"].apply(is_date) &
+        dft["date_depart"].apply(is_date) &
+        (dft["date_arrivee"] <= today) &
+        (dft["date_depart"]  > today)
+    ].copy()
+
+    st.markdown("### 🟢 En cours aujourd’hui")
+    if en_cours.empty:
+        st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
+        return
+
+    # Tri et formats
+    en_cours = en_cours.sort_values(["date_depart", "nom_client"])
+    en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
+    en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
+
+    cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone"]
+    cols = [c for c in cols if c in en_cours.columns]
+    st.dataframe(en_cours[cols], use_container_width=True)
+
 # =========================  VUES  ==========================================
 
 def vue_reservations(df: pd.DataFrame):
@@ -247,23 +283,22 @@ def vue_reservations(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # --- Masquage : cacher uniquement les lignes à 0 ET nom_client vide
+    # Masquage : cacher uniquement les lignes à 0 ET nom_client vide (mais pas 'Total')
     mask_zero_and_no_name = (
         (data["prix_brut"].fillna(0) == 0) &
         (data["prix_net"].fillna(0) == 0) &
         (data["charges"].fillna(0) == 0) &
         (data["nom_client"].astype(str).str.strip() == "")
     )
-    # On garde les 'Total' même si ça ressemble à zéro
     is_total = _marque_totaux(data)
     to_display = data[~(mask_zero_and_no_name & ~is_total)].copy()
 
-    # Totaux (calcul direct sur les lignes filtrées, hors 'Total')
+    # Totaux (hors 'Total')
     core = data[~is_total].copy()
     for c in ["prix_brut","prix_net","charges","nuitees"]:
         core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
-    # Colonnes €/nuit (sécurisé)
+    # Colonnes €/nuit
     to_display["prix_brut/nuit"] = (
         (pd.to_numeric(to_display["prix_brut"], errors="coerce") /
          pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
@@ -958,6 +993,9 @@ def main():
     bouton_restaurer()
     df = charger_donnees(st.session_state.cache_buster)
     bouton_telecharger(df)
+
+    # ➜ Affiche le bandeau "En cours aujourd’hui" avant la navigation
+    vue_en_cours_banner(df)
 
     st.sidebar.title("🧭 Navigation")
     onglet = st.sidebar.radio(
