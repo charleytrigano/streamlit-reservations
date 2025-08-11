@@ -11,6 +11,7 @@ import json
 import os
 import re
 import matplotlib.pyplot as plt
+
 # === Boutons pour vider le cache (sidebar + page) ===
 st.sidebar.markdown("### Maintenance")
 if st.sidebar.button("🧹 Vider le cache (sidebar)"):
