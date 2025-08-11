@@ -11,6 +11,20 @@ import json
 import os
 import re
 import matplotlib.pyplot as plt
+# === Boutons pour vider le cache (sidebar + page) ===
+st.sidebar.markdown("### Maintenance")
+if st.sidebar.button("🧹 Vider le cache (sidebar)"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.sidebar.success("Cache vidé.")
+    st.rerun()
+
+with st.expander("🔧 Maintenance (copie du bouton ici)"):
+    if st.button("🧹 Vider le cache (page)"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.success("Cache vidé.")
+        st.rerun()
 
 FICHIER = "reservations.xlsx"
 
