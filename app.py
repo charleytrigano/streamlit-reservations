@@ -419,7 +419,6 @@ def vue_calendrier(df: pd.DataFrame):
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
-    import numpy as np
     st.title("📊 Rapport (une année à la fois)")
 
     # 1) Nettoyage + schéma
@@ -505,29 +504,37 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
-    # 9) Graphes matplotlib (axe X numérique figé 1..12)
+    # --------- Graphes matplotlib : X = 1..12 (axe numérique figé, pas de tri alpha) ----------
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
-        fig, ax = plt.subplots(figsize=(10, 4))
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)  # 0..11
-        width = 0.8 / max(1, len(plats))
-        for i, p in enumerate(plats):
+        plats_sorted = sorted(plats)  # ordre de légende stable
+        width = 0.8 / max(1, len(plats_sorted))
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+
+        # y aligné strictement sur months = [1..12]
+        for i, p in enumerate(plats_sorted):
             sub = stats[stats["plateforme"] == p]
             vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
             y = np.array([vals.get(m, 0.0) for m in months], dtype=float)
-            x = base_x + (i - (len(plats)-1)/2) * width
+            x = base_x + (i - (len(plats_sorted)-1)/2) * width
             ax.bar(x, y, width=width, label=p)
+
+        # Axe X numérique figé
         ax.set_xlim(-0.5, 11.5)
         ax.set_xticks(base_x)
-        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # PAS de noms de mois (évite l’ordre alpha)
-        ax.set_xlabel("Mois - Année")
+        ax.set_xticklabels([f"{m:02d}" for m in months])
+        ax.set_xlabel(f"Mois ({annee})")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.legend(loc="upper left", frameon=False)
         ax.grid(axis="y", linestyle="--", alpha=0.3)
+
         st.pyplot(fig)
         plt.close(fig)
 
+    # Appels des 3 graphes
     plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
     plot_grouped_bars("charges", "💸 Charges", "€")
     plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
