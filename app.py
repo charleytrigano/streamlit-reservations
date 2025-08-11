@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import calendar
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 from io import BytesIO
 from urllib.parse import quote
 import requests
@@ -9,7 +9,7 @@ import base64
 import json
 import os
 import re
-import altair as alt  # graphiques
+import matplotlib.pyplot as plt  # graphiques (ordre des mois garanti)
 
 FICHIER = "reservations.xlsx"
 
@@ -75,7 +75,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Nettoyer téléphone : enlever éventuelle apostrophe (utilisée pour préserver le '+')
+    # Téléphone : enlever éventuelle apostrophe d’Excel (nous la remettrons à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -84,7 +84,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
             return s
         df["telephone"] = df["telephone"].apply(_clean_tel)
 
-    # Préparer colonne ical_uid si absente
+    # UID iCal
     if "ical_uid" not in df.columns:
         df["ical_uid"] = ""
 
@@ -239,14 +239,13 @@ def sidebar_github_controls(df: pd.DataFrame):
         buf_t = BytesIO()
         with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
             _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-        ok = github_save_file(buf_t.getvalue())
-        st.sidebar.write("Test effectué." if ok else "Test échoué.")
+        _ = github_save_file(buf_t.getvalue())
     if c2.button("Sauvegarder XLSX -> GitHub"):
         buf = BytesIO()
         try:
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-            ok = github_save_file(buf.getvalue())
+            _ = github_save_file(buf.getvalue())
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
@@ -451,7 +450,7 @@ def vue_rapport(df: pd.DataFrame):
     with col2:
         filtre_mois_label = st.selectbox("Mois", mois_options)
 
-    # Filtrage de base : année choisie
+    # Filtrage
     data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
@@ -463,100 +462,63 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Agrégat par mois et plateforme + clé de tri 'ordre'
+    # Agrégat par mois (1..12) et plateforme
+    data = data.dropna(subset=["MM"]).copy()
+    data["MM"] = data["MM"].astype(int)
     stats = (
-        data.dropna(subset=["MM"])
-            .assign(
-                MM=lambda d: d["MM"].astype(int),
-                ordre=lambda d: d["AAAA"].astype(int) * 100 + d["MM"].astype(int),  # ex: 202504
-                mois_num=lambda d: d["MM"].astype(int)
-            )
-            .groupby(["ordre", "mois_num", "plateforme"], dropna=True)
-            .agg(
-                prix_brut=("prix_brut", "sum"),
-                prix_net=("prix_net", "sum"),
-                charges=("charges", "sum"),
-                nuitees=("nuitees", "sum"),
-            ).reset_index()
-            .sort_values(["ordre", "plateforme"])
-            .reset_index(drop=True)
+        data.groupby(["MM", "plateforme"], dropna=True)
+            .agg(prix_brut=("prix_brut", "sum"),
+                 prix_net=("prix_net", "sum"),
+                 charges=("charges", "sum"),
+                 nuitees=("nuitees", "sum"))
+            .reset_index()
     )
 
-    if stats.empty:
-        st.info("Aucune statistique à afficher avec ces filtres.")
-        return
+    # Compléter tous les mois 1..12 et toutes les plateformes présentes
+    plats = sorted(stats["plateforme"].unique().tolist())
+    full = []
+    for m in range(1, 13):
+        for p in plats:
+            row = stats[(stats["MM"] == m) & (stats["plateforme"] == p)]
+            if row.empty:
+                full.append({"MM": m, "plateforme": p, "prix_brut": 0.0, "prix_net": 0.0, "charges": 0.0, "nuitees": 0})
+            else:
+                full.append(row.iloc[0].to_dict())
+    stats = pd.DataFrame(full).sort_values(["MM", "plateforme"]).reset_index(drop=True)
 
-    # Ordre des plateformes
-    ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
-    stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
-
-    # >>> PATCH : clé texte mois_str + tri fixe 01..12
-    stats["mois_str"] = stats["mois_num"].apply(lambda m: f"{int(m):02d}")
-
-    # Tableau récap trié (affiche mois "01"…"12")
+    # Tableau récap (ordre 1→12)
     st.dataframe(
-        stats.rename(columns={"mois_num": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats.rename(columns={"MM": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
 
-    # ---- Graphiques : axe X catégoriel "01"… "12" trié par ordre explicite ----
-    def chart_metric(metric_col: str, titre: str):
-        ordered_cols_local = _ordered_platforms(stats["plateforme"].unique().tolist())
+    # ---- Graphes matplotlib (ordre x = 1..12) ----
+    def plot_grouped_bars(metric: str, title: str, ylabel: str):
+        fig, ax = plt.subplots(figsize=(10, 4))
+        months = list(range(1, 13))
+        width = 0.8 / max(1, len(plats))  # largeur de chaque barre
+        base_x = pd.Series(range(len(months)), index=months).astype(float)
 
-        # Compléter les mois manquants à 0 pour toutes les plateformes
-        base = pd.MultiIndex.from_product(
-            [sorted(stats["ordre"].unique()), ordered_cols_local],
-            names=["ordre", "plateforme"]
-        )
-        filled = (
-            stats.set_index(["ordre", "plateforme"])[["mois_num", "mois_str", metric_col]]
-                 .reindex(base, fill_value=0)
-                 .reset_index()
-        )
+        for i, p in enumerate(plats):
+            subset = stats[stats["plateforme"] == p].sort_values("MM")
+            y = subset[metric].values
+            x = base_x.values + (i - (len(plats)-1)/2) * width
+            ax.bar(x, y, width=width, label=p)
 
-        # Si des mois sont NaN (créés par reindex), on les infère via ordre%100
-        filled["mois_num"] = filled["mois_num"].where(
-            filled["mois_num"].notna(),
-            filled["ordre"].astype(int) % 100
-        ).astype(int)
-        filled["mois_str"] = filled["mois_str"].where(
-            filled["mois_str"].notna(),
-            filled["mois_num"].apply(lambda m: f"{int(m):02d}")
-        )
+        ax.set_xticks(base_x.values)
+        ax.set_xticklabels([f"{m:02d}" for m in months])
+        ax.set_xlabel("Mois (01–12)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend(loc="upper left", frameon=False)
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
 
-        # Ordre **fixe** des mois "01"…"12"
-        mois_order = [f"{i:02d}" for i in range(1, 13)]
+        st.pyplot(fig)
+        plt.close(fig)
 
-        ch = (
-            alt.Chart(filled)
-               .mark_bar()
-               .encode(
-                   # Axe X catégoriel TEXTE avec ordre explicite 01..12
-                   x=alt.X("mois_str:N",
-                           sort=mois_order,
-                           title="Mois (01–12)"),
-                   # Regroupement par plateforme (barres adjacentes)
-                   xOffset=alt.X("plateforme:N", sort=ordered_cols_local),
-                   y=alt.Y(f"{metric_col}:Q",
-                           title=metric_col.replace("_", " ").title()),
-                   color=alt.Color("plateforme:N",
-                                   sort=ordered_cols_local,
-                                   title="Plateforme"),
-                   tooltip=[
-                       alt.Tooltip("mois_str:N", title="Mois"),
-                       alt.Tooltip("plateforme:N", title="Plateforme"),
-                       alt.Tooltip(f"{metric_col}:Q", format=".2f",
-                                   title=metric_col.replace("_", " ").title())
-                   ],
-               )
-               .properties(height=280)
-        )
-        st.markdown(titre)
-        st.altair_chart(ch, use_container_width=True)
-
-    chart_metric("prix_brut", "### 💰 Revenus bruts (ordre chronologique garanti)")
-    chart_metric("charges",  "### 💸 Charges (ordre chronologique garanti)")
-    chart_metric("nuitees",  "### 🛌 Nuitées (ordre chronologique garanti)")
+    plot_grouped_bars("prix_brut", "💰 Revenus bruts (ordre 01→12)", "€")
+    plot_grouped_bars("charges", "💸 Charges (ordre 01→12)", "€")
+    plot_grouped_bars("nuitees", "🛌 Nuitées (ordre 01→12)", "Nuitées")
 
     # Export XLSX
     out = BytesIO()
@@ -632,7 +594,7 @@ def vue_sms(df: pd.DataFrame):
         st.info("Aucune réservation à venir.")
         return
 
-    st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
+    st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton smartphone avec le SMS pré-rempli.")
 
     TEMPLATE_SMS = (
         "VILLA TOBIAS\n"
@@ -700,16 +662,6 @@ def _parse_ics_datetime(val: str):
         return date(y, mo, d)
     except Exception:
         return None
-
-def _guess_platform_from_url(url: str, fallback: str = "Autre") -> str:
-    u = (url or "").lower()
-    if "booking.com" in u:
-        return "Booking"
-    if "airbnb." in u:
-        return "Airbnb"
-    if "abritel" in u or "vrbo" in u or "homeaway" in u:
-        return "Abritel/VRBO"
-    return fallback or "Autre"
 
 def _parse_price(txt: str):
     if not txt:
