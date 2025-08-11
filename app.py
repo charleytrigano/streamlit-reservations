@@ -488,25 +488,22 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
-    # Tri + labels
-    stats["periode_key"] = stats["MM"].astype(int)  # 1..12
-    stats["periode_label"] = stats["MM"].astype(int).apply(lambda m: f"{calendar.month_abbr[m]} {annee}")
+    # Tri + clé numérique de mois (1..12)
+    stats["periode_key"] = stats["MM"].astype(int)
 
     # Ordre des plateformes
     ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
     stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
 
-    # Tableau récap trié
+    # Tableau récap trié (affiche mois comme 1..12)
     stats = stats.sort_values(["periode_key", "plateforme"]).reset_index(drop=True)
     st.dataframe(
-        stats[["periode_label", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]]
-            .rename(columns={"periode_label": "Période"}),
+        stats.rename(columns={"periode_key": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
 
-    # Liste fixe des 12 mois (labels + order) pour l'année sélectionnée
+    # ---- Graphiques : axe X numérique 1..12 (ordre verrouillé) ----
     mois_order = list(range(1, 13))
-    mois_labels = [f"{calendar.month_abbr[m]} {annee}" for m in mois_order]
 
     def chart_metric(metric_col: str, titre: str):
         # Compléter les mois manquants à 0 pour toutes les plateformes
@@ -516,23 +513,20 @@ def vue_rapport(df: pd.DataFrame):
                  .reindex(base, fill_value=0)
                  .reset_index()
         )
+        # Colonne numérique pour l’axe X
+        filled["mois"] = filled["periode_key"].astype(int)
 
-        # Construit les libellés "Jan 2025", "Feb 2025", ... ET les rend catégoriels ordonnés
-        filled["periode_label"] = filled["periode_key"].map(lambda m: f"{calendar.month_abbr[m]} {annee}")
-        filled["periode_label"] = pd.Categorical(filled["periode_label"], categories=mois_labels, ordered=True)
-
-        # Altair : impose l’ordre via Sort(values=...) et conserve l’ordre de plateformes
         ch = (
             alt.Chart(filled)
                .mark_bar()
                .encode(
-                   x=alt.X("periode_label:N",
-                           sort=alt.Sort(values=mois_labels),
-                           title="Mois"),
+                   x=alt.X("mois:O",
+                           scale=alt.Scale(domain=mois_order),  # ordre 1→12 verrouillé
+                           title="Mois (1–12)"),
                    y=alt.Y(f"{metric_col}:Q", title=metric_col.replace("_", " ").title()),
                    color=alt.Color("plateforme:N", sort=ordered_cols, title="Plateforme"),
                    tooltip=[
-                       alt.Tooltip("periode_label:N", title="Période"),
+                       alt.Tooltip("mois:O", title="Mois"),
                        alt.Tooltip("plateforme:N", title="Plateforme"),
                        alt.Tooltip(f"{metric_col}:Q", format=".2f", title=metric_col.replace("_", " ").title())
                    ],
@@ -550,9 +544,7 @@ def vue_rapport(df: pd.DataFrame):
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            stats.drop(columns=["periode_key"], errors="ignore") \
-                 .rename(columns={"periode_label": "Periode"}) \
-                 .to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
+            stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
         data_xlsx = out.getvalue()
     except Exception as e:
         st.error(f"Export XLSX indisponible : {e}")
