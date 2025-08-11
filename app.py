@@ -512,15 +512,30 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
-# ==============================  iCal (optionnel)  ==========================
-# — Les fonctions iCal/Sync sont disponibles sur demande (pour alléger ce fichier) —
-
 # ==============================  APP  ======================================
 
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # Bouton de cache (juste après set_page_config pour être sûr qu’il s’affiche)
+    # 🔧 Bouton cache ultra-visible (dans la page)
+    st.markdown("## 🧰 Maintenance")
+    if st.button("♻️ Vider le cache et relancer (PAGE)"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.success("Cache vidé. Redémarrage…")
+        st.rerun()
+
+    # 🔗 Option via l’URL : ajoute ?clear=1 pour vider le cache
+    params = st.experimental_get_query_params()
+    if params.get("clear", ["0"])[0] == "1":
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.success("Cache vidé via l’URL (?clear=1).")
+        # Nettoie l’URL pour éviter de revider en boucle
+        st.experimental_set_query_params()
+        st.rerun()
+
+    # Bouton de cache (sidebar)
     render_cache_button_sidebar()
 
     st.sidebar.title("📁 Fichier")
