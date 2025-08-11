@@ -28,16 +28,15 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie/complète : dates -> date(); montants 2 décimales; charges/% ; nuitées; AAAA/MM; colonnes minimales."""
+    """Nettoie/complète : dates -> date(); montants 2 déc.; charges/% ; nuitées; AAAA/MM; colonnes minimales."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
 
     # Dates -> date (strip heure)
-    if "date_arrivee" in df.columns:
-        df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
-    if "date_depart" in df.columns:
-        df["date_depart"] = df["date_depart"].apply(to_date_only)
+    for col in ["date_arrivee", "date_depart"]:
+        if col in df.columns:
+            df[col] = df[col].apply(to_date_only)
 
     # Numériques
     for col in ["prix_brut", "prix_net", "charges", "%"]:
@@ -71,8 +70,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
     # Colonnes minimales
-    defaults = {"plateforme": "Autre", "nom_client": "", "telephone": ""}
-    for k, v in defaults.items():
+    for k, v in {"plateforme": "Autre", "nom_client": "", "telephone": ""}.items():
         if k not in df.columns:
             df[k] = v
 
@@ -96,19 +94,17 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte une ligne 'total' pour la repousser en bas (par ex. nom_client='total')."""
+    """Détecte une ligne 'total' pour la repousser en bas."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
-            m = df[col].astype(str).str.strip().str.lower().eq("total")
-            mask = mask | m
+            mask |= df[col].astype(str).str.strip().str.lower().eq("total")
     has_no_dates = pd.Series(True, index=df.index)
-    if "date_arrivee" in df.columns:
-        has_no_dates &= df["date_arrivee"].isna()
-    if "date_depart" in df.columns:
-        has_no_dates &= df["date_depart"].isna()
+    for c in ["date_arrivee","date_depart"]:
+        if c in df.columns:
+            has_no_dates &= df[c].isna()
     has_money = pd.Series(False, index=df.index)
     for c in ["prix_brut","prix_net","charges"]:
         if c in df.columns:
@@ -125,8 +121,7 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     by_cols = [c for c in ["date_arrivee","nom_client"] if c in df_core.columns]
     if by_cols:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
-    out = pd.concat([df_core, df_total], ignore_index=True)
-    return out
+    return pd.concat([df_core, df_total], ignore_index=True)
 
 # ==================== Excel I/O (avec cache contrôlé) ====================
 
@@ -149,9 +144,7 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    """Sauvegarde en Excel; force colonne téléphone en texte grâce à l'apostrophe (préserve le '+').
-       Invalide explicitement le cache de données après écriture.
-    """
+    """Sauvegarde Excel; force le tel en texte via l'apostrophe; invalide le cache après écriture."""
     df = _trier_et_recoller_totaux(ensure_schema(df))
     df_to_save = df.copy()
     if "telephone" in df_to_save.columns:
@@ -164,8 +157,7 @@ def sauvegarder_donnees(df: pd.DataFrame):
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df_to_save.to_excel(writer, index=False)
-        # Invalidation du cache après écriture
-        st.cache_data.clear()
+        st.cache_data.clear()  # invalide le cache
         st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
@@ -200,8 +192,9 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-def bouton_clear_cache():
-    if st.sidebar.button("🧹 Vider le cache"):
+def bouton_clear_cache_sidebar():
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🧹 Vider le cache (data & resources)"):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.sidebar.success("Cache vidé.")
@@ -222,20 +215,15 @@ def github_save_file(binary: bytes):
         branch = st.secrets.get("GITHUB_BRANCH", "main")
         path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     except Exception:
-        # Secrets non configurés : ne pas bloquer l'app
-        return False
+        return False  # secrets non configurés
 
     api_base = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = _github_headers(token)
 
-    # 1) Récupérer le SHA si le fichier existe
-    params = {"ref": branch}
-    r_get = requests.get(api_base, headers=headers, params=params)
-    sha = None
-    if r_get.status_code == 200:
-        sha = r_get.json().get("sha")
+    # Récupérer SHA existant
+    r_get = requests.get(api_base, headers=headers, params={"ref": branch})
+    sha = r_get.json().get("sha") if r_get.status_code == 200 else None
 
-    # 2) PUT
     content_b64 = base64.b64encode(binary).decode("utf-8")
     payload = {"message": f"Update {path} via Streamlit", "content": content_b64, "branch": branch}
     if sha:
@@ -264,7 +252,7 @@ def sidebar_github_controls(df: pd.DataFrame):
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues principales ====================
+# ==================== Vues ====================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -281,7 +269,7 @@ def vue_ajouter(df: pd.DataFrame):
         plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
         tel = st.text_input("Téléphone (format +33...)")
 
-        # DATES persistantes
+        # DATES persistantes dans la session
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
 
@@ -296,7 +284,8 @@ def vue_ajouter(df: pd.DataFrame):
         depart = st.date_input("Date de départ", key="ajout_depart", min_value=min_dep)
 
         prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
-        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f", help="Doit être ≤ prix brut.")
+        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
+                                   help="Doit être ≤ prix brut.")
         charges_calc = max(prix_brut - prix_net, 0.0)
         pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
 
@@ -438,13 +427,11 @@ def vue_calendrier(df: pd.DataFrame):
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois)")
 
-    # Nettoyage
     df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    # AAAA/MM sûrs
     if "AAAA" not in df.columns or "MM" not in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
@@ -455,22 +442,14 @@ def vue_rapport(df: pd.DataFrame):
     df["AAAA"] = df["AAAA"].astype(int)
     df["MM"]   = df["MM"].astype(int)
 
-    # Sélection année (par défaut la plus récente) + DEBUG
     annees = sorted(df["AAAA"].unique().tolist())
     if not annees:
         st.info("Aucune année disponible.")
         return
     annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
-    # Filtre strict par année + message debug
     data = df[df["AAAA"] == int(annee)].copy()
-    years_left = sorted(data["AAAA"].unique().tolist())
-    st.caption(f"🔎 Année sélectionnée: {annee} | Années trouvées après filtre: {years_left}")
-    if len(years_left) != 1 or years_left[0] != int(annee):
-        st.error("Le filtrage par année n'est pas strict. Settings → Clear cache puis Rerun.")
-        st.stop()
 
-    # Filtres plateforme / mois
     plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
@@ -500,7 +479,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée après agrégation.")
         return
 
-    # Compléter tous les mois 1..12 par plateforme
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -512,13 +490,11 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # Tableau (ordre 1→12 garanti)
     st.dataframe(
         stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
     )
 
-    # Graphes matplotlib : X = 1..12 figé (pas de tri alpha)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)  # 0..11
@@ -660,7 +636,7 @@ def vue_sms(df: pd.DataFrame):
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
 
-# ==================== iCal parsing ====================
+# ==================== iCal parsing & Sync ====================
 
 def _parse_ics_datetime(val: str):
     if not val:
@@ -762,8 +738,8 @@ def _parse_ics(text: str):
     events = []
     if not text:
         return events
-    unfolded = []
-    prev = ""
+    # Unfold (RFC 5545)
+    unfolded, prev = [], ""
     for raw_line in text.splitlines():
         if raw_line.startswith((" ", "\t")):
             prev += raw_line.strip()
@@ -773,6 +749,7 @@ def _parse_ics(text: str):
             prev = raw_line.strip()
     if prev:
         unfolded.append(prev)
+    # Parse
     current = {}
     in_event = False
     for line in unfolded:
@@ -794,16 +771,15 @@ def _parse_ics(text: str):
             in_event = False
             current = {}
             continue
-        if in_event:
-            if ":" in line:
-                k, v = line.split(":", 1)
-                k = k.split(";")[0]
-                current[k] = v.strip()
+        if in_event and ":" in line:
+            k, v = line.split(":", 1)
+            k = k.split(";")[0]
+            current[k] = v.strip()
     return events
 
 def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (Booking, Airbnb, autres)")
-    st.caption("Colle une URL .ics. Nous détectons les réservations et évitons les doublons via l'UID iCal.")
+    st.caption("Colle une URL .ics. Nous évitons les doublons via l'UID iCal.")
 
     with st.form("ical_form"):
         url = st.text_input("URL du calendrier iCal")
@@ -813,7 +789,6 @@ def vue_sync_ical(df: pd.DataFrame):
     if not submitted:
         st.info("Renseigne une URL iCal pour commencer.")
         return
-
     if not url:
         st.warning("Veuillez fournir une URL .ics valide.")
         return
@@ -830,7 +805,7 @@ def vue_sync_ical(df: pd.DataFrame):
 
     events = _parse_ics(ics_text)
     if not events:
-        st.info("Aucun événement trouvé dans ce calendrier.")
+        st.info("Aucun événement trouvé.")
         return
 
     # détection plateforme
@@ -914,7 +889,7 @@ def main():
     bouton_restaurer()
     df = charger_donnees()
     bouton_telecharger(df)
-    bouton_clear_cache()  # bouton pour vider le cache
+    bouton_clear_cache_sidebar()       # ← le bouton Vider le cache est ici
     sidebar_github_controls(df)
 
     st.sidebar.title("🧭 Navigation")
