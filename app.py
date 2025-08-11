@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import calendar
 from datetime import date, timedelta
 from io import BytesIO
@@ -9,7 +10,7 @@ import base64
 import json
 import os
 import re
-import matplotlib.pyplot as plt  # graphiques (ordre des mois garanti)
+import matplotlib.pyplot as plt  # Graphiques (ordre des mois garanti)
 
 FICHIER = "reservations.xlsx"
 
@@ -75,7 +76,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : enlever éventuelle apostrophe d’Excel (nous la remettrons à la sauvegarde)
+    # Téléphone : enlever éventuelle apostrophe d’Excel (on la remettra à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -189,7 +190,7 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==================== GitHub Save (facultatif) ====================
+# ==================== GitHub Save (optionnel) ====================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
@@ -420,12 +421,6 @@ def vue_calendrier(df: pd.DataFrame):
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
-def _ordered_platforms(existing: list) -> list:
-    """Renvoie l'ordre de colonnes: Booking, Airbnb, Autre, puis les autres (triées)."""
-    base = ["Booking", "Airbnb", "Autre"]
-    rest = [p for p in existing if p not in base]
-    return base + sorted(rest)
-
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois)")
     df = _trier_et_recoller_totaux(ensure_schema(df))
@@ -433,7 +428,7 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # 1 seule année obligatoire
+    # Année (depuis AAAA)
     annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     if not annees_uniques:
         st.info("Aucune année disponible.")
@@ -445,11 +440,10 @@ def vue_rapport(df: pd.DataFrame):
     col1, col2 = st.columns(2)
     with col1:
         filtre_plateforme = st.selectbox("Plateforme", plateformes)
-    mois_options = ["Tous"] + [f"{i:02d}" for i in range(1, 13)]
     with col2:
-        filtre_mois_label = st.selectbox("Mois (01–12)", mois_options)
+        filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
 
-    # Filtrage
+    # Filtrage de base
     data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
@@ -461,9 +455,12 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Agrégat par mois (1..12) et plateforme
+    # MM -> entiers 1..12
     data = data.dropna(subset=["MM"]).copy()
-    data["MM"] = data["MM"].astype(int)
+    data["MM"] = pd.to_numeric(data["MM"], errors="coerce").fillna(0).astype(int)
+    data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
+
+    # Agrégat par (MM, plateforme)
     stats = (
         data.groupby(["MM", "plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut", "sum"),
@@ -473,7 +470,11 @@ def vue_rapport(df: pd.DataFrame):
             .reset_index()
     )
 
-    # Compléter tous les mois 1..12 et toutes les plateformes présentes
+    if stats.empty:
+        st.info("Aucune donnée après agrégation.")
+        return
+
+    # Compléter tous les mois 1..12 pour chaque plateforme présente
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -485,27 +486,30 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM", "plateforme"]).reset_index(drop=True)
 
-    # Tableau récap (ordre 1→12)
+    # Tableau (ordre 1→12 garanti)
     st.dataframe(
-        stats.rename(columns={"MM": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
     )
 
-    # ---- Graphes matplotlib (ordre 1..12, étiquettes = "01 - Année") ----
+    # --------- Graphes matplotlib : X = 1..12 (aucun nom de mois), labels "MM - AAAA" ----------
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         fig, ax = plt.subplots(figsize=(10, 4))
-        months = list(range(1, 13))  # ordre numérique garanti
-        width = 0.8 / max(1, len(plats))
-        base_x = list(range(len(months)))
+        months = list(range(1, 13))               # axe cible
+        base_x = np.arange(len(months), dtype=float)  # positions 0..11
+        width = 0.8 / max(1, len(plats))          # largeur d'une barre
 
+        # Pour chaque plateforme, aligner sur months (1..12)
         for i, p in enumerate(plats):
-            subset = stats[stats["plateforme"] == p].sort_values("MM")
-            y = subset[metric].values
-            x = [bx + (i - (len(plats)-1)/2) * width for bx in base_x]
+            sub = stats[stats["plateforme"] == p]
+            vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
+            y = np.array([vals.get(m, 0.0) for m in months], dtype=float)
+            x = base_x + (i - (len(plats)-1)/2) * width
             ax.bar(x, y, width=width, label=p)
 
+        ax.set_xlim(-0.5, 11.5)  # fige le domaine 0..11
         ax.set_xticks(base_x)
-        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # << chiffres + année
+        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # chiffres + année
         ax.set_xlabel("Mois - Année")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -729,13 +733,13 @@ def _parse_event_fields(ev: dict):
     price = _parse_price(description or summary)
 
     if not name:
-        m = re.search(r"Guest\s*name\s*:\s*(.+)", description, flags=re.I)
+        m = re.search(r"Guest\s*name\s*:\s*(.+)", description or "", flags=re.I)
         if m: name = m.group(1).strip()
     if not tel:
-        m = re.search(r"Phone\s*:\s*(\+\d{6,15})", description, flags=re.I)
+        m = re.search(r"Phone\s*:\s*(\+\d{6,15})", description or "", flags=re.I)
         if m: tel = m.group(1).strip()
     if price is None:
-        m = re.search(r"(?:Total\s*price|Montant|Prix|Payout)\s*:\s*([0-9 .,\u00a0]+)\s*(?:€|eur|euros)?", description, flags=re.I)
+        m = re.search(r"(?:Total\s*price|Montant|Prix|Payout)\s*:\s*([0-9 .,\u00a0]+)\s*(?:€|eur|euros)?", description or "", flags=re.I)
         if m:
             raw = m.group(1).replace(" ", "").replace("\u00a0","").replace(".", "").replace(",", ".")
             try:
@@ -775,8 +779,9 @@ def _parse_ics(text: str):
                         "uid": current.get("UID",""),
                         "start": _parse_ics_datetime(current.get("DTSTART","")),
                         "end": _parse_ics_datetime(current.get("DTEND","")),
-                        "summary": current.get("SUMMARY","")),
-                    )
+                        "summary": current.get("SUMMARY",""),
+                        "description": current.get("DESCRIPTION",""),
+                    })
                 )
             in_event = False
             current = {}
