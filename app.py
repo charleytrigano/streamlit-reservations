@@ -244,13 +244,12 @@ def vue_en_cours_banner(df: pd.DataFrame):
     mask_total = _marque_totaux(dft)
     today = date.today()
 
-    def is_date(x):
-        return isinstance(x, date)
+    def _is_date(x): return isinstance(x, date)
 
     en_cours = dft[
         (~mask_total) &
-        dft["date_arrivee"].apply(is_date) &
-        dft["date_depart"].apply(is_date) &
+        dft["date_arrivee"].apply(_is_date) &
+        dft["date_depart"].apply(_is_date) &
         (dft["date_arrivee"] <= today) &
         (dft["date_depart"]  > today)
     ].copy()
@@ -260,7 +259,7 @@ def vue_en_cours_banner(df: pd.DataFrame):
         st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
         return
 
-    # Tri et formatage des dates
+    # Tri & formats de dates lisibles
     en_cours = en_cours.sort_values(["date_depart", "nom_client"]).copy()
     en_cours["date_arrivee_fmt"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
     en_cours["date_depart_fmt"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
@@ -268,8 +267,8 @@ def vue_en_cours_banner(df: pd.DataFrame):
     # 🔗 Liens Appeler + SMS
     def _make_links(row):
         tel_raw = str(row.get("telephone") or "").strip()
-        tel_ui  = tel_to_uri(tel_raw)  # tel:+33...
-        sms_txt = sms_message(row)     # message complet
+        tel_ui  = tel_to_uri(tel_raw)
+        sms_txt = sms_message(row)
         tel_clean = re.sub(r"[ \-\.]", "", clean_tel_display(tel_raw))
         sms_uri = f"sms:{tel_clean}?&body={quote(sms_txt)}" if tel_clean else ""
         link_tel = f'<a href="{tel_ui}">📞 Appeler</a>' if tel_ui else ""
@@ -280,17 +279,13 @@ def vue_en_cours_banner(df: pd.DataFrame):
     en_cours["📞 Appeler"] = links[0]
     en_cours["📲 SMS"]     = links[1]
 
-    # ---- Correctif robuste pour éviter KeyError ----
-    # Colonnes à afficher (cible)
-    desired_cols = ["plateforme", "nom_client", "date_arrivee_fmt", "date_depart_fmt", "nuitees", "📞 Appeler", "📲 SMS"]
-
-    # Renommer les colonnes de dates formatées -> noms finaux attendus
+    # Renommer les colonnes pour l’affichage final
     en_cours = en_cours.rename(columns={
         "date_arrivee_fmt": "date_arrivee",
         "date_depart_fmt":  "date_depart"
     })
 
-    # Assurer la présence de 'nuitees'
+    # Assurer 'nuitees'
     if "nuitees" not in en_cours.columns:
         def _nuits(r):
             d1, d2 = r.get("date_arrivee"), r.get("date_depart")
@@ -299,15 +294,13 @@ def vue_en_cours_banner(df: pd.DataFrame):
             return ""
         en_cours["nuitees"] = en_cours.apply(_nuits, axis=1)
 
-    # Ne garder que les colonnes effectivement présentes
-    existing = [c for c in ["plateforme","nom_client","date_arrivee","date_depart","nuitees","📞 Appeler","📲 SMS"] if c in en_cours.columns]
+    # Colonnes souhaitées, mais on ne garde que celles réellement présentes
+    desired = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","📞 Appeler","📲 SMS"]
+    existing = [c for c in desired if c in en_cours.columns]
     df_out = en_cours[existing].copy()
 
-    # Rendu HTML pour conserver les liens
-    st.markdown(
-        df_out.to_html(index=False, escape=False),
-        unsafe_allow_html=True
-    )
+    # Rendu HTML pour garder les liens cliquables
+    st.markdown(df_out.to_html(index=False, escape=False), unsafe_allow_html=True)
 
 # =========================  VUES  ==========================================
 
@@ -655,6 +648,7 @@ def vue_rapport(df: pd.DataFrame):
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
 
+    # Masquer lignes 0/0/0/0 uniquement
     stats_table = stats_full[
         ~(
             (stats_full["prix_brut"].round(2) == 0) &
@@ -1027,9 +1021,9 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Paramètre d’URL ?clear=1 pour vider le cache
-    params = st.query_params
-    clear_val = params.get("clear", ["0"])[0] if isinstance(params.get("clear"), list) else params.get("clear")
+    # Paramètre d’URL ?clear=1 pour vider le cache (version sûre, sans experimental)
+    params = st.query_params  # dict-like: {str: str}
+    clear_val = params.get("clear", "0")
     if clear_val == "1":
         st.cache_data.clear()
         st.cache_resource.clear()
