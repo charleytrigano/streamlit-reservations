@@ -54,8 +54,7 @@ def clean_tel_display(x: str) -> str:
 def tel_to_uri(x: str) -> str:
     """Transforme un numéro en URI tel: (garde + si présent)."""
     s = clean_tel_display(x)
-    # Enlève espaces et tirets
-    s = re.sub(r"[ \-\.]", "", s)
+    s = re.sub(r"[ \-\.]", "", s)  # enlève espaces, tirets, points
     if not s:
         return ""
     return f"tel:{s}"
