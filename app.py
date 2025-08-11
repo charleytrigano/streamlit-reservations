@@ -445,17 +445,16 @@ def vue_rapport(df: pd.DataFrame):
     col1, col2 = st.columns(2)
     with col1:
         filtre_plateforme = st.selectbox("Plateforme", plateformes)
-    mois_map = {i: calendar.month_name[i] for i in range(1, 13)}
-    mois_options = ["Tous"] + [f"{i:02d} - {mois_map[i]}" for i in range(1, 13)]
+    mois_options = ["Tous"] + [f"{i:02d}" for i in range(1, 13)]
     with col2:
-        filtre_mois_label = st.selectbox("Mois", mois_options)
+        filtre_mois_label = st.selectbox("Mois (01–12)", mois_options)
 
     # Filtrage
     data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
     if filtre_mois_label != "Tous":
-        mois_num = int(filtre_mois_label.split(" - ")[0])
+        mois_num = int(filtre_mois_label)
         data = data[data["MM"] == mois_num]
 
     if data.empty:
@@ -492,22 +491,22 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
-    # ---- Graphes matplotlib (ordre x = 1..12) ----
+    # ---- Graphes matplotlib (ordre 1..12, étiquettes = "01 - Année") ----
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         fig, ax = plt.subplots(figsize=(10, 4))
-        months = list(range(1, 13))
-        width = 0.8 / max(1, len(plats))  # largeur de chaque barre
-        base_x = pd.Series(range(len(months)), index=months).astype(float)
+        months = list(range(1, 13))  # ordre numérique garanti
+        width = 0.8 / max(1, len(plats))
+        base_x = list(range(len(months)))
 
         for i, p in enumerate(plats):
             subset = stats[stats["plateforme"] == p].sort_values("MM")
             y = subset[metric].values
-            x = base_x.values + (i - (len(plats)-1)/2) * width
+            x = [bx + (i - (len(plats)-1)/2) * width for bx in base_x]
             ax.bar(x, y, width=width, label=p)
 
-        ax.set_xticks(base_x.values)
-        ax.set_xticklabels([f"{m:02d}" for m in months])
-        ax.set_xlabel("Mois (01–12)")
+        ax.set_xticks(base_x)
+        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # << chiffres + année
+        ax.set_xlabel("Mois - Année")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.legend(loc="upper left", frameon=False)
@@ -516,9 +515,9 @@ def vue_rapport(df: pd.DataFrame):
         st.pyplot(fig)
         plt.close(fig)
 
-    plot_grouped_bars("prix_brut", "💰 Revenus bruts (ordre 01→12)", "€")
-    plot_grouped_bars("charges", "💸 Charges (ordre 01→12)", "€")
-    plot_grouped_bars("nuitees", "🛌 Nuitées (ordre 01→12)", "Nuitées")
+    plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
+    plot_grouped_bars("charges", "💸 Charges", "€")
+    plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
 
     # Export XLSX
     out = BytesIO()
@@ -776,9 +775,8 @@ def _parse_ics(text: str):
                         "uid": current.get("UID",""),
                         "start": _parse_ics_datetime(current.get("DTSTART","")),
                         "end": _parse_ics_datetime(current.get("DTEND","")),
-                        "summary": current.get("SUMMARY",""),
-                        "description": current.get("DESCRIPTION",""),
-                    })
+                        "summary": current.get("SUMMARY","")),
+                    )
                 )
             in_event = False
             current = {}
