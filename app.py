@@ -9,7 +9,7 @@ import base64
 import json
 import os
 import re
-import altair as alt  # pour un tri chronologique fiable des graphiques
+import altair as alt  # graphiques
 
 FICHIER = "reservations.xlsx"
 
@@ -70,11 +70,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["MM"] = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
 
     # Colonnes minimales
-    defaults = {
-        "plateforme": "Autre",
-        "nom_client": "",
-        "telephone": "",
-    }
+    defaults = {"plateforme": "Autre", "nom_client": "", "telephone": ""}
     for k, v in defaults.items():
         if k not in df.columns:
             df[k] = v
@@ -223,11 +219,7 @@ def github_save_file(binary: bytes):
 
     # 2) PUT
     content_b64 = base64.b64encode(binary).decode("utf-8")
-    payload = {
-        "message": f"Update {path} via Streamlit",
-        "content": content_b64,
-        "branch": branch,
-    }
+    payload = {"message": f"Update {path} via Streamlit", "content": content_b64, "branch": branch}
     if sha:
         payload["sha"] = sha
 
@@ -290,8 +282,7 @@ def vue_ajouter(df: pd.DataFrame):
         depart = st.date_input("Date de départ", key="ajout_depart", min_value=min_dep)
 
         prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
-        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f",
-                                   help="Doit être ≤ prix brut.")
+        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f", help="Doit être ≤ prix brut.")
         charges_calc = max(prix_brut - prix_net, 0.0)
         pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
 
@@ -488,45 +479,45 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune statistique à afficher avec ces filtres.")
         return
 
-    # Tri + clé numérique de mois (1..12)
+    # Clés/labels de mois (⚠️ NOUVEAU : labels "01"…"12" pour un tri sûr)
     stats["periode_key"] = stats["MM"].astype(int)
+    stats["mois_label"] = stats["periode_key"].apply(lambda m: f"{m:02d}")  # "01","02",…,"12"
 
     # Ordre des plateformes
     ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
     stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
 
-    # Tableau récap trié (affiche mois comme 1..12)
+    # Tableau récap trié (affiche mois "01"…"12")
     stats = stats.sort_values(["periode_key", "plateforme"]).reset_index(drop=True)
     st.dataframe(
-        stats.rename(columns={"periode_key": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats.rename(columns={"mois_label": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
 
-    # ---- Graphiques : axe X numérique 1..12 (ordre verrouillé) ----
-    mois_order = list(range(1, 13))
+    # ---- Graphiques : axe X catégoriel "01"… "12" avec ordre imposé ----
+    mois_labels = [f"{m:02d}" for m in range(1, 13)]
 
     def chart_metric(metric_col: str, titre: str):
         # Compléter les mois manquants à 0 pour toutes les plateformes
-        base = pd.MultiIndex.from_product([mois_order, ordered_cols], names=["periode_key", "plateforme"])
+        base = pd.MultiIndex.from_product([range(1,13), ordered_cols], names=["periode_key", "plateforme"])
         filled = (
             stats.set_index(["periode_key", "plateforme"])[[metric_col]]
                  .reindex(base, fill_value=0)
                  .reset_index()
         )
-        # Colonne numérique pour l’axe X
-        filled["mois"] = filled["periode_key"].astype(int)
+        filled["mois_label"] = filled["periode_key"].apply(lambda m: f"{m:02d}")
 
         ch = (
             alt.Chart(filled)
                .mark_bar()
                .encode(
-                   x=alt.X("mois:O",
-                           scale=alt.Scale(domain=mois_order),  # ordre 1→12 verrouillé
-                           title="Mois (1–12)"),
+                   x=alt.X("mois_label:N",
+                           sort=alt.Sort(values=mois_labels),  # ordre "01"→"12" verrouillé
+                           title="Mois (01–12)"),
                    y=alt.Y(f"{metric_col}:Q", title=metric_col.replace("_", " ").title()),
                    color=alt.Color("plateforme:N", sort=ordered_cols, title="Plateforme"),
                    tooltip=[
-                       alt.Tooltip("mois:O", title="Mois"),
+                       alt.Tooltip("mois_label:N", title="Mois"),
                        alt.Tooltip("plateforme:N", title="Plateforme"),
                        alt.Tooltip(f"{metric_col}:Q", format=".2f", title=metric_col.replace("_", " ").title())
                    ],
@@ -544,7 +535,7 @@ def vue_rapport(df: pd.DataFrame):
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
+            stats.drop(columns=["periode_key"], errors="ignore").to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
         data_xlsx = out.getvalue()
     except Exception as e:
         st.error(f"Export XLSX indisponible : {e}")
@@ -669,10 +660,9 @@ def vue_sms(df: pd.DataFrame):
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
 
-# ==================== iCal parsing (enrichi Booking/Airbnb) ====================
+# ==================== iCal parsing ====================
 
 def _parse_ics_datetime(val: str):
-    """Convertit DTSTART/DTEND ICS vers date() (UTC ignoré)."""
     if not val:
         return None
     m = re.match(r"(\d{4})(\d{2})(\d{2})", val)
@@ -775,16 +765,8 @@ def _parse_event_fields(ev: dict):
             except Exception:
                 price = None
 
-    return {
-        "uid": uid,
-        "start": start,
-        "end": end,
-        "summary": summary,
-        "description": description,
-        "guest_name": name,
-        "phone": tel,
-        "price": price,
-    }
+    return {"uid": uid, "start": start, "end": end, "summary": summary, "description": description,
+            "guest_name": name, "phone": tel, "price": price}
 
 def _parse_ics(text: str):
     events = []
