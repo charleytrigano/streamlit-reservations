@@ -10,7 +10,7 @@ import base64
 import json
 import os
 import re
-import matplotlib.pyplot as plt  # Graphiques (ordre des mois garanti, sans tri alpha)
+import matplotlib.pyplot as plt  # Graphiques (ordre des mois garanti, axe numérique)
 
 FICHIER = "reservations.xlsx"
 
@@ -422,40 +422,52 @@ def vue_calendrier(df: pd.DataFrame):
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
+    import numpy as np
     st.title("📊 Rapport (une année à la fois)")
 
-    # Nettoyage + colonnes garanties
+    # Nettoyage / schéma garanti
     df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    # Si AAAA / MM manquent, on les régénère depuis date_arrivee
+    # Colonnes année/mois -> entiers (re-génère si manquantes)
     if "AAAA" not in df.columns or "MM" not in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
 
-    # AAAA propre (entier), MM propre [1..12]
-    df["AAAA"] = pd.to_numeric(df["AAAA"], errors="coerce").astype("Int64")
-    df["MM"]   = pd.to_numeric(df["MM"], errors="coerce").astype("Int64")
+    df["AAAA"] = pd.to_numeric(df["AAAA"], errors="coerce")
+    df["MM"]   = pd.to_numeric(df["MM"], errors="coerce")
+    df = df.dropna(subset=["AAAA","MM"]).copy()
+    df["AAAA"] = df["AAAA"].astype(int)
+    df["MM"]   = df["MM"].astype(int)
 
     # Sélecteur d'année (obligatoire)
-    annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    if not annees_uniques:
+    annees = sorted(df["AAAA"].unique().tolist())
+    if not annees:
         st.info("Aucune année disponible.")
         return
-    annee = st.selectbox("Année", annees_uniques, index=len(annees_uniques)-1)
+    annee = st.selectbox("Année", annees, index=len(annees)-1)
+
+    # === FILTRE STRICT PAR ANNÉE AVANT TOUTE AGRÉGATION ===
+    data = df[df["AAAA"] == int(annee)].copy()
+    if data.empty:
+        st.info(f"Aucune donnée pour {annee}.")
+        return
+
+    # Sécurité: vérifie qu'une seule année reste
+    years_left = sorted(data["AAAA"].unique().tolist())
+    if len(years_left) != 1 or years_left[0] != int(annee):
+        st.error("Le filtrage par année n'est pas strict. (Sécurité)")
+        return
 
     # Filtres complémentaires
-    plateformes = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
         filtre_plateforme = st.selectbox("Plateforme", plateformes)
     with col2:
         filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
-
-    # === FILTRAGE STRICT PAR ANNÉE AVANT AGRÉGATION ===
-    data = df[df["AAAA"] == int(annee)].copy()
 
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
@@ -467,19 +479,19 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # MM -> entiers 1..12
-    data["MM"] = pd.to_numeric(data["MM"], errors="coerce").fillna(0).astype(int)
+    # MM borné 1..12
     data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
 
     # Agrégat par (MM, plateforme)
     stats = (
-        data.groupby(["MM", "plateforme"], dropna=True)
-            .agg(prix_brut=("prix_brut", "sum"),
-                 prix_net=("prix_net", "sum"),
-                 charges=("charges", "sum"),
-                 nuitees=("nuitees", "sum"))
+        data.groupby(["MM","plateforme"], dropna=True)
+            .agg(prix_brut=("prix_brut","sum"),
+                 prix_net=("prix_net","sum"),
+                 charges=("charges","sum"),
+                 nuitees=("nuitees","sum"))
             .reset_index()
     )
+
     if stats.empty:
         st.info("Aucune donnée après agrégation.")
         return
@@ -494,7 +506,7 @@ def vue_rapport(df: pd.DataFrame):
                 full.append({"MM": m, "plateforme": p, "prix_brut": 0.0, "prix_net": 0.0, "charges": 0.0, "nuitees": 0})
             else:
                 full.append(row.iloc[0].to_dict())
-    stats = pd.DataFrame(full).sort_values(["MM", "plateforme"]).reset_index(drop=True)
+    stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
     # Tableau (ordre 1→12 garanti)
     st.dataframe(
@@ -502,14 +514,13 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
-    # --------- Graphes matplotlib : X = 1..12 (aucun nom de mois), labels "MM - AAAA" ----------
+    # --------- Graphes matplotlib : X = 1..12 (axe numérique figé) ----------
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         fig, ax = plt.subplots(figsize=(10, 4))
-        months = list(range(1, 13))                   # axe cible figé
+        months = list(range(1, 13))                   # 1..12 fixe
         base_x = np.arange(len(months), dtype=float)  # positions 0..11
-        width = 0.8 / max(1, len(plats))              # largeur d'une barre
+        width = 0.8 / max(1, len(plats))
 
-        # Pour chaque plateforme, aligner sur months (1..12)
         for i, p in enumerate(plats):
             sub = stats[stats["plateforme"] == p]
             vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
@@ -517,9 +528,9 @@ def vue_rapport(df: pd.DataFrame):
             x = base_x + (i - (len(plats)-1)/2) * width
             ax.bar(x, y, width=width, label=p)
 
-        ax.set_xlim(-0.5, 11.5)  # fige le domaine 0..11
+        ax.set_xlim(-0.5, 11.5)                      # fige 0..11
         ax.set_xticks(base_x)
-        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # chiffres + année
+        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])
         ax.set_xlabel("Mois - Année")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
