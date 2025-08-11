@@ -10,7 +10,7 @@ import base64
 import json
 import os
 import re
-import matplotlib.pyplot as plt  # Graphiques (ordre des mois garanti, axe numérique)
+import matplotlib.pyplot as plt  # Graphiques matplotlib (axe numérique)
 
 FICHIER = "reservations.xlsx"
 
@@ -33,7 +33,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     df = df.copy()
 
-    # Dates -> date
+    # Dates -> date (strip heure)
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
@@ -96,7 +96,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte une ligne 'total' pour la repousser en bas."""
+    """Détecte une ligne 'total' pour la repousser en bas (par ex. nom_client='total')."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
@@ -205,7 +205,7 @@ def github_save_file(binary: bytes):
         branch = st.secrets.get("GITHUB_BRANCH", "main")
         path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     except Exception:
-        st.error("Secrets GitHub manquants. Ajoute GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH, GITHUB_PATH dans Settings > Secrets.")
+        # Secrets non configurés : ne pas bloquer l'app
         return False
 
     api_base = f"https://api.github.com/repos/{repo}/contents/{path}"
@@ -225,12 +225,7 @@ def github_save_file(binary: bytes):
         payload["sha"] = sha
 
     r_put = requests.put(api_base, headers=headers, data=json.dumps(payload))
-    if r_put.status_code in (200, 201):
-        st.success("✅ Sauvegarde GitHub réussie.")
-        return True
-    else:
-        st.error(f"❌ Échec GitHub : {r_put.status_code}: {r_put.text}")
-        return False
+    return r_put.status_code in (200, 201)
 
 def sidebar_github_controls(df: pd.DataFrame):
     st.sidebar.markdown("---")
@@ -240,13 +235,15 @@ def sidebar_github_controls(df: pd.DataFrame):
         buf_t = BytesIO()
         with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
             _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-        _ = github_save_file(buf_t.getvalue())
+        ok = github_save_file(buf_t.getvalue())
+        st.sidebar.success("OK") if ok else st.sidebar.error("Échec")
     if c2.button("Sauvegarder XLSX -> GitHub"):
         buf = BytesIO()
         try:
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-            _ = github_save_file(buf.getvalue())
+            ok = github_save_file(buf.getvalue())
+            st.sidebar.success("✅ GitHub") if ok else st.sidebar.error("❌ GitHub")
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
@@ -425,13 +422,13 @@ def vue_rapport(df: pd.DataFrame):
     import numpy as np
     st.title("📊 Rapport (une année à la fois)")
 
-    # Nettoyage / schéma garanti
+    # 1) Nettoyage + schéma
     df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    # Colonnes année/mois -> entiers (re-génère si manquantes)
+    # 2) (Re)générer AAAA/MM depuis date_arrivee, puis forcer en int
     if "AAAA" not in df.columns or "MM" not in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
@@ -442,47 +439,42 @@ def vue_rapport(df: pd.DataFrame):
     df["AAAA"] = df["AAAA"].astype(int)
     df["MM"]   = df["MM"].astype(int)
 
-    # Sélecteur d'année (obligatoire)
+    # 3) Choix d'une seule année (par défaut la plus récente)
     annees = sorted(df["AAAA"].unique().tolist())
     if not annees:
         st.info("Aucune année disponible.")
         return
-    annee = st.selectbox("Année", annees, index=len(annees)-1)
+    annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
-    # === FILTRE STRICT PAR ANNÉE AVANT TOUTE AGRÉGATION ===
+    # 4) FILTRE STRICT PAR ANNÉE AVANT TOUT
     data = df[df["AAAA"] == int(annee)].copy()
-    if data.empty:
-        st.info(f"Aucune donnée pour {annee}.")
-        return
 
-    # Sécurité: vérifie qu'une seule année reste
+    # Sécurité : si plus d’une année remonte (ça ne doit JAMAIS arriver)
     years_left = sorted(data["AAAA"].unique().tolist())
+    st.caption(f"🔎 Année sélectionnée: {annee} | Années trouvées après filtre: {years_left}")
     if len(years_left) != 1 or years_left[0] != int(annee):
-        st.error("Le filtrage par année n'est pas strict. (Sécurité)")
-        return
+        st.error("Le filtrage par année n'est pas strict. Fais Settings → Clear cache puis Rerun. Si ça persiste, copie ici la ligne ci-dessus.")
+        st.stop()
 
-    # Filtres complémentaires
+    # 5) Filtres complémentaires
     plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
     col1, col2 = st.columns(2)
     with col1:
-        filtre_plateforme = st.selectbox("Plateforme", plateformes)
+        filtre_plateforme = st.selectbox("Plateforme", plateformes, key="rapport_pf")
     with col2:
-        filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
+        filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)], key="rapport_mois")
 
     if filtre_plateforme != "Toutes":
         data = data[data["plateforme"] == filtre_plateforme]
     if filtre_mois_label != "Tous":
-        mois_num = int(filtre_mois_label)
-        data = data[data["MM"] == mois_num]
+        data = data[data["MM"] == int(filtre_mois_label)]
 
     if data.empty:
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # MM borné 1..12
+    # 6) Bornage + agrégation
     data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
-
-    # Agrégat par (MM, plateforme)
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -491,12 +483,11 @@ def vue_rapport(df: pd.DataFrame):
                  nuitees=("nuitees","sum"))
             .reset_index()
     )
-
     if stats.empty:
         st.info("Aucune donnée après agrégation.")
         return
 
-    # Compléter tous les mois 1..12 pour chaque plateforme présente
+    # 7) Compléter tous les mois 1..12 pour chaque plateforme
     plats = sorted(stats["plateforme"].unique().tolist())
     full = []
     for m in range(1, 13):
@@ -508,35 +499,32 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # Tableau (ordre 1→12 garanti)
+    # 8) Tableau (ordre 1→12 garanti)
     st.dataframe(
         stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
     )
 
-    # --------- Graphes matplotlib : X = 1..12 (axe numérique figé) ----------
+    # 9) Graphes matplotlib (axe X numérique figé 1..12)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         fig, ax = plt.subplots(figsize=(10, 4))
-        months = list(range(1, 13))                   # 1..12 fixe
-        base_x = np.arange(len(months), dtype=float)  # positions 0..11
+        months = list(range(1, 13))
+        base_x = np.arange(len(months), dtype=float)  # 0..11
         width = 0.8 / max(1, len(plats))
-
         for i, p in enumerate(plats):
             sub = stats[stats["plateforme"] == p]
             vals = {int(mm): float(v) for mm, v in zip(sub["MM"], sub[metric])}
             y = np.array([vals.get(m, 0.0) for m in months], dtype=float)
             x = base_x + (i - (len(plats)-1)/2) * width
             ax.bar(x, y, width=width, label=p)
-
-        ax.set_xlim(-0.5, 11.5)                      # fige 0..11
+        ax.set_xlim(-0.5, 11.5)
         ax.set_xticks(base_x)
-        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])
+        ax.set_xticklabels([f"{m:02d} - {annee}" for m in months])  # PAS de noms de mois (évite l’ordre alpha)
         ax.set_xlabel("Mois - Année")
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.legend(loc="upper left", frameon=False)
         ax.grid(axis="y", linestyle="--", alpha=0.3)
-
         st.pyplot(fig)
         plt.close(fig)
 
@@ -544,23 +532,19 @@ def vue_rapport(df: pd.DataFrame):
     plot_grouped_bars("charges", "💸 Charges", "€")
     plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
 
-    # Export XLSX
+    # 10) Export XLSX
     out = BytesIO()
     try:
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             stats.to_excel(writer, index=False, sheet_name=f"Rapport_{annee}")
-        data_xlsx = out.getvalue()
-    except Exception as e:
-        st.error(f"Export XLSX indisponible : {e}")
-        data_xlsx = None
-
-    if data_xlsx:
         st.download_button(
             "📥 Exporter le rapport (XLSX)",
-            data=data_xlsx,
+            data=out.getvalue(),
             file_name=f"rapport_{annee}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+    except Exception as e:
+        st.error(f"Export XLSX indisponible : {e}")
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
