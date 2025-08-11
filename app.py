@@ -280,16 +280,32 @@ def vue_en_cours_banner(df: pd.DataFrame):
     en_cours["📞 Appeler"] = links[0]
     en_cours["📲 SMS"]     = links[1]
 
-    # Colonnes à afficher
-    cols = ["plateforme","nom_client","date_arrivee_fmt","date_depart_fmt","nuitees","📞 Appeler","📲 SMS"]
+    # ---- Correctif robuste pour éviter KeyError ----
+    # Colonnes à afficher (cible)
+    desired_cols = ["plateforme", "nom_client", "date_arrivee_fmt", "date_depart_fmt", "nuitees", "📞 Appeler", "📲 SMS"]
+
+    # Renommer les colonnes de dates formatées -> noms finaux attendus
     en_cours = en_cours.rename(columns={
         "date_arrivee_fmt": "date_arrivee",
         "date_depart_fmt":  "date_depart"
     })
 
+    # Assurer la présence de 'nuitees'
+    if "nuitees" not in en_cours.columns:
+        def _nuits(r):
+            d1, d2 = r.get("date_arrivee"), r.get("date_depart")
+            if isinstance(d1, date) and isinstance(d2, date):
+                return (d2 - d1).days
+            return ""
+        en_cours["nuitees"] = en_cours.apply(_nuits, axis=1)
+
+    # Ne garder que les colonnes effectivement présentes
+    existing = [c for c in ["plateforme","nom_client","date_arrivee","date_depart","nuitees","📞 Appeler","📲 SMS"] if c in en_cours.columns]
+    df_out = en_cours[existing].copy()
+
     # Rendu HTML pour conserver les liens
     st.markdown(
-        en_cours[cols].to_html(index=False, escape=False),
+        df_out.to_html(index=False, escape=False),
         unsafe_allow_html=True
     )
 
@@ -1029,6 +1045,7 @@ def main():
     df = charger_donnees(st.session_state.cache_buster)
     bouton_telecharger(df)
 
+    # Bandeau "En cours aujourd'hui" (avec liens Appeler/SMS)
     vue_en_cours_banner(df)
 
     st.sidebar.title("🧭 Navigation")
