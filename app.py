@@ -27,7 +27,6 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie/complète : dates -> date(); montants 2 décimales; charges/% ; nuitées; AAAA/MM; colonnes minimales."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
@@ -62,7 +61,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
             for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
         ]
 
-    # AAAA / MM (depuis date_arrivee)
+    # AAAA / MM
     if "date_arrivee" in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else pd.NA)
         df["MM"] = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else pd.NA)
@@ -75,7 +74,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Nettoyer téléphone : enlever éventuelle apostrophe (utilisée pour préserver le '+')
+    # Nettoyer téléphone (préserver + quand export Excel)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -84,7 +83,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
             return s
         df["telephone"] = df["telephone"].apply(_clean_tel)
 
-    # Préparer colonne ical_uid si absente
     if "ical_uid" not in df.columns:
         df["ical_uid"] = ""
 
@@ -95,7 +93,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte une ligne 'total' pour la repousser en bas (nom/plateforme == 'total' ou montants sans dates)."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
@@ -142,7 +139,6 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    """Sauvegarde en Excel; force colonne téléphone en texte grâce à l'apostrophe (préserve le '+')."""
     df = _trier_et_recoller_totaux(ensure_schema(df))
     df_to_save = df.copy()
     if "telephone" in df_to_save.columns:
@@ -189,35 +185,30 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==================== GitHub Save (facultatif) ====================
+# ==================== GitHub Save (optionnel) ====================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 
 def github_save_file(binary: bytes):
-    """Enregistre reservations.xlsx dans un repo GitHub via l'API. Nécessite st.secrets:
-       GITHUB_TOKEN, GITHUB_REPO (owner/repo), GITHUB_BRANCH, GITHUB_PATH
-    """
     try:
         token = st.secrets["GITHUB_TOKEN"]
         repo = st.secrets["GITHUB_REPO"]
         branch = st.secrets.get("GITHUB_BRANCH", "main")
         path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     except Exception:
-        st.error("Secrets GitHub manquants. Ajoute GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH, GITHUB_PATH dans Settings > Secrets.")
+        st.error("Secrets GitHub manquants (GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH, GITHUB_PATH).")
         return False
 
     api_base = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = _github_headers(token)
 
-    # 1) Récupérer le SHA si le fichier existe
+    # SHA si existe
     params = {"ref": branch}
     r_get = requests.get(api_base, headers=headers, params=params)
-    sha = None
-    if r_get.status_code == 200:
-        sha = r_get.json().get("sha")
+    sha = r_get.json().get("sha") if r_get.status_code == 200 else None
 
-    # 2) PUT
+    # PUT
     content_b64 = base64.b64encode(binary).decode("utf-8")
     payload = {"message": f"Update {path} via Streamlit", "content": content_b64, "branch": branch}
     if sha:
@@ -239,18 +230,17 @@ def sidebar_github_controls(df: pd.DataFrame):
         buf_t = BytesIO()
         with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
             _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-        ok = github_save_file(buf_t.getvalue())
-        st.sidebar.write("Test effectué." if ok else "Test échoué.")
+        github_save_file(buf_t.getvalue())
     if c2.button("Sauvegarder XLSX -> GitHub"):
         buf = BytesIO()
         try:
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-            ok = github_save_file(buf.getvalue())
+            github_save_file(buf.getvalue())
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues principales ====================
+# ==================== Vues ====================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -422,7 +412,6 @@ def vue_calendrier(df: pd.DataFrame):
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def _ordered_platforms(existing: list) -> list:
-    """Renvoie l'ordre de colonnes: Booking, Airbnb, Autre, puis les autres (triées)."""
     base = ["Booking", "Airbnb", "Autre"]
     rest = [p for p in existing if p not in base]
     return base + sorted(rest)
@@ -434,7 +423,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # 1 seule année obligatoire
     annees_uniques = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     if not annees_uniques:
         st.info("Aucune année disponible.")
@@ -463,15 +451,15 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Agrégat par mois et plateforme + clé de tri 'ordre'
+    # Agrégat par mois et plateforme + clé de tri numérique
     stats = (
         data.dropna(subset=["MM"])
             .assign(
                 MM=lambda d: d["MM"].astype(int),
-                ordre=lambda d: d["AAAA"].astype(int) * 100 + d["MM"].astype(int),  # ex: 202504
-                mois_label=lambda d: d["MM"].apply(lambda m: f"{m:02d}")  # "01"…"12"
+                ordre=lambda d: d["AAAA"].astype(int) * 100 + d["MM"].astype(int),  # 202504
+                mois_num=lambda d: d["MM"].astype(int)
             )
-            .groupby(["ordre", "mois_label", "plateforme"], dropna=True)
+            .groupby(["ordre", "mois_num", "plateforme"], dropna=True)
             .agg(
                 prix_brut=("prix_brut", "sum"),
                 prix_net=("prix_net", "sum"),
@@ -490,47 +478,42 @@ def vue_rapport(df: pd.DataFrame):
     ordered_cols = _ordered_platforms(stats["plateforme"].unique().tolist())
     stats["plateforme"] = pd.Categorical(stats["plateforme"], categories=ordered_cols, ordered=True)
 
-    # Tableau récap trié (affiche mois "01"…"12")
+    # Tableau (mois 1→12)
     st.dataframe(
-        stats.rename(columns={"mois_label": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
+        stats.rename(columns={"mois_num": "Mois"})[["Mois", "plateforme", "prix_brut", "prix_net", "charges", "nuitees"]],
         use_container_width=True
     )
 
-    # ---- Graphiques : axe X catégoriel "01"… "12" trié par 'ordre', titres d’axes explicites ----
-    mois_labels = [f"{m:02d}" for m in range(1, 12+1)]
-
+    # Graphiques : axe X numérique 1..12, barres groupées par plateforme
     def chart_metric(metric_col: str, titre: str):
-        # Compléter les mois manquants à 0 pour toutes les plateformes
-        # (on se base sur les mois présents dans l'année filtrée)
         base = pd.MultiIndex.from_product(
             [sorted(stats["ordre"].unique()), ordered_cols],
             names=["ordre", "plateforme"]
         )
         filled = (
-            stats.set_index(["ordre", "plateforme"])[["mois_label", metric_col]]
+            stats.set_index(["ordre", "plateforme"])[["mois_num", metric_col]]
                  .reindex(base, fill_value=0)
                  .reset_index()
         )
-        # Pour les mois manquants, on essaie d’inférer un label "01".."12" à partir d’ordre % 100
-        filled["mois_label"] = filled["mois_label"].where(
-            filled["mois_label"].notna(),
+        # Si des mois manquent, on infère depuis 'ordre'
+        filled["mois_num"] = filled["mois_num"].where(
+            filled["mois_num"].notna(),
             filled["ordre"].astype(int) % 100
-        ).apply(lambda m: f"{int(m):02d}")
+        ).astype(int)
 
         ch = (
             alt.Chart(filled)
                .mark_bar()
                .encode(
-                   x=alt.X("mois_label:N",
-                           sort=alt.Sort(field="ordre", order="ascending"),
-                           title="Mois (01–12)"),
+                   x=alt.X("mois_num:O",
+                           scale=alt.Scale(domain=list(range(1,13))),
+                           title="Mois (1–12)"),
+                   xOffset=alt.X("plateforme:N", sort=ordered_cols),
                    y=alt.Y(f"{metric_col}:Q",
                            title=metric_col.replace("_", " ").title()),
-                   color=alt.Color("plateforme:N",
-                                   sort=ordered_cols,
-                                   title="Plateforme"),
+                   color=alt.Color("plateforme:N", sort=ordered_cols, title="Plateforme"),
                    tooltip=[
-                       alt.Tooltip("mois_label:N", title="Mois"),
+                       alt.Tooltip("mois_num:O", title="Mois"),
                        alt.Tooltip("plateforme:N", title="Plateforme"),
                        alt.Tooltip(f"{metric_col}:Q", format=".2f",
                                    title=metric_col.replace("_", " ").title())
@@ -541,9 +524,9 @@ def vue_rapport(df: pd.DataFrame):
         st.markdown(titre)
         st.altair_chart(ch, use_container_width=True)
 
-    chart_metric("prix_brut", "### 💰 Revenus bruts (tri chronologique)")
-    chart_metric("charges",  "### 💸 Charges (tri chronologique)")
-    chart_metric("nuitees",  "### 🛌 Nuitées (tri chronologique)")
+    chart_metric("prix_brut", "### 💰 Revenus bruts (ordre chronologique garanti)")
+    chart_metric("charges",  "### 💸 Charges (ordre chronologique garanti)")
+    chart_metric("nuitees",  "### 🛌 Nuitées (ordre chronologique garanti)")
 
     # Export XLSX
     out = BytesIO()
@@ -619,7 +602,7 @@ def vue_sms(df: pd.DataFrame):
         st.info("Aucune réservation à venir.")
         return
 
-    st.caption("Clique sur 📲 pour ouvrir l'appli Messages de ton Google Pixel avec le SMS pré-rempli.")
+    st.caption("Clique sur 📲 pour ouvrir l'appli Messages avec le SMS pré-rempli.")
 
     TEMPLATE_SMS = (
         "VILLA TOBIAS\n"
@@ -674,7 +657,7 @@ def vue_sms(df: pd.DataFrame):
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
 
-# ==================== iCal parsing ====================
+# ==================== iCal parsing (inchangé) ====================
 
 def _parse_ics_datetime(val: str):
     if not val:
@@ -857,7 +840,15 @@ def vue_sync_ical(df: pd.DataFrame):
         st.info("Aucun événement trouvé dans ce calendrier.")
         return
 
-    plateforme_auto = _guess_platform_from_url(url, plateforme_input or "Autre")
+    # détection plateforme
+    u = (url or "").lower()
+    if "booking.com" in u:
+        plateforme_auto = "Booking"
+    elif "airbnb." in u:
+        plateforme_auto = "Airbnb"
+    else:
+        plateforme_auto = "Autre"
+
     st.write(f"**Plateforme détectée** : {plateforme_auto}")
 
     uids_existants = set((df["ical_uid"].dropna().astype(str).unique()) if "ical_uid" in df.columns else [])
