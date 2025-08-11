@@ -12,24 +12,32 @@ import os
 import re
 import matplotlib.pyplot as plt
 
-# === Boutons pour vider le cache (sidebar + page) ===
-st.sidebar.markdown("### Maintenance")
-if st.sidebar.button("🧹 Vider le cache (sidebar)"):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    st.sidebar.success("Cache vidé.")
-    st.rerun()
-
-with st.expander("🔧 Maintenance (copie du bouton ici)"):
-    if st.button("🧹 Vider le cache (page)"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.success("Cache vidé.")
-        st.rerun()
-
 FICHIER = "reservations.xlsx"
 
-# ==================== Utils généraux ====================
+# =====================================================================
+# BOUTONS DE MAINTENANCE : vider le cache (sidebar + page)
+# =====================================================================
+
+def render_cache_buttons():
+    # Bouton dans la barre latérale
+    st.sidebar.markdown("### 🧰 Maintenance")
+    if st.sidebar.button("🧹 Vider le cache (barre latérale)"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.sidebar.success("Cache vidé (barre latérale).")
+        st.rerun()
+
+    # Bouton dans la page principale (dans un expander)
+    with st.expander("🧹 Vider le cache (dans la page)"):
+        if st.button("♻️ Vider le cache (page)"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.success("Cache vidé (page).")
+            st.rerun()
+
+# =====================================================================
+# Utils généraux
+# =====================================================================
 
 def to_date_only(x):
     if pd.isna(x) or x is None:
@@ -138,7 +146,9 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
     return pd.concat([df_core, df_total], ignore_index=True)
 
-# ==================== Excel I/O (avec cache contrôlé) ====================
+# =====================================================================
+# Excel I/O (lecture avec cache contrôlé)
+# =====================================================================
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
@@ -207,22 +217,16 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-def bouton_clear_cache_sidebar():
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🧹 Vider le cache (data & resources)"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.sidebar.success("Cache vidé.")
-        st.rerun()
-
-# ==================== GitHub Save (optionnel) ====================
+# =====================================================================
+# GitHub Save (optionnel)
+# =====================================================================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 
 def github_save_file(binary: bytes):
     """Enregistre reservations.xlsx dans un repo GitHub via l'API. Nécessite st.secrets:
-       GITHUB_TOKEN, GITHUB_REPO (owner/repo), GITHUB_BRANCH, GITHUB_PATH
+       GITHUB_TOKEN, GITHUB_REPO, GITHUB_BRANCH (main par défaut), GITHUB_PATH
     """
     try:
         token = st.secrets["GITHUB_TOKEN"]
@@ -267,7 +271,9 @@ def sidebar_github_controls(df: pd.DataFrame):
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues ====================
+# =====================================================================
+# Vues
+# =====================================================================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -510,6 +516,7 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
+    # Graphes matplotlib : X = 1..12 (ordre chronologique garanti)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)  # 0..11
@@ -651,7 +658,9 @@ def vue_sms(df: pd.DataFrame):
         with st.expander(f"Aperçu du message pour {nom}"):
             st.text(message)
 
-# ==================== iCal parsing & Sync ====================
+# =====================================================================
+# iCal parsing & Sync
+# =====================================================================
 
 def _parse_ics_datetime(val: str):
     if not val:
@@ -895,16 +904,20 @@ def vue_sync_ical(df: pd.DataFrame):
         st.success("✅ Import iCal effectué.")
         st.rerun()
 
-# ==================== App ====================
+# =====================================================================
+# App
+# =====================================================================
 
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+
+    # 👇 Boutons de cache très visibles (sidebar + page)
+    render_cache_buttons()
 
     st.sidebar.title("📁 Fichier")
     bouton_restaurer()
     df = charger_donnees()
     bouton_telecharger(df)
-    bouton_clear_cache_sidebar()       # ← le bouton Vider le cache est ici
     sidebar_github_controls(df)
 
     st.sidebar.title("🧭 Navigation")
