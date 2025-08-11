@@ -23,7 +23,6 @@ ICAL_STORE = "ical_calendars.json"  # stockage des calendriers (plateforme + url
 _money_re = re.compile(r"[^0-9,.\-]")
 
 def to_money(x):
-    """'1 234,50 €' -> 1234.50 (float)."""
     if pd.isna(x) or x is None:
         return np.nan
     s = str(x).strip()
@@ -45,22 +44,19 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def clean_tel_display(x: str) -> str:
-    """Retourne un numéro 'propre' pour affichage (on ne force pas le +)."""
     if pd.isna(x) or x is None:
         return ""
     s = str(x).strip()
     return s[1:] if s.startswith("'") else s
 
 def tel_to_uri(x: str) -> str:
-    """Transforme un numéro en URI tel: (garde + si présent)."""
     s = clean_tel_display(x)
-    s = re.sub(r"[ \-\.]", "", s)  # enlève espaces, tirets, points
+    s = re.sub(r"[ \-\.]", "", s)
     if not s:
         return ""
     return f"tel:{s}"
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie et normalise le schéma + types."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
@@ -70,7 +66,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(to_date_only)
 
-    # Numériques propres (gère € et virgules)
+    # Numériques propres
     for col in ["prix_brut", "prix_net", "charges", "%"]:
         if col in df.columns:
             if df[col].dtype == object or (df[col].dtype.kind not in "fi"):
@@ -124,7 +120,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
-    """Détecte les lignes 'Total' (ou équivalentes sans dates mais avec montants)."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
@@ -142,7 +137,6 @@ def _marque_totaux(df: pd.DataFrame) -> pd.Series:
     return mask | (has_no_dates & has_money)
 
 def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
-    """Tri par date_arrivee puis nom, lignes 'Total' à la fin."""
     if df is None or df.empty:
         return df
     df = df.copy()
@@ -175,7 +169,6 @@ def charger_donnees(cache_buster: int = 0) -> pd.DataFrame:
 def sauvegarder_donnees(df: pd.DataFrame):
     df = _trier_et_recoller_totaux(ensure_schema(df))
     df_to_save = df.copy()
-    # Mise au format 'texte' pour le téléphone -> pour conserver le '+'
     if "telephone" in df_to_save.columns:
         def _to_excel_text(s):
             s = "" if pd.isna(s) else str(s).strip()
@@ -224,11 +217,9 @@ def bouton_telecharger(df: pd.DataFrame):
 # =========================  BANDEAU "EN COURS"  ============================
 
 def vue_en_cours_banner(df: pd.DataFrame):
-    """Bandeau des séjours en cours aujourd'hui (avant la navigation)."""
     if df is None or df.empty:
         return
     dft = ensure_schema(df).copy()
-    # Exclure les lignes 'Total'
     mask_total = _marque_totaux(dft)
     today = date.today()
 
@@ -248,12 +239,10 @@ def vue_en_cours_banner(df: pd.DataFrame):
         st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
         return
 
-    # Tri + formatage dates
     en_cours = en_cours.sort_values(["date_depart", "nom_client"])
     en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
     en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
-    # Colonne téléphone -> lien "📞 Appeler"
     en_cours["telephone"] = en_cours["telephone"].apply(
         lambda x: (lambda u: f'<a href="{u}">📞 Appeler</a>')(tel_to_uri(x)) if str(x).strip() != "" else ""
     )
@@ -261,7 +250,6 @@ def vue_en_cours_banner(df: pd.DataFrame):
     cols = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","telephone"]
     cols = [c for c in cols if c in en_cours.columns]
 
-    # Affichage HTML pour autoriser le lien tel:
     st.markdown(
         en_cours[cols].rename(columns={"telephone": "📞 Appeler"}).to_html(index=False, escape=False),
         unsafe_allow_html=True
@@ -277,7 +265,6 @@ def vue_reservations(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # Filtres
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     colf1, colf2, colf3 = st.columns(3)
 
@@ -292,7 +279,6 @@ def vue_reservations(df: pd.DataFrame):
         mois_opts = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
         mois_sel = st.selectbox("Mois (01–12)", mois_opts, key="res_mois")
 
-    # Appliquer filtres
     data = df.copy()
     if filtre_pf != "Toutes":
         data = data[data["plateforme"] == filtre_pf]
@@ -305,7 +291,6 @@ def vue_reservations(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Masquage : cacher uniquement les lignes à 0 ET nom_client vide (mais pas 'Total')
     mask_zero_and_no_name = (
         (data["prix_brut"].fillna(0) == 0) &
         (data["prix_net"].fillna(0) == 0) &
@@ -315,12 +300,10 @@ def vue_reservations(df: pd.DataFrame):
     is_total = _marque_totaux(data)
     to_display = data[~(mask_zero_and_no_name & ~is_total)].copy()
 
-    # Totaux (hors 'Total')
     core = data[~is_total].copy()
     for c in ["prix_brut","prix_net","charges","nuitees"]:
         core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
-    # €/nuit
     to_display["prix_brut/nuit"] = (
         (pd.to_numeric(to_display["prix_brut"], errors="coerce") /
          pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
@@ -332,7 +315,6 @@ def vue_reservations(df: pd.DataFrame):
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
 
-    # Dates formatées + lien "📞 Appeler" à la place du n° brut
     show = to_display.sort_values(["date_arrivee","nom_client"], na_position="last").copy()
     for col in ["date_arrivee","date_depart"]:
         if col in show.columns:
@@ -348,13 +330,11 @@ def vue_reservations(df: pd.DataFrame):
     ]
     cols = [c for c in cols if c in show.columns]
 
-    # Affichage HTML pour autoriser le lien tel:
     st.markdown(
         show[cols].rename(columns={"telephone":"📞 Appeler"}).to_html(index=False, escape=False),
         unsafe_allow_html=True
     )
 
-    # Totaux affichés
     tot_ctrl = {
         "prix_brut": float(core["prix_brut"].sum()),
         "prix_net":  float(core["prix_net"].sum()),
@@ -375,7 +355,6 @@ def vue_reservations(df: pd.DataFrame):
     cF.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
     cG.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
 
-    # Export CSV
     csv = show[cols].rename(columns={"telephone":"📞 Appeler"}).to_csv(index=False).encode("utf-8")
     st.download_button(
         "📥 Télécharger la sélection (CSV)",
@@ -545,32 +524,23 @@ def vue_calendrier(df: pd.DataFrame):
 # ---------- Rapport : pipeline propre ----------
 
 def _df_agreg_rapport(df: pd.DataFrame) -> pd.DataFrame:
-    """ Nettoyage strict pour des chiffres fiables (exclut 'Total', na, etc.). """
     if df is None or df.empty:
         return pd.DataFrame()
     core = ensure_schema(df).copy()
 
-    # Exclure 'Total' / lignes sans dates
     is_total = _marque_totaux(core)
     core = core[~is_total].copy()
-
-    # Garder lignes avec arrivee valide
     core = core[core["date_arrivee"].apply(lambda d: isinstance(d, date))].copy()
 
-    # Numériques sûrs
     for c in ["prix_brut","prix_net","charges","nuitees"]:
         core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
 
-    # AAAA/MM sûrs
     core["AAAA"] = pd.to_numeric(core["AAAA"], errors="coerce")
     core["MM"]   = pd.to_numeric(core["MM"], errors="coerce")
     core = core.dropna(subset=["AAAA","MM"])
     core["AAAA"] = core["AAAA"].astype(int)
     core["MM"]   = core["MM"].astype(int)
-
-    # Plateforme propre
     core["plateforme"] = core["plateforme"].fillna("Autre").astype(str)
-
     return core
 
 def vue_rapport(df: pd.DataFrame):
@@ -580,7 +550,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée exploitable.")
         return
 
-    # Filtres
     annees = sorted(core["AAAA"].unique().tolist())
     annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
@@ -601,7 +570,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Agrégation par (MM, plateforme)
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -611,7 +579,6 @@ def vue_rapport(df: pd.DataFrame):
             .reset_index()
     )
 
-    # Compléter pour GRAPHIQUES (12 mois) + calcul €/nuit par groupe
     plats = sorted(stats["plateforme"].unique().tolist())
     full_rows = []
     for m in range(1, 13):
@@ -623,7 +590,6 @@ def vue_rapport(df: pd.DataFrame):
                 full_rows.append(row.iloc[0].to_dict())
     stats_full = pd.DataFrame(full_rows).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # €/nuit (par groupe)
     stats_full["brut/nuit"] = (
         (pd.to_numeric(stats_full["prix_brut"], errors="coerce") /
          pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
@@ -635,7 +601,6 @@ def vue_rapport(df: pd.DataFrame):
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
 
-    # Tableau sans lignes totalement à zéro
     stats_table = stats_full[
         ~(
             (stats_full["prix_brut"].round(2) == 0) &
@@ -645,14 +610,12 @@ def vue_rapport(df: pd.DataFrame):
         )
     ].copy()
 
-    # Tableau
     st.subheader(f"Détail {annee}")
     affiche = stats_table.rename(columns={"MM": "Mois"})[
         ["Mois","plateforme","prix_brut","prix_net","charges","nuitees","brut/nuit","net/nuit"]
     ]
     st.dataframe(affiche, use_container_width=True)
 
-    # Totaux (calcul direct sur data filtrées) + €/nuit global
     tot_ctrl = {
         "prix_brut": float(data["prix_brut"].sum()),
         "prix_net":  float(data["prix_net"].sum()),
@@ -671,7 +634,6 @@ def vue_rapport(df: pd.DataFrame):
     colE.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
     colF.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
 
-    # Graphes matplotlib : X = 1..12
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -747,7 +709,7 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
-# =========================  SMS (préparation)  ==============================
+# =========================  SMS (manuel amélioré)  ==============================
 
 def sms_message(row: pd.Series) -> str:
     arrivee = format_date_str(row.get("date_arrivee"))
@@ -782,50 +744,74 @@ def log_sms(nom, telephone, message):
     except Exception:
         pass
 
+def _filter_sms_candidates(df: pd.DataFrame, mode: str, d1: date | None, d2: date | None):
+    core = _trier_et_recoller_totaux(ensure_schema(df)).copy()
+    core = core[core["date_arrivee"].apply(lambda d: isinstance(d, date))]
+    if mode == "today":
+        return core[core["date_arrivee"] == date.today()]
+    if mode == "tomorrow":
+        return core[core["date_arrivee"] == (date.today() + timedelta(days=1))]
+    if mode == "range" and d1 and d2:
+        return core[(core["date_arrivee"] >= d1) & (core["date_arrivee"] <= d2)]
+    return core
+
 def vue_sms(df: pd.DataFrame):
-    st.title("✉️ SMS (préparation)")
+    st.title("✉️ SMS — envoi manuel optimisé")
     df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune réservation pour SMS.")
         return
 
-    demain = date.today() + timedelta(days=1)
-    arrivees_demain = df[df["date_arrivee"] == demain]
-    mode = st.radio("Sélection", ["Arrivées demain", "Choisir une réservation"])
+    st.markdown("Choisissez une sélection :")
+    mode = st.radio("", ["Arrivées aujourd’hui", "Arrivées demain", "Plage de dates", "Choisir manuellement"], horizontal=True)
+    d1 = d2 = None
+    if mode == "Plage de dates":
+        colA, colB = st.columns(2)
+        with colA:
+            d1 = st.date_input("Du", value=date.today())
+        with colB:
+            d2 = st.date_input("Au", value=date.today() + timedelta(days=7), min_value=d1)
 
-    if mode == "Arrivées demain":
-        if arrivees_demain.empty:
-            st.info("Aucune arrivée demain.")
-            return
-        cible = st.selectbox(
-            "Réservation",
-            arrivees_demain.index,
-            format_func=lambda i: f"{arrivees_demain.at[i,'nom_client']} | {format_date_str(arrivees_demain.at[i,'date_arrivee'])}"
-        )
-        row = arrivees_demain.loc[cible]
-    else:
-        cible = st.selectbox(
+    if mode == "Choisir manuellement":
+        idx = st.selectbox(
             "Réservation",
             df.index,
             format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])}"
         )
-        row = df.loc[cible]
+        rows = df.loc[[idx]].copy()
+    else:
+        flt_mode = {"Arrivées aujourd’hui":"today","Arrivées demain":"tomorrow","Plage de dates":"range"}[mode]
+        rows = _filter_sms_candidates(df, flt_mode, d1, d2)
+        if rows.empty:
+            st.info("Aucune réservation ne correspond à ce filtre.")
+            return
 
-    message = sms_message(row)
-    st.text_area("Message SMS", value=message, height=220)
-    tel = clean_tel_display(row.get("telephone"))
+    st.markdown("### Résultats")
+    st.caption("Cliquez sur 📲 Ouvrir SMS pour lancer l’app Messages avec le texte pré-rempli. Cliquez sur 📞 Appeler pour composer le numéro.")
+    prep_all = st.checkbox("🧰 Tout préparer (affiche tous les messages)")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if tel:
-            url = f"sms:{re.sub(r'[ \\-\\.]','',tel)}?&body={quote(message)}"
-            st.markdown(f"[📲 Ouvrir SMS sur votre mobile]({url})", unsafe_allow_html=True)
-        else:
-            st.warning("Pas de numéro de téléphone enregistré.")
-    with col2:
-        if st.button("✅ Marquer comme envoyé (journal)"):
-            log_sms(str(row.get("nom_client") or ""), tel, message)
-            st.success("Journal SMS mis à jour.")
+    for i, (_, r) in enumerate(rows.sort_values(["date_arrivee","nom_client"]).iterrows(), start=1):
+        nom = str(r.get("nom_client") or "")
+        tel = clean_tel_display(r.get("telephone"))
+        msg = sms_message(r)
+        sms_uri = f"sms:{re.sub(r'[ \\-\\.]','',tel)}?&body={quote(msg)}" if tel else ""
+        tel_uri = tel_to_uri(tel)
+
+        with st.expander(f"{i}. {nom} — arrivée le {format_date_str(r.get('date_arrivee'))}", expanded=prep_all):
+            st.text_area("Message", value=msg, height=220, key=f"sms_text_{i}")
+            cols = st.columns(3)
+            with cols[0]:
+                if sms_uri:
+                    st.markdown(f"[📲 Ouvrir SMS]({sms_uri})", unsafe_allow_html=True)
+                else:
+                    st.warning("Numéro manquant")
+            with cols[1]:
+                if tel_uri:
+                    st.markdown(f"[📞 Appeler]({tel_uri})", unsafe_allow_html=True)
+            with cols[2]:
+                if st.button("✅ Marquer comme envoyé", key=f"log_{i}"):
+                    log_sms(nom, tel, msg)
+                    st.success("Journal SMS mis à jour.")
 
     st.divider()
     st.subheader("Historique SMS (CSV)")
@@ -853,7 +839,6 @@ def save_calendars(cals: list[dict]):
         st.error(f"Impossible d'enregistrer la liste des calendriers : {e}")
 
 def parse_ics(text: str):
-    """Parse minimal : DTSTART/DTEND, SUMMARY, UID -> {uid,start,end,summary}."""
     events = []
     blocks = re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", text, flags=re.S)
     for b in blocks:
@@ -884,7 +869,6 @@ def parse_ics(text: str):
     return events
 
 def import_events_into_df(df: pd.DataFrame, events: list[dict], plateforme: str) -> tuple[pd.DataFrame, int, int]:
-    """Ajoute les événements dans df (zéro prix), skip si ical_uid déjà présent."""
     df = ensure_schema(df).copy()
     existing_uids = set(str(x) for x in df.get("ical_uid", pd.Series([], dtype=str)).fillna(""))
 
@@ -923,7 +907,6 @@ def vue_sync_ical(df: pd.DataFrame):
     st.title("🔄 Synchroniser iCal (multi-calendriers)")
     st.caption("Gérez plusieurs calendriers (Booking, Airbnb, etc.). Ajoutez un calendrier puis importez-le. Les UID iCal existants sont ignorés pour éviter les doublons.")
 
-    # ---- Gestion de la liste des calendriers
     cals = load_calendars()
     with st.expander("📒 Mes calendriers configurés", expanded=True):
         if not cals:
@@ -952,7 +935,6 @@ def vue_sync_ical(df: pd.DataFrame):
 
     st.divider()
 
-    # ---- Import global
     col_all1, col_all2 = st.columns(2)
     with col_all1:
         if st.button("📥 Tout importer (tous les calendriers)"):
@@ -977,7 +959,6 @@ def vue_sync_ical(df: pd.DataFrame):
     with col_all2:
         st.caption("Astuce : utilisez les boutons d’action à côté de chaque calendrier pour importer individuellement.")
 
-    # ---- Import individuel
     st.subheader("Importer un calendrier")
     if not cals:
         st.info("Ajoutez d’abord un calendrier ci-dessus.")
@@ -1002,7 +983,6 @@ def vue_sync_ical(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # Gestion cache côté utilisateur
     if "cache_buster" not in st.session_state:
         st.session_state.cache_buster = 0
 
@@ -1016,7 +996,6 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Kill-switch URL ?clear=1
     params = st.query_params
     clear_val = params.get("clear", ["0"])[0] if isinstance(params.get("clear"), list) else params.get("clear")
     if clear_val == "1":
@@ -1034,7 +1013,6 @@ def main():
     df = charger_donnees(st.session_state.cache_buster)
     bouton_telecharger(df)
 
-    # ➜ Affiche le bandeau "En cours aujourd’hui" avant la navigation
     vue_en_cours_banner(df)
 
     st.sidebar.title("🧭 Navigation")
