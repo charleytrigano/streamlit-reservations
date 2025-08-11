@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 FICHIER = "reservations.xlsx"
 
-# ==================== Utilitaires ====================
+# ==================== Utils généraux ====================
 
 def to_date_only(x):
     if pd.isna(x) or x is None:
@@ -28,12 +28,12 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise le schéma : dates (date), montants (2 déc.), charges/% calculés, nuitées, AAAA/MM, téléphone texte."""
+    """Nettoie/complète : dates -> date(); montants 2 décimales; charges/% ; nuitées; AAAA/MM; colonnes minimales."""
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
 
-    # Dates -> date
+    # Dates -> date (strip heure)
     if "date_arrivee" in df.columns:
         df["date_arrivee"] = df["date_arrivee"].apply(to_date_only)
     if "date_depart" in df.columns:
@@ -76,7 +76,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : supprimer éventuelle apostrophe d’Excel (on la remettra à la sauvegarde)
+    # Téléphone : enlever éventuelle apostrophe d’Excel (on la remettra à la sauvegarde)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -96,12 +96,14 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
+    """Détecte une ligne 'total' pour la repousser en bas (par ex. nom_client='total')."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     mask = pd.Series(False, index=df.index)
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
-            mask |= df[col].astype(str).str.strip().str.lower().eq("total")
+            m = df[col].astype(str).str.strip().str.lower().eq("total")
+            mask = mask | m
     has_no_dates = pd.Series(True, index=df.index)
     if "date_arrivee" in df.columns:
         has_no_dates &= df["date_arrivee"].isna()
@@ -123,15 +125,22 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
     by_cols = [c for c in ["date_arrivee","nom_client"] if c in df_core.columns]
     if by_cols:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
-    return pd.concat([df_core, df_total], ignore_index=True)
+    out = pd.concat([df_core, df_total], ignore_index=True)
+    return out
 
-# ==================== Excel I/O ====================
+# ==================== Excel I/O (avec cache contrôlé) ====================
+
+@st.cache_data(show_spinner=False)
+def _read_excel_cached(path: str, mtime: float):
+    """Lecture Excel mise en cache. Le paramètre mtime casse le cache si le fichier change."""
+    return pd.read_excel(path)
 
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
         return pd.DataFrame()
     try:
-        df = pd.read_excel(FICHIER)
+        mtime = os.path.getmtime(FICHIER)
+        df = _read_excel_cached(FICHIER, mtime)  # cache invalidé si le fichier a changé
         df = ensure_schema(df)
         df = _trier_et_recoller_totaux(df)
         return df
@@ -140,6 +149,9 @@ def charger_donnees() -> pd.DataFrame:
         return pd.DataFrame()
 
 def sauvegarder_donnees(df: pd.DataFrame):
+    """Sauvegarde en Excel; force colonne téléphone en texte grâce à l'apostrophe (préserve le '+').
+       Invalide explicitement le cache de données après écriture.
+    """
     df = _trier_et_recoller_totaux(ensure_schema(df))
     df_to_save = df.copy()
     if "telephone" in df_to_save.columns:
@@ -152,6 +164,8 @@ def sauvegarder_donnees(df: pd.DataFrame):
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
             df_to_save.to_excel(writer, index=False)
+        # Invalidation du cache après écriture
+        st.cache_data.clear()
         st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
@@ -162,7 +176,7 @@ def bouton_restaurer():
         try:
             df_new = pd.read_excel(up)
             df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
-            sauvegarder_donnees(df_new)
+            sauvegarder_donnees(df_new)  # clear cache inside
             st.sidebar.success("✅ Fichier restauré.")
             st.rerun()
         except Exception as e:
@@ -186,26 +200,42 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==================== Sauvegarde GitHub (optionnel) ====================
+def bouton_clear_cache():
+    if st.sidebar.button("🧹 Vider le cache"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.sidebar.success("Cache vidé.")
+        st.rerun()
+
+# ==================== GitHub Save (optionnel) ====================
 
 def _github_headers(token: str):
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
 
 def github_save_file(binary: bytes):
+    """Enregistre reservations.xlsx dans un repo GitHub via l'API. Nécessite st.secrets:
+       GITHUB_TOKEN, GITHUB_REPO (owner/repo), GITHUB_BRANCH, GITHUB_PATH
+    """
     try:
         token = st.secrets["GITHUB_TOKEN"]
         repo = st.secrets["GITHUB_REPO"]
         branch = st.secrets.get("GITHUB_BRANCH", "main")
         path = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
     except Exception:
+        # Secrets non configurés : ne pas bloquer l'app
         return False
 
     api_base = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = _github_headers(token)
 
-    r_get = requests.get(api_base, headers=headers, params={"ref": branch})
-    sha = r_get.json().get("sha") if r_get.status_code == 200 else None
+    # 1) Récupérer le SHA si le fichier existe
+    params = {"ref": branch}
+    r_get = requests.get(api_base, headers=headers, params=params)
+    sha = None
+    if r_get.status_code == 200:
+        sha = r_get.json().get("sha")
 
+    # 2) PUT
     content_b64 = base64.b64encode(binary).decode("utf-8")
     payload = {"message": f"Update {path} via Streamlit", "content": content_b64, "branch": branch}
     if sha:
@@ -234,7 +264,7 @@ def sidebar_github_controls(df: pd.DataFrame):
         except Exception as e:
             st.sidebar.error(f"Erreur export: {e}")
 
-# ==================== Vues ====================
+# ==================== Vues principales ====================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -425,14 +455,14 @@ def vue_rapport(df: pd.DataFrame):
     df["AAAA"] = df["AAAA"].astype(int)
     df["MM"]   = df["MM"].astype(int)
 
-    # Sélection année (par défaut la plus récente)
+    # Sélection année (par défaut la plus récente) + DEBUG
     annees = sorted(df["AAAA"].unique().tolist())
     if not annees:
         st.info("Aucune année disponible.")
         return
     annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
 
-    # Filtre strict par année
+    # Filtre strict par année + message debug
     data = df[df["AAAA"] == int(annee)].copy()
     years_left = sorted(data["AAAA"].unique().tolist())
     st.caption(f"🔎 Année sélectionnée: {annee} | Années trouvées après filtre: {years_left}")
@@ -482,7 +512,7 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # Tableau
+    # Tableau (ordre 1→12 garanti)
     st.dataframe(
         stats.rename(columns={"MM": "Mois"})[["Mois","plateforme","prix_brut","prix_net","charges","nuitees"]],
         use_container_width=True
@@ -803,7 +833,7 @@ def vue_sync_ical(df: pd.DataFrame):
         st.info("Aucun événement trouvé dans ce calendrier.")
         return
 
-    # Détection plateforme
+    # détection plateforme
     u = (url or "").lower()
     if "booking.com" in u:
         plateforme_auto = "Booking"
@@ -884,6 +914,7 @@ def main():
     bouton_restaurer()
     df = charger_donnees()
     bouton_telecharger(df)
+    bouton_clear_cache()  # bouton pour vider le cache
     sidebar_github_controls(df)
 
     st.sidebar.title("🧭 Navigation")
