@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS)
+# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS) — cache + totaux dark friendly
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,10 @@ from io import BytesIO
 from urllib.parse import quote
 import os
 
-# === Bouton Maintenance : vider le cache ===
+FICHIER = "reservations.xlsx"
+
+# ==============================  MAINTENANCE / CACHE  ==============================
+
 def render_cache_button_sidebar():
     st.sidebar.markdown("## 🧰 Maintenance")
     if st.sidebar.button("♻️ Vider le cache et relancer"):
@@ -23,8 +26,6 @@ def render_cache_button_sidebar():
             pass
         st.sidebar.success("Cache vidé. Redémarrage…")
         st.rerun()
-
-FICHIER = "reservations.xlsx"
 
 # ==============================  OUTILS  ==============================
 
@@ -306,7 +307,7 @@ def vue_reservations(df: pd.DataFrame):
     core, totals = split_totals(ensure_schema(df))
     core = sort_core(core)
 
-    # Totaux
+    # Totaux (lisibles thème sombre/clair)
     if not core.empty:
         total_brut   = core["prix_brut"].sum(skipna=True)
         total_net    = core["prix_net"].sum(skipna=True)
@@ -316,23 +317,39 @@ def vue_reservations(df: pd.DataFrame):
 
         st.markdown(
             f"""
-            <div style="display:flex;flex-wrap:wrap;gap:12px;margin:8px 0 16px 0;">
-              <div style="padding:8px 12px;border-radius:8px;background:#f5f5f5;">
-                <b>Total Brut</b><br>{total_brut:,.2f} €
-              </div>
-              <div style="padding:8px 12px;border-radius:8px;background:#f5f5f5;">
-                <b>Total Net</b><br>{total_net:,.2f} €
-              </div>
-              <div style="padding:8px 12px;border-radius:8px;background:#f5f5f5;">
-                <b>Total Charges</b><br>{total_chg:,.2f} €
-              </div>
-              <div style="padding:8px 12px;border-radius:8px;background:#f5f5f5;">
-                <b>Total Nuitées</b><br>{int(total_nuits) if pd.notna(total_nuits) else 0}
-              </div>
-              <div style="padding:8px 12px;border-radius:8px;background:#f5f5f5;">
-                <b>Commission moy.</b><br>{pct_moy:.2f} %
-              </div>
-            </div>
+<style>
+.chips-wrap {{
+  display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0;
+}}
+.chip {{
+  padding:10px 12px; border-radius:10px;
+  background: rgba(127,127,127,0.15);  /* OK thème clair/sombre */
+  border: 1px solid rgba(127,127,127,0.25);
+}}
+.chip b {{ display:block; margin-bottom:4px; }}
+</style>
+<div class="chips-wrap">
+  <div class="chip">
+    <b>Total Brut</b>
+    <div>{total_brut:,.2f} €</div>
+  </div>
+  <div class="chip">
+    <b>Total Net</b>
+    <div>{total_net:,.2f} €</div>
+  </div>
+  <div class="chip">
+    <b>Total Charges</b>
+    <div>{total_chg:,.2f} €</div>
+  </div>
+  <div class="chip">
+    <b>Total Nuitées</b>
+    <div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div>
+  </div>
+  <div class="chip">
+    <b>Commission moy.</b>
+    <div>{pct_moy:.2f} %</div>
+  </div>
+</div>
             """,
             unsafe_allow_html=True
         )
@@ -698,6 +715,9 @@ def vue_sms(df: pd.DataFrame):
 
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+
+    # Bouton maintenance (vider cache)
+    render_cache_button_sidebar()
 
     # Barre latérale : fichiers
     st.sidebar.title("📁 Fichier")
