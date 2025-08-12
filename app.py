@@ -1,4 +1,4 @@
-# app.py — Réservations Villa Tobias (totaux corrigés + thème sombre + push GitHub optionnel)
+# app.py — Réservations Villa Tobias (totaux st.metric + correctifs)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -45,23 +45,6 @@ def inject_css():
 
           /* Boutons à droite du titre */
           .btn-right { display: flex; justify-content: flex-end; gap:.5rem; align-items:center; }
-
-          /* Barre de métriques responsive */
-          .metrics-row{
-            display:flex; flex-wrap:wrap; gap:.5rem; align-items:stretch;
-            margin: .25rem 0 .75rem 0;
-          }
-          .chip{
-            background: var(--chip-bg);
-            border: 1px solid var(--chip-border);
-            border-radius: .6rem;
-            padding: .5rem .65rem;
-            min-width: 140px;
-            color: var(--chip-text);
-          }
-          .chip .lbl { font-size:.85rem; opacity:.9; }
-          .chip .val { font-weight:600; font-variant-numeric: tabular-nums; }
-          .chip .sub { font-size:.82rem; opacity:.75; margin-top:.1rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -101,47 +84,53 @@ def render_cache_button_sidebar():
         st.sidebar.success("Cache vidé. Redémarrage…")
         st.rerun()
 
+# ====== NOUVELLE BARRE DE TOTAUX (st.metric) — fiable mobile & sombre ======
+
 def metrics_bar(df: pd.DataFrame, prefix: str = ""):
-    """Barre de métriques compatible thème sombre + responsive mobile (totaux corrects)."""
+    """Totaux avec st.metric (fiable sur mobile & thème sombre)."""
     if df is None or df.empty:
         return
-    tmp = df.copy()
-    # Conserve uniquement les lignes normales (exclut lignes 'Total')
-    tmp = tmp[~_marque_totaux(tmp)] if not tmp.empty else tmp
 
+    # Exclut les lignes "Total" si elles existent
+    base = df.copy()
+    if not base.empty:
+        base = base[~_marque_totaux(base)]
+
+    # Casts
     for c in ["prix_brut", "prix_net", "charges", "nuitees", "%"]:
-        tmp[c] = pd.to_numeric(tmp.get(c, 0), errors="coerce").fillna(0)
+        base[c] = pd.to_numeric(base.get(c, 0), errors="coerce").fillna(0)
 
-    brut = float(tmp["prix_brut"].sum())
-    net = float(tmp["prix_net"].sum())
-    ch = float(tmp["charges"].sum())
-    nts = float(tmp["nuitees"].sum())
-    pct_mean = (float((tmp["%"] * tmp["prix_brut"]).sum() / tmp["prix_brut"].replace(0, np.nan).sum())
-                if tmp["prix_brut"].sum() else 0.0)
+    brut = float(base["prix_brut"].sum())
+    net  = float(base["prix_net"].sum())
+    ch   = float(base["charges"].sum())
+    nts  = float(base["nuitees"].sum())
+
+    # Commission moyenne pondérée par le CA brut
+    if brut > 0:
+        pct_mean = float((base["%"] * base["prix_brut"]).sum() / base["prix_brut"].replace(0, np.nan).sum())
+    else:
+        pct_mean = 0.0
+
     brut_nuit = (brut / nts) if nts else 0.0
     net_nuit  = (net / nts) if nts else 0.0
 
-    def chip_html(label, value, sub=None):
-        sub_html = f"<div class='sub'>{sub}</div>" if sub else ""
-        return f"""
-        <div class="chip">
-          <div class="lbl">{label}</div>
-          <div class="val">{value}</div>
-          {sub_html}
-        </div>
-        """
+    # Label “Total …” si prefix est fourni, sinon libellé simple
+    def lbl(name):
+        return (f"Total {name}" if prefix else name)
 
-    html = "<div class='metrics-row'>"
-    html += chip_html(prefix + "Brut", f"{brut:,.2f} €".replace(",", " "),
-                      f"{brut_nuit:,.2f} €/nuit".replace(",", " "))
-    html += chip_html(prefix + "Net", f"{net:,.2f} €".replace(",", " "),
-                      f"{net_nuit:,.2f} €/nuit".replace(",", " "))
-    html += chip_html(prefix + "Charges", f"{ch:,.2f} €".replace(",", " "))
-    html += chip_html(prefix + "Nuitées", f"{int(nts)}")
-    html += chip_html(prefix + "Commission moy.", f"{pct_mean:.2f} %")
-    html += "</div>"
-
-    st.markdown(html, unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric(lbl("brut"), f"{brut:,.2f} €".replace(",", " "),
+                  help=f"{brut_nuit:,.2f} €/nuit".replace(",", " "))
+    with c2:
+        st.metric(lbl("net"), f"{net:,.2f} €".replace(",", " "),
+                  help=f"{net_nuit:,.2f} €/nuit".replace(",", " "))
+    with c3:
+        st.metric(lbl("charges"), f"{ch:,.2f} €".replace(",", " "))
+    with c4:
+        st.metric(lbl("nuitées"), f"{int(nts)}")
+    with c5:
+        st.metric("Commission moyenne", f"{pct_mean:.2f} %")
 
 # ==============================  UTILS / SCHEMA  ===========================
 
