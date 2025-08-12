@@ -1,4 +1,4 @@
-# app.py — Réservations Villa Tobias (calendrier compact + totaux blancs dans rapport)
+# app.py — Réservations Villa Tobias (UI compactée : libellés inline + filtres sur 1 ligne)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -33,16 +33,27 @@ def inject_css():
           .stTable td, .stTable th { font-size: 0.92rem; }
           h2, h3 { letter-spacing: 0.2px; }
           section[data-testid="stSidebar"] button { padding: .3rem .55rem !important; }
+          .inline-label { font-size:.9rem; color:#333; padding:.35rem .4rem .35rem 0; white-space:nowrap; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+def inline_input(label_text, widget_fn, key=None, col_ratio=(1,3), **widget_kwargs):
+    """
+    Rend un champ avec libellé sur la même ligne :
+    | [label] | [widget] |
+    """
+    c1, c2 = st.columns(col_ratio)
+    with c1:
+        st.markdown(f"<div class='inline-label'>{label_text}</div>", unsafe_allow_html=True)
+    with c2:
+        # on masque le label du widget
+        widget_kwargs.setdefault("label_visibility", "collapsed")
+        return widget_fn(label_text, key=key, **widget_kwargs)
+
 def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "card"):
-    """
-    Barre de totaux.
-    theme = "card" (fond gris clair) ou "plain" (fond blanc, bordure fine).
-    """
+    """Barre de totaux. theme = 'card' (gris) ou 'plain' (blanc)."""
     if df is None or df.empty:
         return
     tmp = df.copy()
@@ -63,13 +74,12 @@ def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "card"):
 
     bg = "#FAFAFA" if theme == "card" else "#FFFFFF"
     border = "#E6E6E6"
-    fz = ".9rem" if theme == "card" else ".9rem"
 
     def chip(label, value, sub=None):
         sub = f"<div style='opacity:.7'>{sub}</div>" if sub else ""
         return (
             f"<div style='padding:.35rem .55rem;border:1px solid {border};border-radius:.5rem;"
-            f"font-size:{fz};line-height:1.2;background:{bg}'>"
+            f"font-size:.9rem;line-height:1.2;background:{bg}'>"
             f"<div style='font-weight:600'>{label}</div>"
             f"<div style='font-variant-numeric: tabular-nums;'>{value}</div>"
             f"{sub}</div>"
@@ -88,7 +98,6 @@ def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "card"):
     cD.markdown(chip(prefix + "Nuitées", f"{int(nts)}"), unsafe_allow_html=True)
     cE.markdown(chip(prefix + "Commission moy.", f"{pct_mean:.2f} %"), unsafe_allow_html=True)
 
-# version compacte par défaut ailleurs
 def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
     return metrics_bar(df, prefix=prefix, theme="card")
 
@@ -291,7 +300,6 @@ def tel_to_uri(s: str) -> str:
     return f"tel:{s_uri}"
 
 def sms_message(row: pd.Series) -> str:
-    """Modèle d’SMS d’accueil (utilisé pour lien SMS)."""
     nom = str(row.get("nom_client") or "").strip()
     plateforme = str(row.get("plateforme") or "").strip()
     d1 = row.get("date_arrivee")
@@ -376,32 +384,45 @@ def vue_reservations(df: pd.DataFrame):
     metrics_bar_compact(show, prefix="Total ")
 
 def vue_ajouter(df: pd.DataFrame):
-    header("➕ Ajouter une réservation", "Saisie rapide avec calcul auto des charges et %")
+    header("➕ Ajouter une réservation", "Saisie rapide (libellés inline)")
     with st.form("ajout_resa"):
-        nom = st.text_input("Nom du client")
-        plateforme = st.selectbox("Plateforme", ["Booking", "Airbnb", "Autre"])
-        tel = st.text_input("Téléphone (format +33...)")
+        # Ligne 1 : Nom | Téléphone
+        c1, c2 = st.columns(2)
+        with c1:
+            nom = inline_input("Nom", st.text_input, key="add_nom", value="")
+        with c2:
+            tel = inline_input("Téléphone (+33...)", st.text_input, key="add_tel", value="")
 
+        # Ligne 2 : Plateforme | Arrivée | Départ
+        c3, c4, c5 = st.columns([1,1,1])
+        with c3:
+            plateforme = inline_input("Plateforme", st.selectbox, key="add_pf", options=["Booking", "Airbnb", "Autre"], index=0)
+        # gestion état par défaut dates
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
-
-        arrivee = st.date_input("Date d’arrivée", key="ajout_arrivee")
+        arrivee = None
+        with c4:
+            arrivee = inline_input("Arrivée", st.date_input, key="ajout_arrivee")
         min_dep = st.session_state.ajout_arrivee + timedelta(days=1)
-
         if "ajout_depart" not in st.session_state or not isinstance(st.session_state.ajout_depart, date):
             st.session_state.ajout_depart = min_dep
         elif st.session_state.ajout_depart < min_dep:
             st.session_state.ajout_depart = min_dep
+        with c5:
+            depart = inline_input("Départ", st.date_input, key="ajout_depart", min_value=min_dep)
 
-        depart = st.date_input("Date de départ", key="ajout_depart", min_value=min_dep)
-
-        prix_brut = st.number_input("Prix brut (€)", min_value=0.0, step=1.0, format="%.2f")
-        prix_net = st.number_input("Prix net (€)", min_value=0.0, step=1.0, format="%.2f", help="Doit être ≤ prix brut.")
-        charges_calc = max(prix_brut - prix_net, 0.0)
-        pct_calc = (charges_calc / prix_brut * 100) if prix_brut > 0 else 0.0
-
-        st.number_input("Charges (€)", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
-        st.number_input("Commission (%)", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
+        # Ligne 3 : Prix brut | Prix net | (Charges+%)
+        c6, c7, c8, c9 = st.columns([1,1,1,1])
+        with c6:
+            prix_brut = inline_input("Prix brut (€)", st.number_input, key="add_brut", min_value=0.0, step=1.0, format="%.2f")
+        with c7:
+            prix_net = inline_input("Prix net (€)", st.number_input, key="add_net", min_value=0.0, step=1.0, format="%.2f")
+        charges_calc = max((prix_brut or 0) - (prix_net or 0), 0.0)
+        pct_calc = (charges_calc / (prix_brut or 1) * 100) if prix_brut else 0.0
+        with c8:
+            inline_input("Charges (€)", st.number_input, key="add_ch", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
+        with c9:
+            inline_input("Commission (%)", st.number_input, key="add_pct", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
 
         ok = st.form_submit_button("Enregistrer")
 
@@ -412,7 +433,6 @@ def vue_ajouter(df: pd.DataFrame):
         if depart < arrivee + timedelta(days=1):
             st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
             return
-
         ligne = {
             "nom_client": (nom or "").strip(),
             "plateforme": plateforme,
@@ -435,7 +455,7 @@ def vue_ajouter(df: pd.DataFrame):
         st.rerun()
 
 def vue_modifier(df: pd.DataFrame):
-    header("✏️ Modifier / Supprimer", "Mettez à jour vos réservations")
+    header("✏️ Modifier / Supprimer", "Libellés inline, mêmes sections que l’ajout")
     df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune réservation.")
@@ -450,30 +470,47 @@ def vue_modifier(df: pd.DataFrame):
     i = idx[0]
 
     with st.form("form_modif"):
-        nom = st.text_input("Nom du client", df.at[i, "nom_client"])
+        # Ligne 1
+        c1, c2 = st.columns(2)
+        with c1:
+            nom = inline_input("Nom", st.text_input, key="m_nom", value=df.at[i, "nom_client"])
+        with c2:
+            tel = inline_input("Téléphone", st.text_input, key="m_tel", value=df.at[i, "telephone"] if "telephone" in df.columns else "")
+
+        # Ligne 2
+        c3, c4, c5 = st.columns([1,1,1])
         plateformes = ["Booking", "Airbnb", "Autre"]
         index_pf = plateformes.index(df.at[i, "plateforme"]) if df.at[i, "plateforme"] in plateformes else 2
-        plateforme = st.selectbox("Plateforme", plateformes, index=index_pf)
-        tel = st.text_input("Téléphone", df.at[i, "telephone"] if "telephone" in df.columns else "")
-        arrivee = st.date_input(
-            "Arrivée", df.at[i, "date_arrivee"] if isinstance(df.at[i, "date_arrivee"], date) else date.today()
-        )
-        depart = st.date_input(
-            "Départ",
-            df.at[i, "date_depart"] if isinstance(df.at[i, "date_depart"], date) else arrivee + timedelta(days=1),
-        )
-        brut = st.number_input(
-            "Prix brut (€)", value=float(df.at[i, "prix_brut"]) if pd.notna(df.at[i, "prix_brut"]) else 0.0, format="%.2f"
-        )
-        net = st.number_input(
-            "Prix net (€)",
-            value=float(df.at[i, "prix_net"]) if pd.notna(df.at[i, "prix_net"]) else 0.0,
-            max_value=max(0.0, float(brut)),
-            format="%.2f",
-        )
-        c1, c2 = st.columns(2)
-        b_modif = c1.form_submit_button("💾 Enregistrer")
-        b_del = c2.form_submit_button("🗑 Supprimer")
+        with c3:
+            plateforme = inline_input("Plateforme", st.selectbox, key="m_pf", options=plateformes, index=index_pf)
+        with c4:
+            arrivee = inline_input("Arrivée", st.date_input, key="m_arr", value=df.at[i, "date_arrivee"] if isinstance(df.at[i, "date_arrivee"], date) else date.today())
+        with c5:
+            def_dep = df.at[i, "date_depart"] if isinstance(df.at[i, "date_depart"], date) else (arrivee + timedelta(days=1))
+            depart = inline_input("Départ", st.date_input, key="m_dep", value=def_dep)
+
+        # Ligne 3
+        c6, c7 = st.columns([1,1])
+        with c6:
+            brut = inline_input("Prix brut (€)", st.number_input, key="m_brut",
+                                value=float(df.at[i, "prix_brut"]) if pd.notna(df.at[i, "prix_brut"]) else 0.0,
+                                format="%.2f", min_value=0.0, step=1.0)
+        with c7:
+            net = inline_input("Prix net (€)", st.number_input, key="m_net",
+                               value=float(df.at[i, "prix_net"]) if pd.notna(df.at[i, "prix_net"]) else 0.0,
+                               format="%.2f", min_value=0.0, step=1.0)
+
+        charges_calc = max((brut or 0) - (net or 0), 0.0)
+        pct_calc = (charges_calc / (brut or 1) * 100) if brut else 0.0
+        c8, c9 = st.columns([1,1])
+        with c8:
+            inline_input("Charges (€)", st.number_input, key="m_ch", value=round(charges_calc, 2), step=0.01, format="%.2f", disabled=True)
+        with c9:
+            inline_input("Commission (%)", st.number_input, key="m_pct", value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
+
+        cA, cB = st.columns(2)
+        b_modif = cA.form_submit_button("💾 Enregistrer")
+        b_del = cB.form_submit_button("🗑 Supprimer")
 
     if b_modif:
         if depart < arrivee + timedelta(days=1):
@@ -510,7 +547,7 @@ def vue_calendrier(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # ✅ Filtres sur UNE SEULE LIGNE : Mois + Année
+    # ✅ Filtres sur une seule ligne
     c_mois, c_annee = st.columns([2, 1])
     with c_mois:
         mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:], index=max(0, (date.today().month - 1)))
@@ -575,15 +612,17 @@ def vue_rapport(df: pd.DataFrame):
     if not annees:
         st.info("Aucune année disponible.")
         return
-    annee = st.selectbox("Année", annees, index=len(annees) - 1, key="rapport_annee")
 
+    # ✅ Filtres Année | Plateforme | Mois sur une ligne
+    cA, cB, cC = st.columns([1, 2, 1])
+    with cA:
+        annee = st.selectbox("Année", annees, index=len(annees) - 1, key="rapport_annee")
     data = df[df["AAAA"] == int(annee)].copy()
 
     plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
-    col1, col2 = st.columns(2)
-    with col1:
+    with cB:
         filtre_plateforme = st.selectbox("Plateforme", plateformes, key="rapport_pf")
-    with col2:
+    with cC:
         filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1, 13)], key="rapport_mois")
 
     if filtre_plateforme != "Toutes":
@@ -596,7 +635,6 @@ def vue_rapport(df: pd.DataFrame):
         return
 
     data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
-    # prix par nuit pour l’aperçu
     data["prix_brut/nuit"] = (pd.to_numeric(data["prix_brut"], errors="coerce") / data["nuitees"]).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     data["prix_net/nuit"] = (pd.to_numeric(data["prix_net"], errors="coerce") / data["nuitees"]).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
 
@@ -625,7 +663,7 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM", "plateforme"]).reset_index(drop=True)
 
-    # Affichage tableau (on masque les lignes tout à 0)
+    # Tableau (on masque lignes tout à 0)
     stats_view = stats.copy()
     mask_non_zero = (stats_view[["prix_brut", "prix_net", "charges", "nuitees"]].sum(axis=1) != 0)
     stats_view = stats_view[mask_non_zero]
@@ -634,10 +672,10 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True,
     )
 
-    # ✅ “Cases blanches” pour la barre de totaux (fond blanc)
+    # Totaux en “cases blanches”
     metrics_bar(data, prefix="Total ", theme="plain")
 
-    # Graphes matplotlib : X = 1..12 (ordre chronologique garanti)
+    # Graphes matplotlib (ordre 01→12)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -660,9 +698,7 @@ def vue_rapport(df: pd.DataFrame):
         ax.set_title(title)
         ax.legend(loc="upper left", frameon=False)
         ax.grid(axis="y", linestyle="--", alpha=0.3)
-
-        st.pyplot(fig)
-        plt.close(fig)
+        st.pyplot(fig); plt.close(fig)
 
     plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
     plot_grouped_bars("charges", "💸 Charges", "€")
@@ -675,9 +711,13 @@ def vue_clients(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
+    # ✅ Filtres sur une ligne : Année | Mois
+    cA, cB = st.columns([1,1])
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    annee = st.selectbox("Année", annees) if annees else None
-    mois = st.selectbox("Mois", ["Tous"] + list(range(1, 13)))
+    with cA:
+        annee = st.selectbox("Année", annees) if annees else None
+    with cB:
+        mois = st.selectbox("Mois", ["Tous"] + list(range(1, 13)))
 
     data = df.copy()
     if annee:
