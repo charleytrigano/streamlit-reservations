@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (complet, SMS fixes)
+# app.py — Villa Tobias (complet, SMS arrivée = texte exact avec Telephone)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -269,27 +269,32 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
 
 def sms_message_arrivee(row: pd.Series) -> str:
     """
-    Message d'arrivée EXACTEMENT comme demandé (sans accents pour compatibilité SMS).
+    Message d’arrivée EXACT demandé (incluant 'Telephone : ...').
+    Sans accents pour compatibilité SMS.
     """
     d1 = row.get("date_arrivee")
     d2 = row.get("date_depart")
     d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
     d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
-    nuitees = int(row.get("nuitees") or ((d2 - d1).days if isinstance(d1, date) and isinstance(d2, date) else 0))
+    nuitees = int(
+        row.get("nuitees")
+        or ((d2 - d1).days if isinstance(d1, date) and isinstance(d2, date) else 0)
+    )
     plateforme = str(row.get("plateforme") or "")
     nom = str(row.get("nom_client") or "")
+    tel_aff = str(row.get("telephone") or "").strip()
 
-    msg = (
+    return (
         "VILLA TOBIAS\n"
         f"Plateforme : {plateforme}\n"
         f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
-        f"Bonjour {nom}\n\n"
+        f"Bonjour {nom}\n"
+        f"Telephone : {tel_aff}\n\n"
         "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
         "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
         "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
         "Annick & Charley"
     )
-    return msg
 
 def sms_message_depart(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "")
