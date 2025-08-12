@@ -1,18 +1,37 @@
-# app.py — Réservations Villa Tobias (version complète avec SMS & iCal)
+# app.py — Réservations Villa Tobias (boutons Sauvegarde/Restauration à droite de "Réservations")
 import streamlit as st
 import pandas as pd
 import numpy as np
 import calendar
 from datetime import date, datetime, timedelta
 from io import BytesIO
-import os, re, json, requests
+import os, re, json, base64, requests
 import matplotlib.pyplot as plt
 from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
 ICAL_SOURCES = "ical_sources.json"   # { "sources": [ {"name": "Booking", "url": "..."} ] }
 
-# ==============================  UI HELPERS  ===============================
+# ==============================  CSS / UI HELPERS  =========================
+
+def inject_css():
+    st.markdown(
+        """
+        <style>
+          .stTable td, .stTable th { font-size: 0.92rem; }
+          h2, h3 { letter-spacing: 0.2px; }
+          section[data-testid="stSidebar"] button { padding: .3rem .55rem !important; }
+          .inline-label { font-size:.9rem; color:#333; padding:.35rem .4rem .35rem 0; white-space:nowrap; }
+          .muted { color:#666; font-size:.9rem }
+          .ok-badge { background:#eefaf2; color:#147a2e; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
+          .warn-badge { background:#fff5e5; color:#8a5300; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
+          .btn-danger > div > button { background-color: #e02424 !important; color: white !important; border: 0 !important; }
+          .btn-right { display: flex; justify-content: flex-end; gap:.5rem; align-items:center; }
+          .cap { font-variant-numeric: tabular-nums; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def header(titre: str, sous_titre: str = ""):
     st.markdown(
@@ -26,29 +45,13 @@ def header(titre: str, sous_titre: str = ""):
         unsafe_allow_html=True,
     )
 
-def inject_css():
-    st.markdown(
-        """
-        <style>
-          .stTable td, .stTable th { font-size: 0.92rem; }
-          h2, h3 { letter-spacing: 0.2px; }
-          section[data-testid="stSidebar"] button { padding: .3rem .55rem !important; }
-          .inline-label { font-size:.9rem; color:#333; padding:.35rem .4rem .35rem 0; white-space:nowrap; }
-          .muted { color:#666; font-size:.9rem }
-          .ok-badge { background:#eefaf2; color:#147a2e; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
-          .warn-badge { background:#fff5e5; color:#8a5300; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
 def inline_input(label_text, widget_fn, key=None, col_ratio=(1,3), **widget_kwargs):
     c1, c2 = st.columns(col_ratio)
     with c1:
         st.markdown(f"<div class='inline-label'>{label_text}</div>", unsafe_allow_html=True)
     with c2:
         widget_kwargs.setdefault("label_visibility", "collapsed")
-        # Harmonise types pour number_input
+        # Harmonise types pour number_input pour éviter StreamlitMixedNumericTypesError
         if widget_fn is st.number_input:
             if "min_value" in widget_kwargs and isinstance(widget_kwargs["min_value"], int):
                 widget_kwargs["min_value"] = float(widget_kwargs["min_value"])
@@ -61,6 +64,8 @@ def inline_input(label_text, widget_fn, key=None, col_ratio=(1,3), **widget_kwar
         return widget_fn(label_text, key=key, **widget_kwargs)
 
 def render_cache_button_sidebar():
+    st.sidebar.markdown("## 🧭 Navigation")
+    # (La radio de navigation est posée plus bas)
     st.sidebar.markdown("## 🧰 Maintenance")
     if st.sidebar.button("♻️ Vider le cache et relancer"):
         st.cache_data.clear()
@@ -92,7 +97,7 @@ def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "plain"):
         return (f"<div style='padding:.35rem .55rem;border:1px solid {border};border-radius:.5rem;"
                 f"font-size:.9rem;line-height:1.2;background:{bg}'>"
                 f"<div style='font-weight:600'>{label}</div>"
-                f"<div style='font-variant-numeric: tabular-nums;'>{value}</div>{sub}</div>")
+                f"<div class='cap'>{value}</div>{sub}</div>")
 
     cA, cB, cC, cD, cE = st.columns(5)
     cA.markdown(chip(prefix + "Brut", f"{brut:,.2f} €".replace(",", " "),
@@ -214,7 +219,7 @@ def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
         df_core = df_core.sort_values(by=by_cols, na_position="last").reset_index(drop=True)
     return pd.concat([df_core, df_total], ignore_index=True)
 
-# ==============================  EXCEL I/O  ================================
+# ==============================  EXCEL I/O + GITHUB  =======================
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
@@ -232,6 +237,12 @@ def charger_donnees() -> pd.DataFrame:
     except Exception as e:
         st.error(f"Erreur de lecture Excel : {e}")
         return pd.DataFrame()
+
+def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
+    return buf.getvalue()
 
 def sauvegarder_donnees(df: pd.DataFrame):
     df = _trier_et_recoller_totaux(ensure_schema(df))
@@ -251,35 +262,56 @@ def sauvegarder_donnees(df: pd.DataFrame):
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
 
-def bouton_restaurer():
-    up = st.sidebar.file_uploader("📤 Restaurer un fichier Excel", type=["xlsx"])
-    if up is not None:
-        try:
-            df_new = pd.read_excel(up)
-            df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
-            sauvegarder_donnees(df_new)
-            st.sidebar.success("✅ Fichier restauré.")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Erreur import: {e}")
+def github_save_file(file_bytes: bytes, commit_msg: str = "Update reservations.xlsx"):
+    token = st.secrets.get("GITHUB_TOKEN")
+    repo  = st.secrets.get("GITHUB_REPO")
+    branch= st.secrets.get("GITHUB_BRANCH", "main")
+    path  = st.secrets.get("GITHUB_PATH", "reservations.xlsx")
+    if not token or not repo:
+        return False, "Secrets GitHub non configurés"
 
-def bouton_telecharger(df: pd.DataFrame):
-    buf = BytesIO()
+    api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    # 1) Récupérer SHA s’il existe
+    sha = None
     try:
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
-        data_xlsx = buf.getvalue()
+        r = requests.get(api_url, headers=headers, params={"ref": branch}, timeout=15)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+    except Exception:
+        pass
+    # 2) PUT
+    payload = {
+        "message": commit_msg,
+        "content": base64.b64encode(file_bytes).decode("utf-8"),
+        "branch": branch
+    }
+    if sha:
+        payload["sha"] = sha
+    try:
+        r = requests.put(api_url, headers=headers, json=payload, timeout=20)
+        if r.status_code in (200, 201):
+            return True, "GitHub OK"
+        return False, f"GitHub PUT {r.status_code}: {r.text}"
     except Exception as e:
-        st.sidebar.error(f"Export XLSX indisponible : {e}")
-        data_xlsx = None
+        return False, f"GitHub error: {e}"
 
-    st.sidebar.download_button(
-        "📥 Télécharger le fichier Excel",
-        data=data_xlsx if data_xlsx else b"",
-        file_name="reservations.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=(data_xlsx is None),
-    )
+def restauration_from_uploader(uploaded_file):
+    try:
+        df_new = pd.read_excel(uploaded_file)
+        df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
+        # Sauvegarde locale
+        sauvegarder_donnees(df_new)
+        # Sauvegarde GitHub si secrets présents
+        file_bytes = _excel_bytes_from_df(df_new)
+        ok, msg = github_save_file(file_bytes, commit_msg="Restore reservations.xlsx")
+        if ok:
+            st.success("✅ Restauration OK + poussée GitHub.")
+        else:
+            st.info(f"ℹ️ Restauration OK (GitHub) : {msg}")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Erreur import: {e}")
 
 # ==============================  LIENS / SMS  ==============================
 
@@ -377,7 +409,35 @@ def vue_en_cours_banner(df: pd.DataFrame):
     st.markdown(out.to_html(index=False, escape=False), unsafe_allow_html=True)
 
 def vue_reservations(df: pd.DataFrame):
-    header("📋 Réservations", "Filtrez, exportez, modifiez en un clin d’œil")
+    # Titre + boutons à droite
+    c_title, c_btns = st.columns([3, 2])
+    with c_title:
+        header("📋 Réservations", "Filtrez, exportez, modifiez en un clin d’œil")
+    with c_btns:
+        st.markdown("<div class='btn-right'>", unsafe_allow_html=True)
+        # Bouton Sauvegarde XLSX (download)
+        data_xlsx = _excel_bytes_from_df(df) if not df.empty else b""
+        st.download_button(
+            "💾 Sauvegarde XLSX",
+            data=data_xlsx,
+            file_name="reservations.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_top"
+        )
+        # Bouton rouge Restauration -> fait apparaître l'uploader
+        restore_click = st.button("📤 Restauration XLSX", key="restore_top_btn")
+        st.markdown("</div>", unsafe_allow_html=True)
+        if restore_click:
+            st.session_state.show_restore_top = True
+        if st.session_state.get("show_restore_top"):
+            up = st.file_uploader("Sélectionner un fichier .xlsx", type=["xlsx"], key="restore_top_uploader")
+            if up is not None:
+                restauration_from_uploader(up)
+            if st.button("Annuler", key="restore_top_cancel"):
+                st.session_state.show_restore_top = False
+                st.rerun()
+
+    # Bandeau "En cours aujourd'hui"
     vue_en_cours_banner(df)
 
     show = _trier_et_recoller_totaux(ensure_schema(df)).copy()
@@ -442,7 +502,6 @@ def vue_ajouter(df: pd.DataFrame):
         charges_calc = max(float(prix_brut) - float(prix_net), 0.0)
         pct_calc = (charges_calc / float(prix_brut) * 100.0) if float(prix_brut) > 0 else 0.0
 
-        # Champs calculés : text_input disabled (évite erreurs de types)
         with c8:
             inline_input("Charges (€)", st.text_input, key="add_ch",
                          value=f"{charges_calc:.2f}", disabled=True)
@@ -450,7 +509,6 @@ def vue_ajouter(df: pd.DataFrame):
             inline_input("Commission (%)", st.text_input, key="add_pct",
                          value=f"{pct_calc:.2f}", disabled=True)
 
-        # ✅ Bouton dans le formulaire
         ok = st.form_submit_button("Enregistrer")
 
     if ok:
@@ -787,9 +845,9 @@ def vue_sms(df: pd.DataFrame):
     today = date.today()
     cA, cB = st.columns(2)
     with cA:
-        cible_arrivee = st.date_input("📅 Date d’arrivée ciblée (pour messages d’accueil)", value=today + timedelta(days=1))
+        cible_arrivee = st.date_input("📅 Date d’arrivée ciblée (accueil)", value=today + timedelta(days=1))
     with cB:
-        cible_depart = st.date_input("📅 Date de départ ciblée (pour remerciements J+1)", value=today - timedelta(days=1))
+        cible_depart = st.date_input("📅 Date de départ ciblée (remerciement J+1)", value=today - timedelta(days=1))
 
     st.markdown("#### 🟢 Arrivées (messages d’accueil)")
     arr = dft[(dft["date_arrivee"] == cible_arrivee)].copy()
@@ -954,9 +1012,6 @@ def vue_ical(df: pd.DataFrame):
                     continue
                 evs = parse_ics(r.text)
                 for ev in evs:
-                    if not ev["uid"]:
-                        # on peut aussi importer sans UID si voulu
-                        pass
                     if ev["uid"] and ev["uid"] in uids_existants:
                         continue
                     if isinstance(ev["start"], date) and isinstance(ev["end"], date):
@@ -1002,14 +1057,10 @@ def vue_ical(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
     inject_css()
+
+    # Barre latérale : navigation + maintenance
     render_cache_button_sidebar()
-
-    st.sidebar.title("📁 Fichier")
-    bouton_restaurer()
-    df = charger_donnees()
-    bouton_telecharger(df)
-
-    st.sidebar.title("🧭 Navigation")
+    # La navigation est définie ici pour être sous "Navigation"
     onglet = st.sidebar.radio(
         "Aller à",
         [
@@ -1024,6 +1075,25 @@ def main():
         ],
     )
 
+    # Chargement des données
+    df = charger_donnees()
+
+    # (Option) En bas de la section Maintenance : un second bouton rouge Restauration (si tu veux le garder)
+    with st.sidebar:
+        st.markdown("### ")
+        holder = st.container()
+        with holder:
+            # petit hack pour avoir un bouton "rouge" (classe css)
+            red = st.container()
+            with red:
+                clicked = st.button("📤 Restauration XLSX (sidebar)", key="restore_sb_btn")
+            st.markdown('<div class="btn-danger"></div>', unsafe_allow_html=True)
+        if clicked:
+            up2 = st.file_uploader("Sélectionner un fichier .xlsx (sidebar)", type=["xlsx"], key="restore_sb_uploader")
+            if up2 is not None:
+                restauration_from_uploader(up2)
+
+    # Routes
     if onglet == "📋 Réservations":
         vue_reservations(df)
     elif onglet == "➕ Ajouter":
