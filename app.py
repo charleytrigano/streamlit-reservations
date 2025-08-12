@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (rapport: noms clients + filtre Mois)
+# app.py — Villa Tobias (complet)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -268,15 +268,21 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
 # ==============================  TEMPLATES SMS (MANUEL) ====================
 
 def sms_message_arrivee(row: pd.Series) -> str:
-    d1 = format_date_str(row.get("date_arrivee"))
-    d2 = format_date_str(row.get("date_depart"))
-    nuitees = row.get("nuitees") or ""
+    """
+    Message d'arrivée EXACTEMENT comme demandé (sans accents pour compatibilité SMS).
+    """
+    d1 = row.get("date_arrivee")
+    d2 = row.get("date_depart")
+    d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
+    d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
+    nuitees = int(row.get("nuitees") or ((d2 - d1).days if isinstance(d1, date) and isinstance(d2, date) else 0))
     plateforme = str(row.get("plateforme") or "")
     nom = str(row.get("nom_client") or "")
+
     msg = (
         "VILLA TOBIAS\n"
         f"Plateforme : {plateforme}\n"
-        f"Date d'arrivee : {d1}  Date depart : {d2}  Nombre de nuitées : {nuitees}\n\n"
+        f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
         f"Bonjour {nom}\n\n"
         "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
         "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
@@ -304,6 +310,22 @@ def make_sms_link(phone: str, body: str) -> str:
 
 # ==============================  VUES  ==============================
 
+def _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
+    return f"""
+<style>
+.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
+.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); }}
+.chip b {{ display:block; margin-bottom:4px; }}
+</style>
+<div class="chips-wrap">
+  <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
+  <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
+  <div class="chip"><b>Total Charges</b><div>{total_chg:,.2f} €</div></div>
+  <div class="chip"><b>Total Nuitées</b><div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
+  <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
+</div>
+"""
+
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
     core, totals = split_totals(ensure_schema(df))
@@ -316,24 +338,7 @@ def vue_reservations(df: pd.DataFrame):
         total_chg    = core["charges"].sum(skipna=True)
         total_nuits  = core["nuitees"].sum(skipna=True)
         pct_moy = (core["charges"].sum() / core["prix_brut"].sum() * 100) if core["prix_brut"].sum() else 0
-
-        st.markdown(
-            f"""
-<style>
-.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
-.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.15); border: 1px solid rgba(127,127,127,0.25); }}
-.chip b {{ display:block; margin-bottom:4px; }}
-</style>
-<div class="chips-wrap">
-  <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
-  <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
-  <div class="chip"><b>Total Charges</b><div>{total_chg:,.2f} €</div></div>
-  <div class="chip"><b>Total Nuitées</b><div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
-  <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
-</div>
-            """,
-            unsafe_allow_html=True
-        )
+        st.markdown(_totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
     show = pd.concat([core, totals], ignore_index=True)
     for c in ["date_arrivee","date_depart"]:
@@ -563,25 +568,9 @@ def vue_rapport(df: pd.DataFrame):
     total_nuits  = data["nuitees"].sum(skipna=True)
     pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
 
-    st.markdown(
-        f"""
-<style>
-.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
-.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); }}
-.chip b {{ display:block; margin-bottom:4px; }}
-</style>
-<div class="chips-wrap">
-  <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
-  <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
-  <div class="chip"><b>Total Charges</b><div>{total_chg:,.2f} €</div></div>
-  <div class="chip"><b>Total Nuitées</b><div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
-  <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
-</div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown(_totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
-    # Graphiques par MM (même si un mois est filtré, ça se reflète)
+    # Graphiques par MM
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
