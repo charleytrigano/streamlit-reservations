@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (complet)
+# app.py — Villa Tobias (complet, SMS fixes)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -304,10 +304,6 @@ def sms_message_depart(row: pd.Series) -> str:
     )
     return msg
 
-def make_sms_link(phone: str, body: str) -> str:
-    tel = (phone or "").strip()
-    return f"sms:{tel}?&body={quote(body)}" if tel else ""
-
 # ==============================  VUES  ==============================
 
 def _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
@@ -515,6 +511,9 @@ def vue_calendrier(df: pd.DataFrame):
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
+def _totaux_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
+    return _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy)
+
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (réservations détaillées)")
     df = ensure_schema(df)
@@ -545,7 +544,7 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Tableau principal = réservations détaillées (avec noms)
+    # Tableau principal (avec noms clients)
     detail = data.copy()
     for c in ["date_arrivee","date_depart"]:
         detail[c] = detail[c].apply(format_date_str)
@@ -567,8 +566,7 @@ def vue_rapport(df: pd.DataFrame):
     total_chg    = data["charges"].sum(skipna=True)
     total_nuits  = data["nuitees"].sum(skipna=True)
     pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
-
-    st.markdown(_totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
+    st.markdown(_totaux_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
     # Graphiques par MM
     stats = (
@@ -701,15 +699,24 @@ def vue_sms(df: pd.DataFrame):
             st.info("Aucune arrivée demain.")
         else:
             for _, r in arrives.iterrows():
-                tel = str(r.get("telephone") or "").strip()
                 body = sms_message_arrivee(r)
+                tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
+                tel_link = f"tel:{tel}" if tel else ""
+                sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
+
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.markdown(f"Arrivée: {format_date_str(r.get('date_arrivee'))} • "
                             f"Départ: {format_date_str(r.get('date_depart'))} • "
                             f"Nuitées: {r.get('nuitees','')}")
                 st.code(body)
-                if tel:
-                    st.markdown(f"[📲 Ouvrir SMS vers {tel}](sms:{tel}?&body={quote(body)})")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    if tel_link:
+                        st.link_button(f"📞 Appeler {tel}", tel_link)
+                with c2:
+                    if sms_link:
+                        st.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
     # --- Relance +24h après départ ---
@@ -720,12 +727,21 @@ def vue_sms(df: pd.DataFrame):
             st.info("Aucun départ hier.")
         else:
             for _, r in dep_24h.iterrows():
-                tel = str(r.get("telephone") or "").strip()
                 body = sms_message_depart(r)
+                tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
+                tel_link = f"tel:{tel}" if tel else ""
+                sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
+
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
-                if tel:
-                    st.markdown(f"[📲 Ouvrir SMS vers {tel}](sms:{tel}?&body={quote(body)})")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    if tel_link:
+                        st.link_button(f"📞 Appeler {tel}", tel_link)
+                with c2:
+                    if sms_link:
+                        st.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
     # --- Composeur manuel ---
@@ -734,7 +750,7 @@ def vue_sms(df: pd.DataFrame):
     df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
     choix = st.selectbox("Choisir une réservation", df_pick["id_aff"])
     r = df_pick.loc[df_pick["id_aff"] == choix].iloc[0]
-    tel = str(r.get("telephone") or "").strip()
+    tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
 
     choix_type = st.radio("Modèle de message",
                           ["Arrivée (demande d’heure)","Relance après départ","Message libre"],
@@ -748,7 +764,8 @@ def vue_sms(df: pd.DataFrame):
 
     st.code(body or "—")
     if tel and body:
-        st.markdown(f"[📲 Ouvrir SMS vers {tel}](sms:{tel}?&body={quote(body)})")
+        st.link_button(f"📞 Appeler {tel}", f"tel:{tel}")
+        st.link_button("📩 Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
     else:
         st.info("Renseignez un téléphone et un message.")
 
