@@ -224,20 +224,29 @@ def sms_message(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "")
     tel = str(row.get("telephone") or "")
     msg = (
-        "VILLA TOBIAS - NICE\n"
+        "VILLA TOBIAS\n"
         f"Plateforme : {plateforme}\n"
         f"Date d'arrivee : {arrivee}  Date depart : {depart}  Nombre de nuitées : {nuitees}\n\n"
         f"Bonjour {nom}\n"
         f"Telephone : {tel}\n\n"
-        "Bienvenue chez nous !"
-        "Nous sommes ravis de vous accueillir bientôt."
-        "Pour organiser au mieux votre arrivée, pourriez-vous nous indiquer à quelle heure vous pensez arriver ?"
-        "Sachez également qu'une place de parking est à votre disposition dans l'immeuble si vous en avez besoin."
-        "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer !"
-        
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
         "Annick & Charley"
     )
     return msg
+
+def sms_message_depart(row: pd.Series) -> str:
+    nom = str(row.get("nom_client") or "")
+    return (
+        f"Bonjour {nom},\n\n"
+        "Un grand merci d’avoir choisi notre appartement pour votre séjour !\n"
+        "Nous espérons que vous avez passé un moment aussi agréable que celui que nous avons eu à vous accueillir.\n\n"
+        "Si l’envie vous prend de revenir explorer encore un peu notre ville (ou simplement retrouver le confort de notre petit cocon), "
+        "sachez que notre porte vous sera toujours grande ouverte.\n\n"
+        "Au plaisir de vous accueillir à nouveau,\n"
+        "Annick & Charley"
+    )
 
 def vue_en_cours_banner(df: pd.DataFrame):
     if df is None or df.empty:
@@ -262,12 +271,10 @@ def vue_en_cours_banner(df: pd.DataFrame):
         st.info(f"Aucun séjour en cours aujourd’hui ({today.strftime('%Y/%m/%d')}).")
         return
 
-    # Tri & formats de dates lisibles
     en_cours = en_cours.sort_values(["date_depart", "nom_client"]).copy()
     en_cours["date_arrivee_fmt"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
     en_cours["date_depart_fmt"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
-    # 🔗 Liens Appeler + SMS
     def _make_links(row):
         tel_raw = str(row.get("telephone") or "").strip()
         tel_ui  = tel_to_uri(tel_raw)
@@ -282,13 +289,11 @@ def vue_en_cours_banner(df: pd.DataFrame):
     en_cours["📞 Appeler"] = links[0]
     en_cours["📲 SMS"]     = links[1]
 
-    # Renommer les colonnes pour l’affichage final
     en_cours = en_cours.rename(columns={
         "date_arrivee_fmt": "date_arrivee",
         "date_depart_fmt":  "date_depart"
     })
 
-    # Assurer 'nuitees'
     if "nuitees" not in en_cours.columns:
         def _nuits(r):
             d1, d2 = r.get("date_arrivee"), r.get("date_depart")
@@ -297,15 +302,12 @@ def vue_en_cours_banner(df: pd.DataFrame):
             return ""
         en_cours["nuitees"] = en_cours.apply(_nuits, axis=1)
 
-    # Colonnes souhaitées, mais on ne garde que celles réellement présentes
     desired = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","📞 Appeler","📲 SMS"]
     existing = [c for c in desired if c in en_cours.columns]
     df_out = en_cours[existing].copy()
-
-    # Rendu HTML pour garder les liens cliquables
     st.markdown(df_out.to_html(index=False, escape=False), unsafe_allow_html=True)
 
-# =========================  VUES  ==========================================
+# =========================  VUES LISTES  ===================================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -651,7 +653,7 @@ def vue_rapport(df: pd.DataFrame):
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     )
 
-    # Masquer lignes 0/0/0/0 uniquement
+    # Masquer les lignes strictement nulles
     stats_table = stats_full[
         ~(
             (stats_full["prix_brut"].round(2) == 0) &
@@ -760,7 +762,7 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
-# =========================  SMS (manuel amélioré)  ==============================
+# =========================  SMS (manuel : arrivée & départ)  =====================
 
 def log_sms(nom, telephone, message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -775,47 +777,75 @@ def log_sms(nom, telephone, message):
     except Exception:
         pass
 
-def _filter_sms_candidates(df: pd.DataFrame, mode: str, d1: date | None, d2: date | None):
+def _filter_sms_candidates_generic(df: pd.DataFrame, base: str, mode: str, d1: date | None, d2: date | None):
+    """
+    base: "arrivee" ou "depart"
+    mode: "today"/"tomorrow"/"yesterday"/"range"/"all"
+    """
     core = _trier_et_recoller_totaux(ensure_schema(df)).copy()
-    core = core[core["date_arrivee"].apply(lambda d: isinstance(d, date))]
+    col = "date_arrivee" if base == "arrivee" else "date_depart"
+    core = core[core[col].apply(lambda d: isinstance(d, date))]
+    today = date.today()
+
     if mode == "today":
-        return core[core["date_arrivee"] == date.today()]
+        return core[core[col] == today]
     if mode == "tomorrow":
-        return core[core["date_arrivee"] == (date.today() + timedelta(days=1))]
+        return core[core[col] == (today + timedelta(days=1))]
+    if mode == "yesterday":
+        return core[core[col] == (today - timedelta(days=1))]
     if mode == "range" and d1 and d2:
-        return core[(core["date_arrivee"] >= d1) & (core["date_arrivee"] <= d2)]
+        return core[(core[col] >= d1) & (core[col] <= d2)]
     return core
 
 def vue_sms(df: pd.DataFrame):
-    st.title("✉️ SMS — envoi manuel optimisé")
+    st.title("✉️ SMS — envoi manuel")
     df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune réservation pour SMS.")
         return
 
-    st.markdown("Choisissez une sélection :")
-    mode = st.radio("", ["Arrivées aujourd’hui", "Arrivées demain", "Plage de dates", "Choisir manuellement"], horizontal=True)
+    type_msg = st.radio(
+        "Type de message",
+        ["Arrivée (avant séjour)", "Remerciement (24h après départ)"],
+        horizontal=True
+    )
+
+    if type_msg.startswith("Arrivée"):
+        base = "arrivee"
+        modes = ["Arrivées aujourd’hui", "Arrivées demain", "Plage de dates", "Choisir manuellement"]
+    else:
+        base = "depart"
+        modes = ["Départs hier (24h après)", "Plage de dates", "Choisir manuellement"]
+
+    mode = st.radio("Sélection", modes, horizontal=True)
+
     d1 = d2 = None
-    if mode == "Plage de dates":
-        colA, colB = st.columns(2)
-        with colA:
-            d1 = st.date_input("Du", value=date.today())
-        with colB:
-            d2 = st.date_input("Au", value=date.today() + timedelta(days=7), min_value=d1)
+    if "Plage de dates" in mode:
+        c1, c2 = st.columns(2)
+        with c1:
+            d1 = st.date_input("Du", value=date.today() - timedelta(days=7))
+        with c2:
+            d2 = st.date_input("Au", value=date.today(), min_value=d1)
 
     if mode == "Choisir manuellement":
         idx = st.selectbox(
             "Réservation",
             df.index,
-            format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])}"
+            format_func=lambda i: f"{df.at[i,'nom_client']} | {format_date_str(df.at[i,'date_arrivee'])} → {format_date_str(df.at[i,'date_depart'])}"
         )
         rows = df.loc[[idx]].copy()
     else:
-        flt_mode = {"Arrivées aujourd’hui":"today","Arrivées demain":"tomorrow","Plage de dates":"range"}[mode]
-        rows = _filter_sms_candidates(df, flt_mode, d1, d2)
-        if rows.empty:
-            st.info("Aucune réservation ne correspond à ce filtre.")
-            return
+        mode_map = {
+            "Arrivées aujourd’hui": "today",
+            "Arrivées demain": "tomorrow",
+            "Départs hier (24h après)": "yesterday",
+            "Plage de dates": "range",
+        }
+        rows = _filter_sms_candidates_generic(df, base, mode_map.get(mode, "all"), d1, d2)
+
+    if rows.empty:
+        st.info("Aucune réservation ne correspond à ce filtre.")
+        return
 
     st.markdown("### Résultats")
     st.caption("Cliquez sur 📲 Ouvrir SMS pour lancer l’app Messages avec le texte pré-rempli. Cliquez sur 📞 Appeler pour composer le numéro.")
@@ -824,33 +854,31 @@ def vue_sms(df: pd.DataFrame):
     for i, (_, r) in enumerate(rows.sort_values(["date_arrivee","nom_client"]).iterrows(), start=1):
         nom = str(r.get("nom_client") or "")
         tel = clean_tel_display(r.get("telephone"))
-        msg = sms_message(r)
+        if base == "arrivee":
+            msg = sms_message(r)
+            titre = f"{i}. {nom} — arrivée le {format_date_str(r.get('date_arrivee'))}"
+        else:
+            msg = sms_message_depart(r)
+            titre = f"{i}. {nom} — départ le {format_date_str(r.get('date_depart'))}"
+
         sms_uri = f"sms:{re.sub(r'[ \\-\\.]','',tel)}?&body={quote(msg)}" if tel else ""
         tel_uri = tel_to_uri(tel)
 
-        with st.expander(f"{i}. {nom} — arrivée le {format_date_str(r.get('date_arrivee'))}", expanded=prep_all):
-            st.text_area("Message", value=msg, height=220, key=f"sms_text_{i}")
-            cols = st.columns(3)
-            with cols[0]:
+        with st.expander(titre, expanded=prep_all):
+            st.text_area("Message", value=msg, height=220, key=f"sms_text_{base}_{i}")
+            cA, cB, cC = st.columns(3)
+            with cA:
                 if sms_uri:
                     st.markdown(f"[📲 Ouvrir SMS]({sms_uri})", unsafe_allow_html=True)
                 else:
                     st.warning("Numéro manquant")
-            with cols[1]:
+            with cB:
                 if tel_uri:
                     st.markdown(f"[📞 Appeler]({tel_uri})", unsafe_allow_html=True)
-            with cols[2]:
-                if st.button("✅ Marquer comme envoyé", key=f"log_{i}"):
+            with cC:
+                if st.button("✅ Marquer comme envoyé", key=f"log_sent_{base}_{i}"):
                     log_sms(nom, tel, msg)
                     st.success("Journal SMS mis à jour.")
-
-    st.divider()
-    st.subheader("Historique SMS (CSV)")
-    if os.path.exists(SMS_LOG):
-        try:
-            st.dataframe(pd.read_csv(SMS_LOG))
-        except Exception:
-            st.info("Historique non lisible.")
 
 # =========================  iCal : multi-calendriers  =======================
 
@@ -1024,7 +1052,7 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Paramètre d’URL ?clear=1 pour vider le cache (version sûre, sans experimental)
+    # Paramètre d’URL ?clear=1 pour vider le cache (sans experimental)
     params = st.query_params  # dict-like: {str: str}
     clear_val = params.get("clear", "0")
     if clear_val == "1":
