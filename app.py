@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (vérifié)
+# app.py — Villa Tobias (rapport: noms clients + filtre Mois)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -42,7 +42,6 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise les colonnes (dates, montants, nuitees, AAAA/MM, etc.)."""
     base_cols = [
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
@@ -103,7 +102,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[[c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]]
 
 def is_total_row(row: pd.Series) -> bool:
-    """Heuristique simple: ligne total si pas de dates mais des montants, ou nom/plateforme == 'total'."""
     name_is_total = str(row.get("nom_client","")).strip().lower() == "total"
     pf_is_total   = str(row.get("plateforme","")).strip().lower() == "total"
     d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
@@ -141,7 +139,6 @@ def charger_donnees() -> pd.DataFrame:
         return ensure_schema(pd.DataFrame())
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    """Sauvegarde en conservant les lignes Total en bas et triant le reste par date arrivée."""
     df = ensure_schema(df)
     core, totals = split_totals(df)
     core = sort_core(core)
@@ -209,7 +206,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
         return (
             "BEGIN:VCALENDAR\r\n"
             "VERSION:2.0\r\n"
-            "PRODID:-//Villa Tobias//Reservations//FR\r\n"
+            "PROID:-//Villa Tobias//Reservations//FR\r\n"
             f"X-WR-CALNAME:{_ics_escape(cal_name)}\r\n"
             "CALSCALE:GREGORIAN\r\n"
             "METHOD:PUBLISH\r\n"
@@ -358,7 +355,6 @@ def vue_ajouter(df: pd.DataFrame):
     plateforme = inline_input("Plateforme", st.selectbox, key="add_pf",
                               options=["Booking","Airbnb","Autre"], index=0)
 
-    # ✅ plus aucun mélange value/session_state
     arrivee = inline_input("Arrivée", st.date_input, key="add_arrivee", value=date.today())
     min_dep = arrivee + timedelta(days=1)
     depart  = inline_input("Départ",  st.date_input, key="add_depart",
@@ -515,7 +511,7 @@ def vue_calendrier(df: pd.DataFrame):
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
 
 def vue_rapport(df: pd.DataFrame):
-    st.title("📊 Rapport (année)")
+    st.title("📊 Rapport (réservations détaillées)")
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
@@ -525,19 +521,67 @@ def vue_rapport(df: pd.DataFrame):
     if not annees:
         st.info("Aucune année disponible.")
         return
-    c1, c2 = st.columns(2)
-    annee = c1.selectbox("Année", annees, index=len(annees)-1)
-    pf_opt = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
-    pf = c2.selectbox("Plateforme", pf_opt)
 
+    c1, c2, c3 = st.columns(3)
+    annee = c1.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
+    pf_opt = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    pf = c2.selectbox("Plateforme", pf_opt, key="rapport_pf")
+    mois_opt = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
+    mois_label = c3.selectbox("Mois", mois_opt, key="rapport_mois")
+
+    # Filtrage principal
     data = df[df["AAAA"] == int(annee)].copy()
     if pf != "Toutes":
         data = data[data["plateforme"] == pf]
+    if mois_label != "Tous":
+        data = data[data["MM"] == int(mois_label)]
+
     if data.empty:
-        st.info("Aucune donnée pour ce filtre.")
+        st.info("Aucune donnée pour ces filtres.")
         return
 
-    # agrégations
+    # Tableau principal = réservations détaillées (avec noms)
+    detail = data.copy()
+    for c in ["date_arrivee","date_depart"]:
+        detail[c] = detail[c].apply(format_date_str)
+    by = [c for c in ["date_arrivee","nom_client"] if c in detail.columns]
+    if by:
+        detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
+
+    cols_detail = [
+        "nom_client","plateforme","telephone",
+        "date_arrivee","date_depart","nuitees",
+        "prix_brut","prix_net","charges","%"
+    ]
+    cols_detail = [c for c in cols_detail if c in detail.columns]
+    st.dataframe(detail[cols_detail], use_container_width=True)
+
+    # Totaux de la sélection
+    total_brut   = data["prix_brut"].sum(skipna=True)
+    total_net    = data["prix_net"].sum(skipna=True)
+    total_chg    = data["charges"].sum(skipna=True)
+    total_nuits  = data["nuitees"].sum(skipna=True)
+    pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
+
+    st.markdown(
+        f"""
+<style>
+.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
+.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); }}
+.chip b {{ display:block; margin-bottom:4px; }}
+</style>
+<div class="chips-wrap">
+  <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
+  <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
+  <div class="chip"><b>Total Charges</b><div>{total_chg:,.2f} €</div></div>
+  <div class="chip"><b>Total Nuitées</b><div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
+  <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
+</div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Graphiques par MM (même si un mois est filtré, ça se reflète)
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -546,80 +590,31 @@ def vue_rapport(df: pd.DataFrame):
                  nuitees=("nuitees","sum"))
             .reset_index()
     )
-    # prix/nuit
-    stats["brut_par_nuit"] = stats.apply(lambda r: (r["prix_brut"]/r["nuitees"]) if r["nuitees"] else 0, axis=1)
-    stats["net_par_nuit"]  = stats.apply(lambda r: (r["prix_net"]/r["nuitees"])  if r["nuitees"] else 0, axis=1)
-
-    # ne pas afficher les mois à zéro
-    stats = stats[(stats["prix_brut"]!=0) | (stats["prix_net"]!=0) | (stats["charges"]!=0) | (stats["nuitees"]!=0)]
     stats = stats.sort_values(["MM","plateforme"]).reset_index(drop=True)
 
-    # affichage tableau
-    if stats.empty:
-        st.info("Aucune donnée à afficher.")
-        return
-    show = stats.copy()
-    show["MM"] = show["MM"].astype(int)
-    show = show.rename(columns={
-        "MM":"Mois","plateforme":"Plateforme",
-        "prix_brut":"Brut (€)","prix_net":"Net (€)",
-        "charges":"Charges (€)","nuitees":"Nuitées",
-        "brut_par_nuit":"Brut/nuit (€)","net_par_nuit":"Net/nuit (€)"
-    })
-    st.dataframe(show, use_container_width=True)
-
-    # graphiques streamlit (ordonné 01..12)
     def chart_of(metric_label, metric_col):
+        if stats.empty:
+            return
         pivot = stats.pivot(index="MM", columns="plateforme", values=metric_col).fillna(0)
-        pivot = pivot.sort_index()  # 1..12
-        pivot.index = [f"{m:02d}" for m in pivot.index]
+        pivot = pivot.sort_index()
+        pivot.index = [f"{int(m):02d}" for m in pivot.index]
         st.markdown(f"**{metric_label}**")
         st.bar_chart(pivot)
 
     chart_of("Revenus bruts", "prix_brut")
     chart_of("Revenus nets", "prix_net")
     chart_of("Nuitées", "nuitees")
-    chart_of("Brut / nuit", "brut_par_nuit")
-    chart_of("Net / nuit", "net_par_nuit")
 
-    # --- Détail par réservation (avec noms) ---
-    with st.expander("📄 Détail des réservations (avec noms)", expanded=True):
-        detail = data.copy()
-        mois_detail = st.selectbox(
-            "Filtrer le détail par mois",
-            ["Tous"] + [f"{i:02d}" for i in range(1,13)],
-            index=0,
-            key="rapport_detail_mois"
-        )
-        if mois_detail != "Tous":
-            detail = detail[detail["MM"] == int(mois_detail)]
-
-        cols_detail = [
-            "nom_client","plateforme","date_arrivee","date_depart",
-            "nuitees","prix_brut","prix_net","charges","%"
-        ]
-        cols_detail = [c for c in cols_detail if c in detail.columns]
-
-        if "date_arrivee" in detail.columns:
-            detail["date_arrivee"] = detail["date_arrivee"].apply(format_date_str)
-        if "date_depart" in detail.columns:
-            detail["date_depart"] = detail["date_depart"].apply(format_date_str)
-
-        by = [c for c in ["date_arrivee","nom_client"] if c in detail.columns]
-        if by:
-            detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
-
-        st.dataframe(detail[cols_detail], use_container_width=True)
-
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            detail[cols_detail].to_excel(writer, index=False)
-        st.download_button(
-            "⬇️ Télécharger le détail (XLSX)",
-            data=buf.getvalue(),
-            file_name=f"rapport_detail_{annee}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    # Export XLSX du détail filtré
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        detail[cols_detail].to_excel(writer, index=False)
+    st.download_button(
+        "⬇️ Télécharger le détail (XLSX)",
+        data=buf.getvalue(),
+        file_name=f"rapport_detail_{annee}{'' if mois_label=='Tous' else '_'+mois_label}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
@@ -643,7 +638,6 @@ def vue_clients(df: pd.DataFrame):
         st.info("Aucune donnée pour cette période.")
         return
 
-    # prix/nuit par ligne
     data["prix_brut/nuit"] = data.apply(lambda r: round((r["prix_brut"]/r["nuitees"]) if r["nuitees"] else 0,2), axis=1)
     data["prix_net/nuit"]  = data.apply(lambda r: round((r["prix_net"]/r["nuitees"])  if r["nuitees"] else 0,2), axis=1)
 
