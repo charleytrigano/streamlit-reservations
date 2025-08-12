@@ -1,9 +1,9 @@
-# app.py — Réservations Villa Tobias (boutons Sauvegarde/Restauration à droite de "Réservations")
+# app.py — Réservations Villa Tobias (barre métriques sombre + totaux corrigés)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from io import BytesIO
 import os, re, json, base64, requests
 import matplotlib.pyplot as plt
@@ -18,16 +18,50 @@ def inject_css():
     st.markdown(
         """
         <style>
+          /* Couleurs auto (clair/sombre) */
+          :root{
+            --chip-bg: rgba(0,0,0,0.03);
+            --chip-border: rgba(0,0,0,0.12);
+            --chip-text: inherit;
+            --muted: rgba(0,0,0,0.55);
+          }
+          @media (prefers-color-scheme: dark){
+            :root{
+              --chip-bg: rgba(255,255,255,0.06);
+              --chip-border: rgba(255,255,255,0.18);
+              --chip-text: rgba(255,255,255,0.95);
+              --muted: rgba(255,255,255,0.65);
+            }
+          }
+
           .stTable td, .stTable th { font-size: 0.92rem; }
           h2, h3 { letter-spacing: 0.2px; }
           section[data-testid="stSidebar"] button { padding: .3rem .55rem !important; }
-          .inline-label { font-size:.9rem; color:#333; padding:.35rem .4rem .35rem 0; white-space:nowrap; }
-          .muted { color:#666; font-size:.9rem }
-          .ok-badge { background:#eefaf2; color:#147a2e; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
-          .warn-badge { background:#fff5e5; color:#8a5300; padding:.15rem .35rem; border-radius:.35rem; font-size:.8rem; }
+          .inline-label { font-size:.9rem; color:var(--muted); padding:.35rem .4rem .35rem 0; white-space:nowrap; }
+          .muted { color:var(--muted); font-size:.9rem }
+
+          /* Bouton rouge */
           .btn-danger > div > button { background-color: #e02424 !important; color: white !important; border: 0 !important; }
+
+          /* Boutons à droite du titre */
           .btn-right { display: flex; justify-content: flex-end; gap:.5rem; align-items:center; }
-          .cap { font-variant-numeric: tabular-nums; }
+
+          /* Barre de métriques responsive */
+          .metrics-row{
+            display:flex; flex-wrap:wrap; gap:.5rem; align-items:stretch;
+            margin: .25rem 0 .75rem 0;
+          }
+          .chip{
+            background: var(--chip-bg);
+            border: 1px solid var(--chip-border);
+            border-radius: .6rem;
+            padding: .5rem .65rem;
+            min-width: 140px;
+            color: var(--chip-text);
+          }
+          .chip .lbl { font-size:.85rem; opacity:.9; }
+          .chip .val { font-weight:600; font-variant-numeric: tabular-nums; }
+          .chip .sub { font-size:.82rem; opacity:.75; margin-top:.1rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -51,21 +85,15 @@ def inline_input(label_text, widget_fn, key=None, col_ratio=(1,3), **widget_kwar
         st.markdown(f"<div class='inline-label'>{label_text}</div>", unsafe_allow_html=True)
     with c2:
         widget_kwargs.setdefault("label_visibility", "collapsed")
-        # Harmonise types pour number_input pour éviter StreamlitMixedNumericTypesError
+        # Harmonise types pour st.number_input (évite MixedNumericTypesError)
         if widget_fn is st.number_input:
-            if "min_value" in widget_kwargs and isinstance(widget_kwargs["min_value"], int):
-                widget_kwargs["min_value"] = float(widget_kwargs["min_value"])
-            if "max_value" in widget_kwargs and isinstance(widget_kwargs["max_value"], int):
-                widget_kwargs["max_value"] = float(widget_kwargs["max_value"])
-            if "step" in widget_kwargs and isinstance(widget_kwargs["step"], int):
-                widget_kwargs["step"] = float(widget_kwargs["step"])
-            if "value" in widget_kwargs and isinstance(widget_kwargs["value"], int):
-                widget_kwargs["value"] = float(widget_kwargs["value"])
+            for k in ("min_value","max_value","step","value"):
+                if k in widget_kwargs and isinstance(widget_kwargs[k], int):
+                    widget_kwargs[k] = float(widget_kwargs[k])
         return widget_fn(label_text, key=key, **widget_kwargs)
 
 def render_cache_button_sidebar():
     st.sidebar.markdown("## 🧭 Navigation")
-    # (La radio de navigation est posée plus bas)
     st.sidebar.markdown("## 🧰 Maintenance")
     if st.sidebar.button("♻️ Vider le cache et relancer"):
         st.cache_data.clear()
@@ -73,10 +101,14 @@ def render_cache_button_sidebar():
         st.sidebar.success("Cache vidé. Redémarrage…")
         st.rerun()
 
-def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "plain"):
+def metrics_bar(df: pd.DataFrame, prefix: str = ""):
+    """Barre de métriques compatible thème sombre + responsive mobile (totaux corrects)."""
     if df is None or df.empty:
         return
     tmp = df.copy()
+    # Conserve uniquement les lignes "normales" (sans lignes Total)
+    tmp = tmp[~_marque_totaux(tmp)] if not tmp.empty else tmp
+
     for c in ["prix_brut", "prix_net", "charges", "nuitees", "%"]:
         tmp[c] = pd.to_numeric(tmp.get(c, 0), errors="coerce").fillna(0)
 
@@ -89,27 +121,27 @@ def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "plain"):
     brut_nuit = (brut / nts) if nts else 0.0
     net_nuit  = (net / nts) if nts else 0.0
 
-    bg = "#FAFAFA" if theme == "card" else "#FFFFFF"
-    border = "#E6E6E6"
+    def chip_html(label, value, sub=None):
+        sub_html = f"<div class='sub'>{sub}</div>" if sub else ""
+        return f"""
+        <div class="chip">
+          <div class="lbl">{label}</div>
+          <div class="val">{value}</div>
+          {sub_html}
+        </div>
+        """
 
-    def chip(label, value, sub=None):
-        sub = f"<div style='opacity:.7'>{sub}</div>" if sub else ""
-        return (f"<div style='padding:.35rem .55rem;border:1px solid {border};border-radius:.5rem;"
-                f"font-size:.9rem;line-height:1.2;background:{bg}'>"
-                f"<div style='font-weight:600'>{label}</div>"
-                f"<div class='cap'>{value}</div>{sub}</div>")
+    html = "<div class='metrics-row'>"
+    html += chip_html(prefix + "Brut", f"{brut:,.2f} €".replace(",", " "),
+                      f"{brut_nuit:,.2f} €/nuit".replace(",", " "))
+    html += chip_html(prefix + "Net", f"{net:,.2f} €".replace(",", " "),
+                      f"{net_nuit:,.2f} €/nuit".replace(",", " "))
+    html += chip_html(prefix + "Charges", f"{ch:,.2f} €".replace(",", " "))
+    html += chip_html(prefix + "Nuitées", f"{int(nts)}")
+    html += chip_html(prefix + "Commission moy.", f"{pct_mean:.2f} %")
+    html += "</div>"
 
-    cA, cB, cC, cD, cE = st.columns(5)
-    cA.markdown(chip(prefix + "Brut", f"{brut:,.2f} €".replace(",", " "),
-                     f"{brut_nuit:,.2f} €/nuit".replace(",", " ")), unsafe_allow_html=True)
-    cB.markdown(chip(prefix + "Net", f"{net:,.2f} €".replace(",", " "),
-                     f"{net_nuit:,.2f} €/nuit".replace(",", " ")), unsafe_allow_html=True)
-    cC.markdown(chip(prefix + "Charges", f"{ch:,.2f} €".replace(",", " ")), unsafe_allow_html=True)
-    cD.markdown(chip(prefix + "Nuitées", f"{int(nts)}"), unsafe_allow_html=True)
-    cE.markdown(chip(prefix + "Commission moy.", f"{pct_mean:.2f} %"), unsafe_allow_html=True)
-
-def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
-    return metrics_bar(df, prefix=prefix, theme="card")
+    st.markdown(html, unsafe_allow_html=True)
 
 # ==============================  UTILS / SCHEMA  ===========================
 
@@ -196,7 +228,7 @@ def _marque_totaux(df: pd.DataFrame) -> pd.Series:
     mask = pd.Series(False, index=df.index)
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
-            mask |= df[col].astype(str).str.strip().str.lower().eq("total")
+            mask |= df[col].astype(str).strip().str.lower().eq("total")
     has_no_dates = pd.Series(True, index=df.index)
     for c in ["date_arrivee","date_depart"]:
         if c in df.columns:
@@ -272,7 +304,6 @@ def github_save_file(file_bytes: bytes, commit_msg: str = "Update reservations.x
 
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-    # 1) Récupérer SHA s’il existe
     sha = None
     try:
         r = requests.get(api_url, headers=headers, params={"ref": branch}, timeout=15)
@@ -280,7 +311,6 @@ def github_save_file(file_bytes: bytes, commit_msg: str = "Update reservations.x
             sha = r.json().get("sha")
     except Exception:
         pass
-    # 2) PUT
     payload = {
         "message": commit_msg,
         "content": base64.b64encode(file_bytes).decode("utf-8"),
@@ -300,9 +330,7 @@ def restauration_from_uploader(uploaded_file):
     try:
         df_new = pd.read_excel(uploaded_file)
         df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
-        # Sauvegarde locale
         sauvegarder_donnees(df_new)
-        # Sauvegarde GitHub si secrets présents
         file_bytes = _excel_bytes_from_df(df_new)
         ok, msg = github_save_file(file_bytes, commit_msg="Restore reservations.xlsx")
         if ok:
@@ -330,12 +358,10 @@ def tel_to_uri(s: str) -> str:
 def sms_message_arrivee(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "").strip()
     plateforme = str(row.get("plateforme") or "").strip()
-    d1 = row.get("date_arrivee")
-    d2 = row.get("date_depart")
-    nuitees = row.get("nuitees")
+    d1 = row.get("date_arrivee"); d2 = row.get("date_depart"); nuitees = row.get("nuitees")
     d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
     d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
-    txt = (
+    return (
         f"VILLA TOBIAS - Plateforme : {plateforme}\n"
         f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
         f"Bonjour {nom}\n\n"
@@ -344,11 +370,10 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
         "Annick & Charley"
     )
-    return txt
 
 def sms_message_depart_24h(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "").strip()
-    txt = (
+    return (
         f"Bonjour {nom},\n\n"
         "Un grand merci d’avoir choisi notre appartement pour votre séjour ! "
         "Nous espérons que vous avez passé un moment aussi agréable que celui que nous avons eu à vous accueillir.\n\n"
@@ -357,7 +382,6 @@ def sms_message_depart_24h(row: pd.Series) -> str:
         "Au plaisir de vous accueillir à nouveau,\n"
         "Annick & Charley"
     )
-    return txt
 
 # ==============================  VUES  =====================================
 
@@ -415,7 +439,6 @@ def vue_reservations(df: pd.DataFrame):
         header("📋 Réservations", "Filtrez, exportez, modifiez en un clin d’œil")
     with c_btns:
         st.markdown("<div class='btn-right'>", unsafe_allow_html=True)
-        # Bouton Sauvegarde XLSX (download)
         data_xlsx = _excel_bytes_from_df(df) if not df.empty else b""
         st.download_button(
             "💾 Sauvegarde XLSX",
@@ -424,7 +447,6 @@ def vue_reservations(df: pd.DataFrame):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_top"
         )
-        # Bouton rouge Restauration -> fait apparaître l'uploader
         restore_click = st.button("📤 Restauration XLSX", key="restore_top_btn")
         st.markdown("</div>", unsafe_allow_html=True)
         if restore_click:
@@ -450,7 +472,10 @@ def vue_reservations(df: pd.DataFrame):
             show[col] = show[col].apply(format_date_str)
 
     st.dataframe(show, use_container_width=True)
-    metrics_bar_compact(show, prefix="Total ")
+
+    # 🔴 Totaux corrigés : on exclut les lignes “Total”
+    st.markdown("#### Totaux")
+    metrics_bar(show, prefix="Total ")
 
 def vue_ajouter(df: pd.DataFrame):
     header("➕ Ajouter une réservation", "Saisie rapide (libellés inline)")
@@ -470,7 +495,6 @@ def vue_ajouter(df: pd.DataFrame):
                 options=["Booking", "Airbnb", "Autre"], index=0
             )
 
-        # État par défaut pour les dates
         if "ajout_arrivee" not in st.session_state:
             st.session_state.ajout_arrivee = date.today()
 
@@ -756,9 +780,9 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True
     )
 
-    metrics_bar(data, prefix="Total ", theme="plain")
+    metrics_bar(data, prefix="Total ")
 
-    # Graphes
+    # Graphes (01→12, barres groupées)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -915,11 +939,9 @@ def save_ical_sources(sources):
         st.error(f"Impossible d’écrire {ICAL_SOURCES}: {e}")
 
 def parse_ics(text: str):
-    """Renvoie une liste d'événements {uid, start(date), end(date), summary}."""
     events = []
     if not text:
         return events
-    # Découpe par VEVENT
     for block in re.split(r"BEGIN:VEVENT", text)[1:]:
         block = "BEGIN:VEVENT" + block
         if "END:VEVENT" not in block:
@@ -936,7 +958,6 @@ def parse_ics(text: str):
         summary = get_line("SUMMARY")
 
         def parse_dt(s):
-            # Formats fréquents : YYYYMMDD ou YYYYMMDDTHHMMSSZ
             if not s:
                 return None
             s = s.strip()
@@ -957,7 +978,6 @@ def vue_ical(df: pd.DataFrame):
     header("🔄 iCal", "Ajoutez vos URLs et importez les réservations manquantes")
     sources = load_ical_sources()
 
-    # Affichage + édition
     st.markdown("#### 📚 Sources actuelles")
     if sources:
         for i, s in enumerate(sources):
@@ -1057,10 +1077,8 @@ def vue_ical(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
     inject_css()
-
-    # Barre latérale : navigation + maintenance
     render_cache_button_sidebar()
-    # La navigation est définie ici pour être sous "Navigation"
+
     onglet = st.sidebar.radio(
         "Aller à",
         [
@@ -1075,15 +1093,13 @@ def main():
         ],
     )
 
-    # Chargement des données
     df = charger_donnees()
 
-    # (Option) En bas de la section Maintenance : un second bouton rouge Restauration (si tu veux le garder)
+    # Restauration XLSX (option secondaire en sidebar)
     with st.sidebar:
         st.markdown("### ")
         holder = st.container()
         with holder:
-            # petit hack pour avoir un bouton "rouge" (classe css)
             red = st.container()
             with red:
                 clicked = st.button("📤 Restauration XLSX (sidebar)", key="restore_sb_btn")
@@ -1093,7 +1109,6 @@ def main():
             if up2 is not None:
                 restauration_from_uploader(up2)
 
-    # Routes
     if onglet == "📋 Réservations":
         vue_reservations(df)
     elif onglet == "➕ Ajouter":
