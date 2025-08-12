@@ -214,6 +214,86 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
+# =========================  KIT UI COMPACT + TOTeaUX BAR  ==================
+
+def ui_filters_row(df: pd.DataFrame, key_prefix: str):
+    """Une ligne compacte de filtres: Plateforme | Année | Mois.
+    Retourne (plateforme, annee, mois) où:
+      - plateforme: str (ou "Toutes")
+      - annee: int (ou None)
+      - mois: int (1..12) ou None
+    """
+    df = df.copy()
+    plats = ["Toutes"] + sorted(df["plateforme"].dropna().astype(str).unique().tolist()) if "plateforme" in df else ["Toutes"]
+    years = sorted([int(x) for x in df["AAAA"].dropna().unique()]) if "AAAA" in df else []
+    months = [f"{i:02d}" for i in range(1,13)]
+
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        pf = st.selectbox("Plateforme", plats, key=f"{key_prefix}_pf")
+    with c2:
+        y  = st.selectbox("Année", years, index=(len(years)-1 if years else 0), key=f"{key_prefix}_year") if years else None
+    with c3:
+        m  = st.selectbox("Mois", ["Tous"] + months, key=f"{key_prefix}_month") if years else "Tous"
+    with c4:
+        if st.button("🔄 Réinitialiser", key=f"{key_prefix}_reset"):
+            st.session_state.pop(f"{key_prefix}_pf", None)
+            st.session_state.pop(f"{key_prefix}_year", None)
+            st.session_state.pop(f"{key_prefix}_month", None)
+            st.rerun()
+
+    mois_int = None if (m in (None, "Tous")) else int(m)
+    annee_int = int(y) if y is not None else None
+    return pf, annee_int, mois_int
+
+def apply_filters(df: pd.DataFrame, pf: str, annee: int | None, mois: int | None) -> pd.DataFrame:
+    out = df.copy()
+    if pf and pf != "Toutes":
+        out = out[out["plateforme"] == pf]
+    if annee is not None:
+        out = out[out["AAAA"] == annee]
+    if mois is not None:
+        out = out[out["MM"] == mois]
+    return out
+
+def style_dataframe(df: pd.DataFrame, money_cols=("prix_brut","prix_net","charges","prix_brut/nuit","prix_net/nuit"), pct_cols=("%",)):
+    """Applique formats € / % et cache l’index dans st.dataframe"""
+    col_cfg = {}
+    for c in df.columns:
+        if c in money_cols:
+            col_cfg[c] = st.column_config.NumberColumn(c, format="%.2f €", help="Montant en euros")
+        elif c in pct_cols:
+            col_cfg[c] = st.column_config.NumberColumn(c, format="%.2f %%")
+    st.dataframe(df, use_container_width=True, column_config=col_cfg, hide_index=True)
+
+def metrics_bar_from_df(df: pd.DataFrame, prefix: str = ""):
+    """Affiche une barre de totaux sous un tableau filtré.
+       Attend des colonnes: prix_brut, prix_net, charges, nuitees.
+    """
+    if df.empty:
+        return
+    tmp = df.copy()
+    for c in ["prix_brut","prix_net","charges","nuitees"]:
+        if c in tmp.columns:
+            tmp[c] = pd.to_numeric(tmp[c], errors="coerce").fillna(0)
+        else:
+            tmp[c] = 0
+    brut = float(tmp["prix_brut"].sum())
+    net  = float(tmp["prix_net"].sum())
+    ch   = float(tmp["charges"].sum())
+    nts  = float(tmp["nuitees"].sum())
+
+    brut_nuit = round((brut/nts) if nts else 0, 2)
+    net_nuit  = round((net/nts) if nts else 0, 2)
+
+    cA, cB, cC, cD, cE, cF = st.columns(6)
+    cA.metric(prefix+"Prix brut (€)", f"{brut:.2f}")
+    cB.metric(prefix+"Prix net (€)",  f"{net:.2f}")
+    cC.metric(prefix+"Charges (€)",   f"{ch:.2f}")
+    cD.metric(prefix+"Nuitées",       f"{int(nts)}")
+    cE.metric(prefix+"€ brut/nuit",   f"{brut_nuit:.2f}")
+    cF.metric(prefix+"€ net/nuit",    f"{net_nuit:.2f}")
+
 # =========================  BANDEAU "EN COURS"  ============================
 
 def sms_message(row: pd.Series) -> str:
@@ -272,9 +352,12 @@ def vue_en_cours_banner(df: pd.DataFrame):
         return
 
     en_cours = en_cours.sort_values(["date_depart", "nom_client"]).copy()
-    en_cours["date_arrivee_fmt"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
-    en_cours["date_depart_fmt"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
 
+    # Remplacer directement par texte formaté (évite le doublon de colonnes)
+    en_cours["date_arrivee"] = en_cours["date_arrivee"].apply(lambda d: d.strftime("%Y/%m/%d"))
+    en_cours["date_depart"]  = en_cours["date_depart"].apply(lambda d: d.strftime("%Y/%m/%d"))
+
+    # Liens Appeler / SMS
     def _make_links(row):
         tel_raw = str(row.get("telephone") or "").strip()
         tel_ui  = tel_to_uri(tel_raw)
@@ -289,19 +372,6 @@ def vue_en_cours_banner(df: pd.DataFrame):
     en_cours["📞 Appeler"] = links[0]
     en_cours["📲 SMS"]     = links[1]
 
-    en_cours = en_cours.rename(columns={
-        "date_arrivee_fmt": "date_arrivee",
-        "date_depart_fmt":  "date_depart"
-    })
-
-    if "nuitees" not in en_cours.columns:
-        def _nuits(r):
-            d1, d2 = r.get("date_arrivee"), r.get("date_depart")
-            if isinstance(d1, date) and isinstance(d2, date):
-                return (d2 - d1).days
-            return ""
-        en_cours["nuitees"] = en_cours.apply(_nuits, axis=1)
-
     desired = ["plateforme","nom_client","date_arrivee","date_depart","nuitees","📞 Appeler","📲 SMS"]
     existing = [c for c in desired if c in en_cours.columns]
     df_out = en_cours[existing].copy()
@@ -312,108 +382,52 @@ def vue_en_cours_banner(df: pd.DataFrame):
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
 
-    df = _trier_et_recoller_totaux(ensure_schema(df)).copy()
+    df = _trier_et_recoller_totaux(ensure_schema(df))
     if df.empty:
         st.info("Aucune donnée.")
         return
 
-    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    colf1, colf2, colf3 = st.columns(3)
-
-    with colf1:
-        pf_opts = ["Toutes"] + sorted(df["plateforme"].dropna().astype(str).unique().tolist())
-        filtre_pf = st.selectbox("Plateforme", pf_opts, key="res_pf")
-
-    with colf2:
-        annee_sel = st.selectbox("Année", annees, index=len(annees)-1 if annees else 0, key="res_annee")
-
-    with colf3:
-        mois_opts = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
-        mois_sel = st.selectbox("Mois (01–12)", mois_opts, key="res_mois")
-
-    data = df.copy()
-    if filtre_pf != "Toutes":
-        data = data[data["plateforme"] == filtre_pf]
-    if annee_sel is not None:
-        data = data[data["AAAA"] == int(annee_sel)]
-    if mois_sel != "Tous":
-        data = data[data["MM"] == int(mois_sel)]
+    # Filtres compacts
+    pf, annee, mois = ui_filters_row(df, key_prefix="res")
+    data = apply_filters(df, pf, annee, mois)
 
     if data.empty:
         st.info("Aucune donnée pour ces filtres.")
         return
 
+    # Masquer les lignes vides (0 partout) sauf si un nom est renseigné
     mask_zero_and_no_name = (
-        (data["prix_brut"].fillna(0) == 0) &
-        (data["prix_net"].fillna(0) == 0) &
-        (data["charges"].fillna(0) == 0) &
+        (pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0) == 0) &
+        (pd.to_numeric(data["prix_net"], errors="coerce").fillna(0) == 0) &
+        (pd.to_numeric(data["charges"], errors="coerce").fillna(0) == 0) &
         (data["nom_client"].astype(str).str.strip() == "")
     )
     is_total = _marque_totaux(data)
-    to_display = data[~(mask_zero_and_no_name & ~is_total)].copy()
+    data = data[~(mask_zero_and_no_name & ~is_total)].copy()
 
-    core = data[~is_total].copy()
-    for c in ["prix_brut","prix_net","charges","nuitees"]:
-        core[c] = pd.to_numeric(core[c], errors="coerce").fillna(0)
+    # €/nuit
+    with pd.option_context('mode.use_inf_as_na', True):
+        if "nuitees" in data and "prix_brut" in data:
+            data["prix_brut/nuit"] = (pd.to_numeric(data["prix_brut"], errors="coerce") /
+                                      pd.to_numeric(data["nuitees"], errors="coerce").replace(0, np.nan)).fillna(0).round(2)
+        if "nuitees" in data and "prix_net" in data:
+            data["prix_net/nuit"] = (pd.to_numeric(data["prix_net"], errors="coerce") /
+                                     pd.to_numeric(data["nuitees"], errors="coerce").replace(0, np.nan)).fillna(0).round(2)
 
-    to_display["prix_brut/nuit"] = (
-        (pd.to_numeric(to_display["prix_brut"], errors="coerce") /
-         pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
-        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-    )
-    to_display["prix_net/nuit"] = (
-        (pd.to_numeric(to_display["prix_net"], errors="coerce") /
-         pd.to_numeric(to_display["nuitees"], errors="coerce").replace(0, np.nan))
-        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-    )
+    # Dates en texte
+    for c in ["date_arrivee","date_depart"]:
+        if c in data.columns:
+            data[c] = data[c].apply(format_date_str)
 
-    show = to_display.sort_values(["date_arrivee","nom_client"], na_position="last").copy()
-    for col in ["date_arrivee","date_depart"]:
-        if col in show.columns:
-            show[col] = show[col].apply(format_date_str)
-    if "telephone" in show.columns:
-        show["telephone"] = show["telephone"].apply(
-            lambda x: (lambda u: f'<a href="{u}">📞 Appeler</a>')(tel_to_uri(x)) if str(x).strip() != "" else ""
-        )
+    cols = ["nom_client","plateforme","date_arrivee","date_depart","nuitees",
+            "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM","telephone"]
+    cols = [c for c in cols if c in data.columns]
 
-    cols = [
-        "nom_client","plateforme","date_arrivee","date_depart","nuitees",
-        "prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit","AAAA","MM","telephone"
-    ]
-    cols = [c for c in cols if c in show.columns]
+    style_dataframe(data[cols])
 
-    st.markdown(
-        show[cols].rename(columns={"telephone":"📞 Appeler"}).to_html(index=False, escape=False),
-        unsafe_allow_html=True
-    )
-
-    tot_ctrl = {
-        "prix_brut": float(core["prix_brut"].sum()),
-        "prix_net":  float(core["prix_net"].sum()),
-        "charges":   float(core["charges"].sum()),
-        "nuitees":   int(core["nuitees"].sum()),
-        "reservations": int(len(core))
-    }
-    tot_ctrl["brut/nuit"] = round((tot_ctrl["prix_brut"] / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
-    tot_ctrl["net/nuit"]  = round((tot_ctrl["prix_net"]  / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
-
-    st.markdown("#### Totaux (calcul direct sur les lignes filtrées, hors 'Total')")
-    cA, cB, cC, cD, cE, cF, cG = st.columns(7)
-    cA.metric("Prix brut (€)", f"{tot_ctrl['prix_brut']:.2f}")
-    cB.metric("Prix net (€)",  f"{tot_ctrl['prix_net']:.2f}")
-    cC.metric("Charges (€)",   f"{tot_ctrl['charges']:.2f}")
-    cD.metric("Nuitées",       f"{tot_ctrl['nuitees']}")
-    cE.metric("Réservations",  f"{tot_ctrl['reservations']}")
-    cF.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
-    cG.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
-
-    csv = show[cols].rename(columns={"telephone":"📞 Appeler"}).to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "📥 Télécharger la sélection (CSV)",
-        data=csv,
-        file_name=f"reservations_{annee_sel}_{mois_sel if mois_sel!='Tous' else 'all'}_{filtre_pf}.csv".replace(" ", "_"),
-        mime="text/csv",
-    )
+    # Barre de totaux
+    st.markdown("——")
+    metrics_bar_from_df(data)
 
 def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
@@ -602,22 +616,13 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée exploitable.")
         return
 
-    annees = sorted(core["AAAA"].unique().tolist())
-    annee = st.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
+    # Filtres compacts
+    pf, annee, mois = ui_filters_row(core, key_prefix="rap")
+    if annee is None:
+        years = sorted(core["AAAA"].unique().tolist())
+        annee = years[-1] if years else None
 
-    data = core[core["AAAA"] == int(annee)].copy()
-    plateformes = ["Toutes"] + sorted(data["plateforme"].dropna().unique().tolist())
-    col1, col2 = st.columns(2)
-    with col1:
-        filtre_plateforme = st.selectbox("Plateforme", plateformes, key="rapport_pf")
-    with col2:
-        filtre_mois_label = st.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)], key="rapport_mois")
-
-    if filtre_plateforme != "Toutes":
-        data = data[data["plateforme"] == filtre_plateforme]
-    if filtre_mois_label != "Tous":
-        data = data[data["MM"] == int(filtre_mois_label)]
-
+    data = apply_filters(core, pf, annee, mois)
     if data.empty:
         st.info("Aucune donnée pour ces filtres.")
         return
@@ -629,65 +634,41 @@ def vue_rapport(df: pd.DataFrame):
                  charges=("charges","sum"),
                  nuitees=("nuitees","sum"))
             .reset_index()
+            .sort_values(["MM","plateforme"])
     )
 
-    plats = sorted(stats["plateforme"].unique().tolist())
-    full_rows = []
-    for m in range(1, 13):
-        for p in plats:
-            row = stats[(stats["MM"] == m) & (stats["plateforme"] == p)]
-            if row.empty:
-                full_rows.append({"MM": m, "plateforme": p, "prix_brut": 0.0, "prix_net": 0.0, "charges": 0.0, "nuitees": 0})
-            else:
-                full_rows.append(row.iloc[0].to_dict())
-    stats_full = pd.DataFrame(full_rows).sort_values(["MM","plateforme"]).reset_index(drop=True)
+    # €/nuit
+    stats["brut/nuit"] = (stats["prix_brut"] / stats["nuitees"].replace(0, np.nan)).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
+    stats["net/nuit"]  = (stats["prix_net"]  / stats["nuitees"].replace(0, np.nan)).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
 
-    stats_full["brut/nuit"] = (
-        (pd.to_numeric(stats_full["prix_brut"], errors="coerce") /
-         pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
-        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-    )
-    stats_full["net/nuit"] = (
-        (pd.to_numeric(stats_full["prix_net"], errors="coerce") /
-         pd.to_numeric(stats_full["nuitees"], errors="coerce").replace(0, np.nan))
-        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-    )
-
-    # Masquer les lignes strictement nulles
-    stats_table = stats_full[
+    # Masquer lignes 0/0/0/0
+    stats_view = stats[
         ~(
-            (stats_full["prix_brut"].round(2) == 0) &
-            (stats_full["prix_net"].round(2) == 0) &
-            (stats_full["charges"].round(2)  == 0) &
-            (stats_full["nuitees"].round(2) == 0)
+            (stats["prix_brut"].round(2) == 0) &
+            (stats["prix_net"].round(2)  == 0) &
+            (stats["charges"].round(2)   == 0) &
+            (stats["nuitees"].round(2)   == 0)
         )
     ].copy()
 
     st.subheader(f"Détail {annee}")
-    affiche = stats_table.rename(columns={"MM": "Mois"})[
+    table_view = stats_view.rename(columns={"MM":"Mois"})[
         ["Mois","plateforme","prix_brut","prix_net","charges","nuitees","brut/nuit","net/nuit"]
     ]
-    st.dataframe(affiche, use_container_width=True)
+    style_dataframe(table_view)
 
-    tot_ctrl = {
-        "prix_brut": float(data["prix_brut"].sum()),
-        "prix_net":  float(data["prix_net"].sum()),
-        "charges":   float(data["charges"].sum()),
-        "nuitees":   float(data["nuitees"].sum()),
-    }
-    tot_ctrl["brut/nuit"] = round((tot_ctrl["prix_brut"] / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
-    tot_ctrl["net/nuit"]  = round((tot_ctrl["prix_net"]  / tot_ctrl["nuitees"]) if tot_ctrl["nuitees"] else 0.0, 2)
+    # Barre de totaux
+    st.markdown("——")
+    metrics_bar_from_df(data, prefix="Total ")
 
-    st.markdown("#### Totaux (calcul direct)")
-    colA, colB, colC, colD, colE, colF = st.columns(6)
-    colA.metric("Prix brut (€)", f"{tot_ctrl['prix_brut']:.2f}")
-    colB.metric("Prix net (€)",  f"{tot_ctrl['prix_net']:.2f}")
-    colC.metric("Charges (€)",   f"{tot_ctrl['charges']:.2f}")
-    colD.metric("Nuitées",       f"{int(tot_ctrl['nuitees'])}")
-    colE.metric("€ brut/nuit",   f"{tot_ctrl['brut/nuit']:.2f}")
-    colF.metric("€ net/nuit",    f"{tot_ctrl['net/nuit']:.2f}")
-
-    def plot_grouped_bars(metric: str, title: str, ylabel: str):
+    # Graphes (matplotlib) X=1..12
+    plats = sorted(stats["plateforme"].unique().tolist())
+    stats_full = stats.copy()
+    for metric, title, ylabel in [
+        ("prix_brut","💰 Revenus bruts","€"),
+        ("charges","💸 Charges","€"),
+        ("nuitees","🛌 Nuitées","Nuitées"),
+    ]:
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
         plats_sorted = sorted(plats)
@@ -711,11 +692,6 @@ def vue_rapport(df: pd.DataFrame):
         ax.grid(axis="y", linestyle="--", alpha=0.3)
         st.pyplot(fig); plt.close(fig)
 
-    st.markdown("---")
-    plot_grouped_bars("prix_brut", "💰 Revenus bruts", "€")
-    plot_grouped_bars("charges", "💸 Charges", "€")
-    plot_grouped_bars("nuitees", "🛌 Nuitées", "Nuitées")
-
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
     df = _trier_et_recoller_totaux(ensure_schema(df))
@@ -723,24 +699,24 @@ def vue_clients(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    annee = st.selectbox("Année", annees) if annees else None
-    mois = st.selectbox("Mois", ["Tous"] + list(range(1,13)))
-
-    data = df.copy()
-    if annee:
-        data = data[data["AAAA"] == annee]
-    if mois != "Tous":
-        data = data[data["MM"] == int(mois)]
+    # Filtres compacts
+    pf, annee, mois = ui_filters_row(df, key_prefix="cli")
+    data = apply_filters(df, pf, annee, mois)
     if data.empty:
-        st.info("Aucune donnée pour cette période.")
+        st.info("Aucune donnée pour ces filtres.")
         return
 
     with pd.option_context('mode.use_inf_as_na', True):
         if "nuitees" in data.columns and "prix_brut" in data.columns:
-            data["prix_brut/nuit"] = (data["prix_brut"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
+            data["prix_brut/nuit"] = (pd.to_numeric(data["prix_brut"], errors="coerce") /
+                                      pd.to_numeric(data["nuitees"], errors="coerce").replace(0, np.nan)).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
         if "nuitees" in data.columns and "prix_net" in data.columns:
-            data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
+            data["prix_net/nuit"] = (pd.to_numeric(data["prix_net"], errors="coerce") /
+                                     pd.to_numeric(data["nuitees"], errors="coerce").replace(0, np.nan)).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
+
+    for c in ["date_arrivee","date_depart"]:
+        if c in data.columns:
+            data[c] = data[c].apply(format_date_str)
 
     cols = ["nom_client","plateforme",
             "date_arrivee","date_depart","nuitees",
@@ -748,16 +724,12 @@ def vue_clients(df: pd.DataFrame):
             "telephone"]
     cols = [c for c in cols if c in data.columns]
 
-    show = data.copy()
-    for c in ["date_arrivee","date_depart"]:
-        if c in show.columns:
-            show[c] = show[c].apply(format_date_str)
+    style_dataframe(data[cols])
 
-    st.dataframe(show[cols], use_container_width=True)
-
+    # Export CSV
     st.download_button(
         "📥 Télécharger la liste (CSV)",
-        data=show[cols].to_csv(index=False).encode("utf-8"),
+        data=data[cols].to_csv(index=False).encode("utf-8"),
         file_name="liste_clients.csv",
         mime="text/csv"
     )
@@ -1052,8 +1024,8 @@ def main():
         st.sidebar.success("Cache vidé ✅")
         st.rerun()
 
-    # Paramètre d’URL ?clear=1 pour vider le cache (sans experimental)
-    params = st.query_params  # dict-like: {str: str}
+    # Paramètre d’URL ?clear=1 pour vider le cache
+    params = st.query_params
     clear_val = params.get("clear", "0")
     if clear_val == "1":
         st.cache_data.clear()
@@ -1070,7 +1042,7 @@ def main():
     df = charger_donnees(st.session_state.cache_buster)
     bouton_telecharger(df)
 
-    # Bandeau "En cours aujourd'hui" (avec liens Appeler/SMS)
+    # Bandeau "En cours aujourd'hui"
     vue_en_cours_banner(df)
 
     st.sidebar.title("🧭 Navigation")
