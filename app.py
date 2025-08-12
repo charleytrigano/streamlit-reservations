@@ -1,4 +1,4 @@
-# app.py — Réservations Villa Tobias (barre métriques sombre + totaux corrigés)
+# app.py — Réservations Villa Tobias (totaux corrigés + thème sombre + push GitHub optionnel)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -106,7 +106,7 @@ def metrics_bar(df: pd.DataFrame, prefix: str = ""):
     if df is None or df.empty:
         return
     tmp = df.copy()
-    # Conserve uniquement les lignes "normales" (sans lignes Total)
+    # Conserve uniquement les lignes normales (exclut lignes 'Total')
     tmp = tmp[~_marque_totaux(tmp)] if not tmp.empty else tmp
 
     for c in ["prix_brut", "prix_net", "charges", "nuitees", "%"]:
@@ -223,20 +223,26 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     return df[ordered + rest]
 
 def _marque_totaux(df: pd.DataFrame) -> pd.Series:
+    """Repère les lignes 'Total' (ou assimilées) pour ne pas les compter 2x."""
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
+
     mask = pd.Series(False, index=df.index)
     for col in ["nom_client", "plateforme"]:
         if col in df.columns:
-            mask |= df[col].astype(str).strip().str.lower().eq("total")
+            # IMPORTANT : vectorisé (str.strip), pas .strip() sur Series
+            mask |= df[col].astype(str).str.strip().str.lower().eq("total")
+
     has_no_dates = pd.Series(True, index=df.index)
     for c in ["date_arrivee","date_depart"]:
         if c in df.columns:
             has_no_dates &= df[c].isna()
+
     has_money = pd.Series(False, index=df.index)
     for c in ["prix_brut","prix_net","charges"]:
         if c in df.columns:
             has_money |= df[c].notna()
+
     return mask | (has_no_dates & has_money)
 
 def _trier_et_recoller_totaux(df: pd.DataFrame) -> pd.DataFrame:
@@ -276,25 +282,8 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
         _trier_et_recoller_totaux(ensure_schema(df)).to_excel(writer, index=False)
     return buf.getvalue()
 
-def sauvegarder_donnees(df: pd.DataFrame):
-    df = _trier_et_recoller_totaux(ensure_schema(df))
-    df_to_save = df.copy()
-    if "telephone" in df_to_save.columns:
-        def _to_excel_text(s):
-            s = "" if pd.isna(s) else str(s).strip()
-            if s and not s.startswith("'"):
-                s = "'" + s
-            return s
-        df_to_save["telephone"] = df_to_save["telephone"].apply(_to_excel_text)
-    try:
-        with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
-            df_to_save.to_excel(writer, index=False)
-        st.cache_data.clear()
-        st.success("💾 Sauvegarde Excel effectuée.")
-    except Exception as e:
-        st.error(f"Échec de sauvegarde Excel : {e}")
-
 def github_save_file(file_bytes: bytes, commit_msg: str = "Update reservations.xlsx"):
+    """Push GitHub optionnel (si secrets configurés)."""
     token = st.secrets.get("GITHUB_TOKEN")
     repo  = st.secrets.get("GITHUB_REPO")
     branch= st.secrets.get("GITHUB_BRANCH", "main")
@@ -326,17 +315,40 @@ def github_save_file(file_bytes: bytes, commit_msg: str = "Update reservations.x
     except Exception as e:
         return False, f"GitHub error: {e}"
 
+def sauvegarder_donnees(df: pd.DataFrame):
+    """Sauvegarde locale + push GitHub (si secrets présents)."""
+    df = _trier_et_recoller_totaux(ensure_schema(df))
+    df_to_save = df.copy()
+    if "telephone" in df_to_save.columns:
+        def _to_excel_text(s):
+            s = "" if pd.isna(s) else str(s).strip()
+            if s and not s.startswith("'"):
+                s = "'" + s
+            return s
+        df_to_save["telephone"] = df_to_save["telephone"].apply(_to_excel_text)
+    try:
+        with pd.ExcelWriter(FICHIER, engine="openpyxl") as writer:
+            df_to_save.to_excel(writer, index=False)
+        st.cache_data.clear()
+        st.success("💾 Sauvegarde Excel effectuée.")
+
+        # Push GitHub si configuré
+        file_bytes = _excel_bytes_from_df(df_to_save)
+        ok, msg = github_save_file(file_bytes, commit_msg="Save reservations.xlsx")
+        if ok:
+            st.info("☁️ Sauvegarde GitHub OK.")
+        else:
+            st.caption(f"ℹ️ GitHub : {msg}")
+
+    except Exception as e:
+        st.error(f"Échec de sauvegarde Excel : {e}")
+
 def restauration_from_uploader(uploaded_file):
     try:
         df_new = pd.read_excel(uploaded_file)
         df_new = _trier_et_recoller_totaux(ensure_schema(df_new))
-        sauvegarder_donnees(df_new)
-        file_bytes = _excel_bytes_from_df(df_new)
-        ok, msg = github_save_file(file_bytes, commit_msg="Restore reservations.xlsx")
-        if ok:
-            st.success("✅ Restauration OK + poussée GitHub.")
-        else:
-            st.info(f"ℹ️ Restauration OK (GitHub) : {msg}")
+        sauvegarder_donnees(df_new)  # gère local + GitHub
+        st.success("✅ Restauration OK.")
         st.rerun()
     except Exception as e:
         st.error(f"Erreur import: {e}")
@@ -473,7 +485,7 @@ def vue_reservations(df: pd.DataFrame):
 
     st.dataframe(show, use_container_width=True)
 
-    # 🔴 Totaux corrigés : on exclut les lignes “Total”
+    # Totaux corrigés (exclut lignes Total)
     st.markdown("#### Totaux")
     metrics_bar(show, prefix="Total ")
 
@@ -631,18 +643,18 @@ def vue_modifier(df: pd.DataFrame):
         if depart < arrivee + timedelta(days=1):
             st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
             return
-        df.at[i, "nom_client"] = nom.strip()
-        df.at[i, "plateforme"] = plateforme
-        df.at[i, "telephone"]  = tel.strip()
+        df.at[i, "nom_client"]   = nom.strip()
+        df.at[i, "plateforme"]   = plateforme
+        df.at[i, "telephone"]    = tel.strip()
         df.at[i, "date_arrivee"] = arrivee
         df.at[i, "date_depart"]  = depart
-        df.at[i, "prix_brut"] = float(brut)
-        df.at[i, "prix_net"]  = float(net)
-        df.at[i, "charges"]   = round(brut - net, 2)
-        df.at[i, "%"]         = round(((brut - net) / brut * 100) if brut else 0, 2)
-        df.at[i, "nuitees"]   = (depart - arrivee).days
-        df.at[i, "AAAA"]      = arrivee.year
-        df.at[i, "MM"]        = arrivee.month
+        df.at[i, "prix_brut"]    = float(brut)
+        df.at[i, "prix_net"]     = float(net)
+        df.at[i, "charges"]      = round(brut - net, 2)
+        df.at[i, "%"]            = round(((brut - net) / brut * 100) if brut else 0, 2)
+        df.at[i, "nuitees"]      = (depart - arrivee).days
+        df.at[i, "AAAA"]         = arrivee.year
+        df.at[i, "MM"]           = arrivee.month
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df)
         st.success("✅ Réservation modifiée")
