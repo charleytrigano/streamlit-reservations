@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS avec DTSTAMP/UID)
+# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS + Rapport détaillé avec noms)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -53,7 +53,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
 
-    # Dates en date pure
+    # Dates -> date
     for c in ["date_arrivee", "date_depart"]:
         if c in df.columns:
             df[c] = df[c].apply(to_date_only)
@@ -328,37 +328,16 @@ def vue_reservations(df: pd.DataFrame):
         st.markdown(
             f"""
 <style>
-.chips-wrap {{
-  display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0;
-}}
-.chip {{
-  padding:10px 12px; border-radius:10px;
-  background: rgba(127,127,127,0.15);  /* OK thème clair/sombre */
-  border: 1px solid rgba(127,127,127,0.25);
-}}
+.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
+.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.15); border: 1px solid rgba(127,127,127,0.25); }}
 .chip b {{ display:block; margin-bottom:4px; }}
 </style>
 <div class="chips-wrap">
-  <div class="chip">
-    <b>Total Brut</b>
-    <div>{total_brut:,.2f} €</div>
-  </div>
-  <div class="chip">
-    <b>Total Net</b>
-    <div>{total_net:,.2f} €</div>
-  </div>
-  <div class="chip">
-    <b>Total Charges</b>
-    <div>{total_chg:,.2f} €</div>
-  </div>
-  <div class="chip">
-    <b>Total Nuitées</b>
-    <div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div>
-  </div>
-  <div class="chip">
-    <b>Commission moy.</b>
-    <div>{pct_moy:.2f} %</div>
-  </div>
+  <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
+  <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
+  <div class="chip"><b>Total Charges</b><div>{total_chg:,.2f} €</div></div>
+  <div class="chip"><b>Total Nuitées</b><div>{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
+  <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
 </div>
             """,
             unsafe_allow_html=True
@@ -568,7 +547,7 @@ def vue_rapport(df: pd.DataFrame):
     stats["brut_par_nuit"] = stats.apply(lambda r: (r["prix_brut"]/r["nuitees"]) if r["nuitees"] else 0, axis=1)
     stats["net_par_nuit"]  = stats.apply(lambda r: (r["prix_net"]/r["nuitees"])  if r["nuitees"] else 0, axis=1)
 
-    # ne pas afficher les mois à zéro (toutes plateformes)
+    # ne pas afficher les mois à zéro
     stats = stats[(stats["prix_brut"]!=0) | (stats["prix_net"]!=0) | (stats["charges"]!=0) | (stats["nuitees"]!=0)]
     stats = stats.sort_values(["MM","plateforme"]).reset_index(drop=True)
 
@@ -599,6 +578,43 @@ def vue_rapport(df: pd.DataFrame):
     chart_of("Nuitées", "nuitees")
     chart_of("Brut / nuit", "brut_par_nuit")
     chart_of("Net / nuit", "net_par_nuit")
+
+    # --- Détail par réservation (avec noms) ---
+    st.markdown("### 📄 Détail des réservations (avec noms)")
+    detail = data.copy()
+
+    # Filtres supplémentaires : mois (optionnel) pour affiner le détail
+    mois_filter = st.selectbox("Filtrer le détail par mois", ["Tous"] + [f"{i:02d}" for i in range(1,13)], index=0, key="rapport_detail_mois")
+    if mois_filter != "Tous":
+        detail = detail[detail["MM"] == int(mois_filter)]
+
+    cols_detail = [
+        "nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees",
+        "prix_brut", "prix_net", "charges", "%"
+    ]
+    cols_detail = [c for c in cols_detail if c in detail.columns]
+
+    if "date_arrivee" in detail.columns:
+        detail["date_arrivee"] = detail["date_arrivee"].apply(format_date_str)
+    if "date_depart" in detail.columns:
+        detail["date_depart"] = detail["date_depart"].apply(format_date_str)
+
+    by = [c for c in ["date_arrivee", "nom_client"] if c in detail.columns]
+    if by:
+        detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
+
+    st.dataframe(detail[cols_detail], use_container_width=True)
+
+    # Téléchargement XLSX du détail
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        detail[cols_detail].to_excel(writer, index=False)
+    st.download_button(
+        "⬇️ Télécharger le détail (XLSX)",
+        data=buf.getvalue(),
+        file_name=f"rapport_detail_{annee}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
