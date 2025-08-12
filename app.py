@@ -1,19 +1,20 @@
-# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS) — cache + totaux dark friendly
-
+# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS avec DTSTAMP/UID)
 import streamlit as st
 import pandas as pd
 import numpy as np
 import calendar
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from io import BytesIO
 from urllib.parse import quote
+import hashlib
 import os
 
 FICHIER = "reservations.xlsx"
 
 # ==============================  MAINTENANCE / CACHE  ==============================
 
-def render_cache_button_sidebar():
+def render_cache_section_sidebar():
+    st.sidebar.markdown("---")
     st.sidebar.markdown("## 🧰 Maintenance")
     if st.sidebar.button("♻️ Vider le cache et relancer"):
         try:
@@ -196,8 +197,17 @@ def _ics_escape(text: str) -> str:
 def _fmt_date_ics(d: date) -> str:
     return d.strftime("%Y%m%d")
 
+def _dtstamp_utc_now() -> str:
+    # Format RFC5545: YYYYMMDDTHHMMSSZ
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+def _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1"):
+    base = f"{nom_client}|{plateforme}|{d1}|{d2}|{tel}|{salt}"
+    h = hashlib.sha1(base.encode("utf-8")).hexdigest()
+    return f"vt-{h}@villatobias"
+
 def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations") -> str:
-    """Crée un .ics simple (journées entières) depuis les réservations."""
+    """Crée un .ics (journées entières) avec UID stables + DTSTAMP pour Google Agenda."""
     df = ensure_schema(df)
     if df.empty:
         return (
@@ -233,9 +243,9 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
         tel = str(row.get("telephone") or "").strip()
 
         summary = " - ".join([x for x in [plateforme, nom_client, tel] if x])
-        brut = row.get("prix_brut") or 0
-        net  = row.get("prix_net") or 0
-        nuitees = row.get("nuitees") or ((d2 - d1).days)
+        brut = float(row.get("prix_brut") or 0)
+        net  = float(row.get("prix_net") or 0)
+        nuitees = int(row.get("nuitees") or ((d2 - d1).days))
 
         desc = (
             f"Plateforme: {plateforme}\\n"
@@ -247,12 +257,12 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
             f"Brut: {brut:.2f} €\\nNet: {net:.2f} €"
         )
 
-        uid = str(row.get("ical_uid") or "").strip()
-        if not uid:
-            uid = f"vt-{hash((nom_client, plateforme, d1, d2, tel))}@villatobias"
+        uid_existing = str(row.get("ical_uid") or "").strip()
+        uid = uid_existing if uid_existing else _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1")
 
         A("BEGIN:VEVENT")
         A(f"UID:{_ics_escape(uid)}")
+        A(f"DTSTAMP:{_dtstamp_utc_now()}")  # important pour Google
         A(f"DTSTART;VALUE=DATE:{_fmt_date_ics(d1)}")
         A(f"DTEND;VALUE=DATE:{_fmt_date_ics(d2)}")
         A(f"SUMMARY:{_ics_escape(summary)}")
@@ -680,11 +690,11 @@ def vue_sms(df: pd.DataFrame):
     colA, colB = st.columns(2)
     with colA:
         st.subheader("📆 Arrivées demain")
-        arrivées = df[df["date_arrivee"] == demain].copy()
-        if arrivées.empty:
+        arrives = df[df["date_arrivee"] == demain].copy()
+        if arrives.empty:
             st.info("Aucune arrivée demain.")
         else:
-            for _, r in arrivées.iterrows():
+            for _, r in arrives.iterrows():
                 tel = str(r.get("telephone") or "").strip()
                 body = sms_message_arrivee(r)
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}  \n"
@@ -716,16 +726,11 @@ def vue_sms(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # Bouton maintenance (vider cache)
-    render_cache_button_sidebar()
-
     # Barre latérale : fichiers
     st.sidebar.title("📁 Fichier")
-    bouton_telecharger(charger_donnees())
+    df_tmp = charger_donnees()
+    bouton_telecharger(df_tmp)
     bouton_restaurer()
-
-    # Charger données
-    df = charger_donnees()
 
     # Navigation
     st.sidebar.title("🧭 Navigation")
@@ -734,6 +739,12 @@ def main():
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
          "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
     )
+
+    # Section maintenance (vider cache) SOUS la navigation
+    render_cache_section_sidebar()
+
+    # Charger les données (après éventuelle restauration)
+    df = charger_donnees()
 
     if onglet == "📋 Réservations":
         vue_reservations(df)
