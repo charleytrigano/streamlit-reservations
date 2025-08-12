@@ -1,4 +1,4 @@
-# app.py — Réservations Villa Tobias (présentation améliorée)
+# app.py — Réservations Villa Tobias (calendrier compact + totaux blancs dans rapport)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -38,8 +38,11 @@ def inject_css():
         unsafe_allow_html=True,
     )
 
-def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
-    """Barre de totaux compacte (petite), avec unités € et %."""
+def metrics_bar(df: pd.DataFrame, prefix: str = "", theme: str = "card"):
+    """
+    Barre de totaux.
+    theme = "card" (fond gris clair) ou "plain" (fond blanc, bordure fine).
+    """
     if df is None or df.empty:
         return
     tmp = df.copy()
@@ -58,11 +61,15 @@ def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
     brut_nuit = (brut / nts) if nts else 0.0
     net_nuit = (net / nts) if nts else 0.0
 
+    bg = "#FAFAFA" if theme == "card" else "#FFFFFF"
+    border = "#E6E6E6"
+    fz = ".9rem" if theme == "card" else ".9rem"
+
     def chip(label, value, sub=None):
         sub = f"<div style='opacity:.7'>{sub}</div>" if sub else ""
         return (
-            f"<div style='padding:.35rem .55rem;border:1px solid #E6E6E6;border-radius:.5rem;"
-            f"font-size:.9rem;line-height:1.2;background:#FAFAFA'>"
+            f"<div style='padding:.35rem .55rem;border:1px solid {border};border-radius:.5rem;"
+            f"font-size:{fz};line-height:1.2;background:{bg}'>"
             f"<div style='font-weight:600'>{label}</div>"
             f"<div style='font-variant-numeric: tabular-nums;'>{value}</div>"
             f"{sub}</div>"
@@ -81,8 +88,9 @@ def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
     cD.markdown(chip(prefix + "Nuitées", f"{int(nts)}"), unsafe_allow_html=True)
     cE.markdown(chip(prefix + "Commission moy.", f"{pct_mean:.2f} %"), unsafe_allow_html=True)
 
-# Compat : si ailleurs tu utilises metrics_bar_from_df(...)
-metrics_bar_from_df = metrics_bar_compact
+# version compacte par défaut ailleurs
+def metrics_bar_compact(df: pd.DataFrame, prefix: str = ""):
+    return metrics_bar(df, prefix=prefix, theme="card")
 
 def render_cache_button_sidebar():
     st.sidebar.markdown("## 🧰 Maintenance")
@@ -151,7 +159,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : on enlève une éventuelle apostrophe Excel (on la remettra à l’export)
+    # Téléphone : enlève l’apostrophe Excel si présente (on la remettra à l’export)
     if "telephone" in df.columns:
         def _clean_tel(x):
             s = "" if pd.isna(x) else str(x).strip()
@@ -164,19 +172,9 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["ical_uid"] = ""
 
     cols_order = [
-        "nom_client",
-        "plateforme",
-        "telephone",
-        "date_arrivee",
-        "date_depart",
-        "nuitees",
-        "prix_brut",
-        "prix_net",
-        "charges",
-        "%",
-        "AAAA",
-        "MM",
-        "ical_uid",
+        "nom_client", "plateforme", "telephone",
+        "date_arrivee", "date_depart", "nuitees",
+        "prix_brut", "prix_net", "charges", "%", "AAAA", "MM", "ical_uid",
     ]
     ordered = [c for c in cols_order if c in df.columns]
     rest = [c for c in df.columns if c not in ordered]
@@ -315,7 +313,6 @@ def sms_message(row: pd.Series) -> str:
 # ==============================  VUES  =====================================
 
 def vue_en_cours_banner(df: pd.DataFrame):
-    """Séjours en cours aujourd’hui (une seule fois chaque colonne)."""
     if df is None or df.empty:
         return
     dft = ensure_schema(df).copy()
@@ -513,7 +510,7 @@ def vue_calendrier(df: pd.DataFrame):
         st.info("Aucune donnée.")
         return
 
-    # Filtres compacts sur une seule ligne
+    # ✅ Filtres sur UNE SEULE LIGNE : Mois + Année
     c_mois, c_annee = st.columns([2, 1])
     with c_mois:
         mois_nom = st.selectbox("Mois", list(calendar.month_name)[1:], index=max(0, (date.today().month - 1)))
@@ -599,7 +596,7 @@ def vue_rapport(df: pd.DataFrame):
         return
 
     data = data[(data["MM"] >= 1) & (data["MM"] <= 12)]
-    # Ajouter prix/nuit pour l’aperçu tabulaire
+    # prix par nuit pour l’aperçu
     data["prix_brut/nuit"] = (pd.to_numeric(data["prix_brut"], errors="coerce") / data["nuitees"]).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
     data["prix_net/nuit"] = (pd.to_numeric(data["prix_net"], errors="coerce") / data["nuitees"]).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
 
@@ -628,7 +625,7 @@ def vue_rapport(df: pd.DataFrame):
                 full.append(row.iloc[0].to_dict())
     stats = pd.DataFrame(full).sort_values(["MM", "plateforme"]).reset_index(drop=True)
 
-    # Tableau des stats (avec suppression des lignes tout à 0)
+    # Affichage tableau (on masque les lignes tout à 0)
     stats_view = stats.copy()
     mask_non_zero = (stats_view[["prix_brut", "prix_net", "charges", "nuitees"]].sum(axis=1) != 0)
     stats_view = stats_view[mask_non_zero]
@@ -637,9 +634,10 @@ def vue_rapport(df: pd.DataFrame):
         use_container_width=True,
     )
 
-    metrics_bar_compact(data, prefix="Total ")
+    # ✅ “Cases blanches” pour la barre de totaux (fond blanc)
+    metrics_bar(data, prefix="Total ", theme="plain")
 
-    # Graphes matplotlib : X = 1..12 (toujours ordonné)
+    # Graphes matplotlib : X = 1..12 (ordre chronologique garanti)
     def plot_grouped_bars(metric: str, title: str, ylabel: str):
         months = list(range(1, 13))
         base_x = np.arange(len(months), dtype=float)
@@ -697,18 +695,9 @@ def vue_clients(df: pd.DataFrame):
             data["prix_net/nuit"] = (data["prix_net"] / data["nuitees"]).round(2).fillna(0)
 
     cols = [
-        "nom_client",
-        "plateforme",
-        "date_arrivee",
-        "date_depart",
-        "nuitees",
-        "prix_brut",
-        "prix_net",
-        "charges",
-        "%",
-        "prix_brut/nuit",
-        "prix_net/nuit",
-        "telephone",
+        "nom_client", "plateforme", "date_arrivee", "date_depart",
+        "nuitees", "prix_brut", "prix_net", "charges", "%",
+        "prix_brut/nuit", "prix_net/nuit", "telephone",
     ]
     cols = [c for c in cols if c in data.columns]
 
