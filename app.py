@@ -9,6 +9,21 @@ from io import BytesIO
 from urllib.parse import quote
 import os
 
+# === Bouton Maintenance : vider le cache ===
+def render_cache_button_sidebar():
+    st.sidebar.markdown("## 🧰 Maintenance")
+    if st.sidebar.button("♻️ Vider le cache et relancer"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
+        st.sidebar.success("Cache vidé. Redémarrage…")
+        st.rerun()
+
 FICHIER = "reservations.xlsx"
 
 # ==============================  OUTILS  ==============================
