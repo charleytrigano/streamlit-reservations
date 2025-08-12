@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (avec Export ICS manuel)
+# app.py — Villa Tobias (toutes vues + SMS manuel + Export ICS)
 
 import streamlit as st
 import pandas as pd
@@ -6,6 +6,7 @@ import numpy as np
 import calendar
 from datetime import date, timedelta
 from io import BytesIO
+from urllib.parse import quote
 import os
 
 FICHIER = "reservations.xlsx"
@@ -245,6 +246,44 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     A("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
+# ==============================  TEMPLATES SMS (MANUEL) ====================
+
+def sms_message_arrivee(row: pd.Series) -> str:
+    d1 = format_date_str(row.get("date_arrivee"))
+    d2 = format_date_str(row.get("date_depart"))
+    nuitees = row.get("nuitees") or ""
+    plateforme = str(row.get("plateforme") or "")
+    nom = str(row.get("nom_client") or "")
+    msg = (
+        "VILLA TOBIAS\n"
+        f"Plateforme : {plateforme}\n"
+        f"Date d'arrivee : {d1}  Date depart : {d2}  Nombre de nuitées : {nuitees}\n\n"
+        f"Bonjour {nom}\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
+        "Annick & Charley"
+    )
+    return msg
+
+def sms_message_depart(row: pd.Series) -> str:
+    nom = str(row.get("nom_client") or "")
+    msg = (
+        f"Bonjour {nom},\n\n"
+        "Un grand merci d’avoir choisi notre appartement pour votre séjour ! "
+        "Nous espérons que vous avez passé un moment aussi agréable que celui que nous avons eu à vous accueillir.\n\n"
+        "Si l’envie vous prend de revenir explorer encore un peu notre ville (ou simplement retrouver le confort de notre petit cocon), "
+        "sachez que notre porte vous sera toujours grande ouverte.\n\n"
+        "Au plaisir de vous accueillir à nouveau,\n"
+        "Annick & Charley"
+    )
+    return msg
+
+def make_sms_link(phone: str, body: str) -> str:
+    """Crée un lien sms:PHONE?&body=ENCODED pour mobiles."""
+    tel = (phone or "").strip()
+    return f"sms:{tel}?&body={quote(body)}" if tel else ""
+
 # ==============================  VUES  ==============================
 
 def vue_reservations(df: pd.DataFrame):
@@ -252,7 +291,7 @@ def vue_reservations(df: pd.DataFrame):
     core, totals = split_totals(ensure_schema(df))
     core = sort_core(core)
 
-    # Puces totaux en bas de page
+    # Totaux
     if not core.empty:
         total_brut   = core["prix_brut"].sum(skipna=True)
         total_net    = core["prix_net"].sum(skipna=True)
@@ -487,16 +526,9 @@ def vue_rapport(df: pd.DataFrame):
     stats["brut_par_nuit"] = stats.apply(lambda r: (r["prix_brut"]/r["nuitees"]) if r["nuitees"] else 0, axis=1)
     stats["net_par_nuit"]  = stats.apply(lambda r: (r["prix_net"]/r["nuitees"])  if r["nuitees"] else 0, axis=1)
 
-    # compléter 1..12 pour les plateformes existantes
-    plats = sorted(stats["plateforme"].unique().tolist())
-    full = []
-    for m in range(1,13):
-        for p in plats:
-            row = stats[(stats["MM"]==m) & (stats["plateforme"]==p)]
-            if row.empty:
-                continue  # ne pas afficher les mois à zéro
-            full.append(row.iloc[0].to_dict())
-    stats = pd.DataFrame(full).sort_values(["MM","plateforme"]).reset_index(drop=True)
+    # ne pas afficher les mois à zéro (toutes plateformes)
+    stats = stats[(stats["prix_brut"]!=0) | (stats["prix_net"]!=0) | (stats["charges"]!=0) | (stats["nuitees"]!=0)]
+    stats = stats.sort_values(["MM","plateforme"]).reset_index(drop=True)
 
     # affichage tableau
     if stats.empty:
@@ -600,7 +632,52 @@ def vue_export_ics(df: pd.DataFrame):
         file_name="reservations.ics",
         mime="text/calendar"
     )
-    st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → Sélectionnez le fichier .ics.")
+    st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
+
+def vue_sms(df: pd.DataFrame):
+    st.title("✉️ SMS (envoi manuel)")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    today = date.today()
+    demain = today + timedelta(days=1)
+    hier = today - timedelta(days=1)
+
+    colA, colB = st.columns(2)
+    with colA:
+        st.subheader("📆 Arrivées demain")
+        arrivées = df[df["date_arrivee"] == demain].copy()
+        if arrivées.empty:
+            st.info("Aucune arrivée demain.")
+        else:
+            for _, r in arrivées.iterrows():
+                tel = str(r.get("telephone") or "").strip()
+                body = sms_message_arrivee(r)
+                st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}  \n"
+                            f"Arrivée: {format_date_str(r.get('date_arrivee'))} • Départ: {format_date_str(r.get('date_depart'))} • Nuitées: {r.get('nuitees','')}")
+                st.code(body)
+                link = make_sms_link(tel, body)
+                if link:
+                    st.markdown(f"[📲 Ouvrir SMS vers {tel}]({link})")
+                st.divider()
+
+    with colB:
+        st.subheader("🕒 Relance +24h après départ")
+        dep_24h = df[df["date_depart"] == hier].copy()
+        if dep_24h.empty:
+            st.info("Aucun départ hier.")
+        else:
+            for _, r in dep_24h.iterrows():
+                tel = str(r.get("telephone") or "").strip()
+                body = sms_message_depart(r)
+                st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
+                st.code(body)
+                link = make_sms_link(tel, body)
+                if link:
+                    st.markdown(f"[📲 Ouvrir SMS vers {tel}]({link})")
+                st.divider()
 
 # ==============================  APP  ==============================
 
@@ -620,7 +697,7 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
     )
 
     if onglet == "📋 Réservations":
@@ -637,6 +714,8 @@ def main():
         vue_clients(df)
     elif onglet == "📤 Export ICS":
         vue_export_ics(df)
+    elif onglet == "✉️ SMS":
+        vue_sms(df)
 
 if __name__ == "__main__":
     main()
