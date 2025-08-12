@@ -224,7 +224,7 @@ def sms_message(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "")
     tel = str(row.get("telephone") or "")
     msg = (
-        "VILLA TOBIAS\n"
+        "VILLA TOBIAS - NICE\n"
         f"Plateforme : {plateforme}\n"
         f"Date d'arrivee : {arrivee}  Date depart : {depart}  Nombre de nuitées : {nuitees}\n\n"
         f"Bonjour {nom}\n"
@@ -232,7 +232,7 @@ def sms_message(row: pd.Series) -> str:
         "Bienvenue chez nous ! Nous sommes ravis de vous accueillir bientôt."
         "Pour organiser au mieux votre arrivée, pourriez-vous nous indiquer à quelle heure vous pensez arriver ?"
         "Sachez également qu'une place de parking est à votre disposition dans l'immeuble si vous en avez besoin."
-        "Nous vous souhaitons un excellent voyage et nous réjouissons de vous rencontrer !"
+        "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer !"
         "Annick & Charley"
     )
     return msg
