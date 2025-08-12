@@ -234,6 +234,7 @@ def sms_message(row: pd.Series) -> str:
         "Pour organiser au mieux votre arrivée, pourriez-vous nous indiquer à quelle heure vous pensez arriver ?"
         "Sachez également qu'une place de parking est à votre disposition dans l'immeuble si vous en avez besoin."
         "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer !"
+        
         "Annick & Charley"
     )
     return msg
