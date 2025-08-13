@@ -1,5 +1,5 @@
-# app.py — Villa Tobias (complet)
-# Correction: message SMS d’arrivée EXACT remplacé (sans modifier le reste)
+# app.py — Villa Tobias (COMPLET)
+# Patch téléphones: lecture en texte + format texte à l’écriture (évite .0 et perte de +33)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -41,6 +41,17 @@ def to_date_only(x):
 
 def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
+
+def normalize_tel(x):
+    """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    s = str(x).strip()
+    s = s.replace(" ", "")  # pas d'espaces
+    if s.endswith(".0"):    # cas lu comme float --> "0612345678.0"
+        s = s[:-2]
+    # Pas d’autres transformations: on garde +, chiffres, etc.
+    return s
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     base_cols = [
@@ -95,9 +106,9 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone : enlever apostrophe visuelle si importée d’Excel
+    # Téléphone: assure chaîne nettoyée (au cas où)
     if "telephone" in df.columns:
-        df["telephone"] = df["telephone"].astype(str).str.strip().str.replace("^'", "", regex=True)
+        df["telephone"] = df["telephone"].apply(normalize_tel)
 
     cols = base_cols
     return df[[c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]]
@@ -126,7 +137,8 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
-    return pd.read_excel(path)
+    # Important: converter pour 'telephone'
+    return pd.read_excel(path, converters={"telephone": normalize_tel})
 
 def charger_donnees() -> pd.DataFrame:
     if not os.path.exists(FICHIER):
@@ -139,6 +151,26 @@ def charger_donnees() -> pd.DataFrame:
         st.error(f"Erreur de lecture Excel : {e}")
         return ensure_schema(pd.DataFrame())
 
+def _force_telephone_text_format_openpyxl(writer, df_to_save: pd.DataFrame, sheet_name: str):
+    """Après to_excel, force le format texte '@' sur la colonne 'telephone' si présente."""
+    try:
+        book = writer.book
+        ws = writer.sheets.get(sheet_name)
+        if ws is None:
+            # nom par défaut
+            ws = writer.sheets.get('Sheet1', None)
+        if ws is None:
+            return
+        if "telephone" not in df_to_save.columns:
+            return
+        col_idx = df_to_save.columns.get_loc("telephone") + 1  # 1-based
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+            cell = row[0]
+            cell.number_format = '@'  # format texte
+    except Exception:
+        # on ignore toute erreur de stylage
+        pass
+
 def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
     core, totals = split_totals(df)
@@ -146,7 +178,8 @@ def sauvegarder_donnees(df: pd.DataFrame):
     out = pd.concat([core, totals], ignore_index=True)
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as w:
-            out.to_excel(w, index=False)
+            out.to_excel(w, index=False, sheet_name="Sheet1")
+            _force_telephone_text_format_openpyxl(w, out, "Sheet1")
         st.cache_data.clear()
         st.success("💾 Sauvegarde Excel effectuée.")
     except Exception as e:
@@ -156,7 +189,7 @@ def bouton_restaurer():
     up = st.sidebar.file_uploader("📤 Restauration xlsx", type=["xlsx"], help="Remplace le fichier actuel")
     if up is not None:
         try:
-            df_new = pd.read_excel(up)
+            df_new = pd.read_excel(up, converters={"telephone": normalize_tel})
             df_new = ensure_schema(df_new)
             sauvegarder_donnees(df_new)
             st.sidebar.success("✅ Fichier restauré.")
@@ -267,7 +300,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     return "\r\n".join(lines) + "\r\n"
 
 # ==============================  TEMPLATES SMS (MANUEL) ====================
-# >>>>>>>>>>>>>>>>>>>>>>>>>>>>  MESSAGE ARRIVÉE CORRIGÉ  <<<<<<<<<<<<<<<<<<<<<<<<<<
+
 def sms_message_arrivee(row: pd.Series) -> str:
     """
     Message d’arrivée EXACT demandé (incluant 'Telephone : ...').
@@ -290,11 +323,9 @@ def sms_message_arrivee(row: pd.Series) -> str:
         f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
         f"Bonjour {nom}\n"
         f"Telephone : {tel_aff}\n\n"
-        "Bienvenue chez nous ! "
-        "Nous sommes ravis de vous accueillir demain. Pour organiser au mieux votre reception, pourriez-vous nous indiquer "
-        "votre heure d'arrivee. "
-        "Une place de parking est a votre disposition dans l immeuble, en cas de besoin. "
-        "Nous vous souhaitons un excellent voyage et et nous rejouissons de vous rencontrer.\n\n"
+        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
+        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
+        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
         "Annick & Charley"
     )
 
@@ -394,7 +425,7 @@ def vue_ajouter(df: pd.DataFrame):
             ligne = {
                 "nom_client": (nom or "").strip(),
                 "plateforme": plateforme,
-                "telephone": (tel or "").strip(),
+                "telephone": normalize_tel(tel),
                 "date_arrivee": arrivee,
                 "date_depart": depart,
                 "prix_brut": float(brut),
@@ -430,7 +461,7 @@ def vue_modifier(df: pd.DataFrame):
 
     col = st.columns(2)
     nom = col[0].text_input("Nom", df.at[i, "nom_client"])
-    tel = col[1].text_input("Téléphone", df.at[i, "telephone"])
+    tel = col[1].text_input("Téléphone", normalize_tel(df.at[i, "telephone"]))
     plateforme = st.selectbox("Plateforme", ["Booking","Airbnb","Autre"],
                               index = ["Booking","Airbnb","Autre"].index(df.at[i,"plateforme"]) if df.at[i,"plateforme"] in ["Booking","Airbnb","Autre"] else 2)
 
@@ -451,7 +482,7 @@ def vue_modifier(df: pd.DataFrame):
             return
         df.at[i,"nom_client"] = nom.strip()
         df.at[i,"plateforme"] = plateforme
-        df.at[i,"telephone"]  = tel.strip()
+        df.at[i,"telephone"]  = normalize_tel(tel)
         df.at[i,"date_arrivee"] = arrivee
         df.at[i,"date_depart"]  = depart
         df.at[i,"prix_brut"] = float(brut)
@@ -540,7 +571,6 @@ def vue_rapport(df: pd.DataFrame):
     mois_opt = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
     mois_label = c3.selectbox("Mois", mois_opt, key="rapport_mois")
 
-    # Filtrage principal
     data = df[df["AAAA"] == int(annee)].copy()
     if pf != "Toutes":
         data = data[data["plateforme"] == pf]
@@ -551,7 +581,6 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Tableau principal (avec noms clients)
     detail = data.copy()
     for c in ["date_arrivee","date_depart"]:
         detail[c] = detail[c].apply(format_date_str)
@@ -567,7 +596,6 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
-    # Totaux de la sélection
     total_brut   = data["prix_brut"].sum(skipna=True)
     total_net    = data["prix_net"].sum(skipna=True)
     total_chg    = data["charges"].sum(skipna=True)
@@ -575,7 +603,6 @@ def vue_rapport(df: pd.DataFrame):
     pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
     st.markdown(_totaux_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
-    # Graphiques par MM
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -599,7 +626,6 @@ def vue_rapport(df: pd.DataFrame):
     chart_of("Revenus nets", "prix_net")
     chart_of("Nuitées", "nuitees")
 
-    # Export XLSX du détail filtré
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         detail[cols_detail].to_excel(writer, index=False)
@@ -685,7 +711,7 @@ def vue_export_ics(df: pd.DataFrame):
     )
     st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
 
-# ==============================  SMS (MANUEL) avec cases à cocher ====================
+# ==============================  SMS (MANUEL) ====================
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
@@ -709,7 +735,7 @@ def vue_sms(df: pd.DataFrame):
         else:
             for idx, r in arrives.reset_index(drop=True).iterrows():
                 body = sms_message_arrivee(r)
-                tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
+                tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
 
@@ -738,7 +764,7 @@ def vue_sms(df: pd.DataFrame):
         else:
             for idx, r in dep_24h.reset_index(drop=True).iterrows():
                 body = sms_message_depart(r)
-                tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
+                tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
 
@@ -761,7 +787,7 @@ def vue_sms(df: pd.DataFrame):
     df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
     choix = st.selectbox("Choisir une réservation", df_pick["id_aff"])
     r = df_pick.loc[df_pick["id_aff"] == choix].iloc[0]
-    tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
+    tel = normalize_tel(r.get("telephone"))
 
     choix_type = st.radio("Modèle de message",
                           ["Arrivée (demande d’heure)","Relance après départ","Message libre"],
