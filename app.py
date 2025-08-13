@@ -306,7 +306,6 @@ def sms_message_arrivee(row: pd.Series) -> str:
     Message d’arrivée EXACT demandé (incluant 'Telephone : ...').
     """
     d1 = row.get("date_arrivee")
-    )
     d2 = row.get("date_depart")
     d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
     d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
