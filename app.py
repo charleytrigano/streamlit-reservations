@@ -1,5 +1,6 @@
-# app.py — Villa Tobias (COMPLET)
+# app.py — Villa Tobias (COMPLET) + Sauvegarde GitHub automatique
 # Patch téléphones: lecture en texte + format texte à l’écriture (évite .0 et perte de +33)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,6 +10,8 @@ from io import BytesIO
 import hashlib
 import os
 from urllib.parse import quote
+import base64
+import requests  # <-- pour l'appel API GitHub
 
 FICHIER = "reservations.xlsx"
 
@@ -28,6 +31,13 @@ def render_cache_section_sidebar():
             pass
         st.sidebar.success("Cache vidé. Redémarrage…")
         st.rerun()
+
+    # Bouton de test GitHub (optionnel)
+    if st.sidebar.button("📤 Tester sauvegarde GitHub"):
+        try:
+            push_to_github(FICHIER)
+        except Exception as e:
+            st.sidebar.error(f"❌ Échec GitHub (test) : {e}")
 
 # ==============================  OUTILS  ==============================
 
@@ -50,7 +60,6 @@ def normalize_tel(x):
     s = s.replace(" ", "")  # pas d'espaces
     if s.endswith(".0"):    # cas lu comme float --> "0612345678.0"
         s = s[:-2]
-    # Pas d’autres transformations: on garde +, chiffres, etc.
     return s
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
@@ -58,7 +67,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","prix_net","charges","%",
-        "AAAA","MM"
+        "AAAA","MM","ical_uid"
     ]
     if df is None or df.empty:
         return pd.DataFrame(columns=base_cols)
@@ -154,22 +163,69 @@ def charger_donnees() -> pd.DataFrame:
 def _force_telephone_text_format_openpyxl(writer, df_to_save: pd.DataFrame, sheet_name: str):
     """Après to_excel, force le format texte '@' sur la colonne 'telephone' si présente."""
     try:
-        book = writer.book
-        ws = writer.sheets.get(sheet_name)
-        if ws is None:
-            # nom par défaut
-            ws = writer.sheets.get('Sheet1', None)
-        if ws is None:
-            return
-        if "telephone" not in df_to_save.columns:
+        ws = writer.sheets.get(sheet_name) or writer.sheets.get('Sheet1', None)
+        if ws is None or "telephone" not in df_to_save.columns:
             return
         col_idx = df_to_save.columns.get_loc("telephone") + 1  # 1-based
         for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-            cell = row[0]
-            cell.number_format = '@'  # format texte
+            row[0].number_format = '@'
     except Exception:
-        # on ignore toute erreur de stylage
         pass
+
+# ----------- Sauvegarde GitHub -----------
+def push_to_github(file_path: str):
+    """
+    Pousse `file_path` vers GitHub en utilisant les secrets Streamlit:
+      - GITHUB_TOKEN
+      - GITHUB_REPO (ex: "charleytrigano/streamlit-reservations")
+      - GITHUB_FILEPATH (ex: "reservations.xlsx")
+      - GITHUB_BRANCH (ex: "main")
+    Affiche un message dans la sidebar.
+    """
+    try:
+        token   = st.secrets["GITHUB_TOKEN"]
+        repo    = st.secrets["GITHUB_REPO"]
+        branch  = st.secrets.get("GITHUB_BRANCH", "main")
+        dstpath = st.secrets.get("GITHUB_FILEPATH", "reservations.xlsx")
+    except Exception:
+        st.sidebar.warning("🔒 Secrets GitHub manquants (GITHUB_TOKEN/REPO/FILEPATH/BRANCH).")
+        return
+
+    if not os.path.exists(file_path):
+        st.sidebar.error(f"Fichier introuvable: {file_path}")
+        return
+
+    with open(file_path, "rb") as f:
+        content = f.read()
+    b64 = base64.b64encode(content).decode("utf-8")
+    url = f"https://api.github.com/repos/{repo}/contents/{dstpath}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    # Récupérer SHA si le fichier existe déjà
+    sha = None
+    r_get = requests.get(url, headers=headers, params={"ref": branch})
+    if r_get.status_code == 200:
+        try:
+            sha = r_get.json().get("sha")
+        except Exception:
+            sha = None
+
+    data = {
+        "message": f"Update {dstpath}",
+        "content": b64,
+        "branch": branch
+    }
+    if sha:
+        data["sha"] = sha
+
+    r_put = requests.put(url, headers=headers, json=data)
+    if r_put.status_code in (200, 201):
+        st.sidebar.success("📤 Sauvegarde envoyée sur GitHub.")
+    else:
+        st.sidebar.error(f"GitHub PUT {r_put.status_code}: {r_put.text}")
 
 def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
@@ -182,6 +238,8 @@ def sauvegarder_donnees(df: pd.DataFrame):
             _force_telephone_text_format_openpyxl(w, out, "Sheet1")
         st.cache_data.clear()
         st.success("💾 Sauvegarde Excel effectuée.")
+        # --- Push GitHub automatique ---
+        push_to_github(FICHIER)
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
 
@@ -530,7 +588,7 @@ def vue_calendrier(df: pd.DataFrame):
     core, _ = split_totals(df)
     for _, row in core.iterrows():
         d1 = row["date_arrivee"]; d2 = row["date_depart"]
-        if not (isinstance(d1, date) and isinstance(d2, date)): 
+        if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
         for j in jours:
             if d1 <= j < d2:
@@ -834,7 +892,7 @@ def main():
          "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
     )
 
-    # Maintenance (vider cache) SOUS la navigation
+    # Maintenance (vider cache) SOUS la navigation + test GitHub
     render_cache_section_sidebar()
 
     # Charger les données après éventuelle restauration
