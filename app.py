@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (complet, SMS arrivée = texte exact avec Telephone)
+# app.py — Villa Tobias (complet, SMS arrivée exact + checkboxes Appeler/SMS)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -683,6 +683,8 @@ def vue_export_ics(df: pd.DataFrame):
     )
     st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
 
+# ==============================  SMS (MANUEL) avec cases à cocher ====================
+
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
     df = ensure_schema(df)
@@ -703,7 +705,7 @@ def vue_sms(df: pd.DataFrame):
         if arrives.empty:
             st.info("Aucune arrivée demain.")
         else:
-            for _, r in arrives.iterrows():
+            for idx, r in arrives.reset_index(drop=True).iterrows():
                 body = sms_message_arrivee(r)
                 tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
                 tel_link = f"tel:{tel}" if tel else ""
@@ -715,13 +717,14 @@ def vue_sms(df: pd.DataFrame):
                             f"Nuitées: {r.get('nuitees','')}")
                 st.code(body)
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    if tel_link:
-                        st.link_button(f"📞 Appeler {tel}", tel_link)
-                with c2:
-                    if sms_link:
-                        st.link_button("📩 Envoyer SMS", sms_link)
+                c1, c2, c3 = st.columns([1,1,2])
+                ck_call = c1.checkbox("📞 Appeler", key=f"sms_arr_call_{idx}", value=False)
+                ck_sms  = c2.checkbox("📩 SMS", key=f"sms_arr_sms_{idx}", value=True)
+                with c3:
+                    if ck_call and tel_link:
+                        st.link_button(f"Appeler {tel}", tel_link)
+                    if ck_sms and sms_link:
+                        st.link_button("Envoyer SMS", sms_link)
                 st.divider()
 
     # --- Relance +24h après départ ---
@@ -731,7 +734,7 @@ def vue_sms(df: pd.DataFrame):
         if dep_24h.empty:
             st.info("Aucun départ hier.")
         else:
-            for _, r in dep_24h.iterrows():
+            for idx, r in dep_24h.reset_index(drop=True).iterrows():
                 body = sms_message_depart(r)
                 tel = (str(r.get("telephone") or "").strip()).replace(" ", "")
                 tel_link = f"tel:{tel}" if tel else ""
@@ -740,13 +743,14 @@ def vue_sms(df: pd.DataFrame):
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    if tel_link:
-                        st.link_button(f"📞 Appeler {tel}", tel_link)
-                with c2:
-                    if sms_link:
-                        st.link_button("📩 Envoyer SMS", sms_link)
+                c1, c2, c3 = st.columns([1,1,2])
+                ck_call = c1.checkbox("📞 Appeler", key=f"sms_dep_call_{idx}", value=False)
+                ck_sms  = c2.checkbox("📩 SMS", key=f"sms_dep_sms_{idx}", value=True)
+                with c3:
+                    if ck_call and tel_link:
+                        st.link_button(f"Appeler {tel}", tel_link)
+                    if ck_sms and sms_link:
+                        st.link_button("Envoyer SMS", sms_link)
                 st.divider()
 
     # --- Composeur manuel ---
@@ -767,10 +771,17 @@ def vue_sms(df: pd.DataFrame):
     else:
         body = st.text_area("Votre message", value="", height=160, placeholder="Tapez votre SMS ici…")
 
-    st.code(body or "—")
+    c1, c2, c3 = st.columns([2,1,1])
+    with c1:
+        st.code(body or "—")
+    ck_call = c2.checkbox("📞 Appeler", key="sms_manual_call", value=False)
+    ck_sms  = c3.checkbox("📩 SMS", key="sms_manual_sms", value=True)
+
     if tel and body:
-        st.link_button(f"📞 Appeler {tel}", f"tel:{tel}")
-        st.link_button("📩 Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
+        if ck_call:
+            st.link_button(f"Appeler {tel}", f"tel:{tel}")
+        if ck_sms:
+            st.link_button("Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
     else:
         st.info("Renseignez un téléphone et un message.")
 
