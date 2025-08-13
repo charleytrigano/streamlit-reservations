@@ -58,7 +58,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","prix_net","charges","%",
-        "AAAA","MM","ical_uid"
+        "AAAA","MM"
     ]
     if df is None or df.empty:
         return pd.DataFrame(columns=base_cols)
