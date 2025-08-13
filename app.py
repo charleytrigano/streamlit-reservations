@@ -1,4 +1,5 @@
-# app.py — Villa Tobias (complet, SMS arrivée exact + checkboxes Appeler/SMS)
+# app.py — Villa Tobias (complet)
+# Correction: message SMS d’arrivée EXACT remplacé (sans modifier le reste)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -266,11 +267,10 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     return "\r\n".join(lines) + "\r\n"
 
 # ==============================  TEMPLATES SMS (MANUEL) ====================
-
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>  MESSAGE ARRIVÉE CORRIGÉ  <<<<<<<<<<<<<<<<<<<<<<<<<<
 def sms_message_arrivee(row: pd.Series) -> str:
     """
     Message d’arrivée EXACT demandé (incluant 'Telephone : ...').
-    Sans accents pour compatibilité SMS.
     """
     d1 = row.get("date_arrivee")
     d2 = row.get("date_depart")
