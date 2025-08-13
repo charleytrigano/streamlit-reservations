@@ -290,9 +290,11 @@ def sms_message_arrivee(row: pd.Series) -> str:
         f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
         f"Bonjour {nom}\n"
         f"Telephone : {tel_aff}\n\n"
-        "Nous sommes heureux de vous accueillir prochainement et vous prions de bien vouloir nous communiquer votre heure d'arrivee. "
-        "Nous vous attendrons sur place pour vous remettre les cles de l'appartement et vous indiquer votre emplacement de parking. "
-        "Nous vous souhaitons un bon voyage et vous disons a demain.\n\n"
+        "Bienvenue chez nous ! "
+        "Nous sommes ravis de vous accueillir demain. Pour organiser au mieux votre reception, pourriez-vous nous indiquer "
+        "votre heure d'arrivee. "
+        "Une place de parking est a votre disposition dans l immeuble, en cas de besoin. "
+        "Nous vous souhaitons un excellent voyage et et nous rejouissons de vous rencontrer.\n\n"
         "Annick & Charley"
     )
 
