@@ -1,5 +1,8 @@
-# app.py — Villa Tobias (COMPLET) + Sauvegarde GitHub automatique
-# Patch téléphones: lecture en texte + format texte à l’écriture (évite .0 et perte de +33)
+# app.py — Villa Tobias (mono-appartement) + SMS column + Journal SMS
+# - Colonne Excel 'sms' (🟠 En attente / 🟢 Envoyé)
+# - Onglet "🗒️ Journal SMS"
+# - Boutons marquage (envoyé / attente) qui mettent à jour Excel + journal
+# - Messages SMS conformément à ta version validée
 
 import streamlit as st
 import pandas as pd
@@ -10,10 +13,9 @@ from io import BytesIO
 import hashlib
 import os
 from urllib.parse import quote
-import base64
-import requests  # <-- pour l'appel API GitHub
 
 FICHIER = "reservations.xlsx"
+JOURNAL_FILE = "journal_sms.xlsx"
 
 # ==============================  MAINTENANCE / CACHE  ==============================
 
@@ -32,13 +34,6 @@ def render_cache_section_sidebar():
         st.sidebar.success("Cache vidé. Redémarrage…")
         st.rerun()
 
-    # Bouton de test GitHub (optionnel)
-    if st.sidebar.button("📤 Tester sauvegarde GitHub"):
-        try:
-            push_to_github(FICHIER)
-        except Exception as e:
-            st.sidebar.error(f"❌ Échec GitHub (test) : {e}")
-
 # ==============================  OUTILS  ==============================
 
 def to_date_only(x):
@@ -53,12 +48,11 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def normalize_tel(x):
-    """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
+    """Lecture du téléphone en TEXTE, retire .0 éventuel, espaces, conserve le +."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
-    s = str(x).strip()
-    s = s.replace(" ", "")  # pas d'espaces
-    if s.endswith(".0"):    # cas lu comme float --> "0612345678.0"
+    s = str(x).strip().replace(" ", "")
+    if s.endswith(".0"):
         s = s[:-2]
     return s
 
@@ -67,7 +61,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","prix_net","charges","%",
-        "AAAA","MM","ical_uid"
+        "AAAA","MM","ical_uid","sms"  # <-- sms ajouté
     ]
     if df is None or df.empty:
         return pd.DataFrame(columns=base_cols)
@@ -110,12 +104,12 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
 
     # Colonnes minimales
-    defaults = {"nom_client":"", "plateforme":"Autre", "telephone":"", "ical_uid":""}
+    defaults = {"nom_client":"", "plateforme":"Autre", "telephone":"", "ical_uid":"", "sms":"🟠 En attente"}
     for k,v in defaults.items():
         if k not in df.columns:
             df[k] = v
 
-    # Téléphone: assure chaîne nettoyée (au cas où)
+    # Téléphone: assure chaîne nettoyée
     if "telephone" in df.columns:
         df["telephone"] = df["telephone"].apply(normalize_tel)
 
@@ -146,7 +140,6 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
-    # Important: converter pour 'telephone'
     return pd.read_excel(path, converters={"telephone": normalize_tel})
 
 def charger_donnees() -> pd.DataFrame:
@@ -163,69 +156,15 @@ def charger_donnees() -> pd.DataFrame:
 def _force_telephone_text_format_openpyxl(writer, df_to_save: pd.DataFrame, sheet_name: str):
     """Après to_excel, force le format texte '@' sur la colonne 'telephone' si présente."""
     try:
-        ws = writer.sheets.get(sheet_name) or writer.sheets.get('Sheet1', None)
+        ws = writer.sheets.get(sheet_name) or writer.sheets.get('Sheet1')
         if ws is None or "telephone" not in df_to_save.columns:
             return
         col_idx = df_to_save.columns.get_loc("telephone") + 1  # 1-based
         for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-            row[0].number_format = '@'
+            cell = row[0]
+            cell.number_format = '@'
     except Exception:
         pass
-
-# ----------- Sauvegarde GitHub -----------
-def push_to_github(file_path: str):
-    """
-    Pousse `file_path` vers GitHub en utilisant les secrets Streamlit:
-      - GITHUB_TOKEN
-      - GITHUB_REPO (ex: "charleytrigano/streamlit-reservations")
-      - GITHUB_FILEPATH (ex: "reservations.xlsx")
-      - GITHUB_BRANCH (ex: "main")
-    Affiche un message dans la sidebar.
-    """
-    try:
-        token   = st.secrets["GITHUB_TOKEN"]
-        repo    = st.secrets["GITHUB_REPO"]
-        branch  = st.secrets.get("GITHUB_BRANCH", "main")
-        dstpath = st.secrets.get("GITHUB_FILEPATH", "reservations.xlsx")
-    except Exception:
-        st.sidebar.warning("🔒 Secrets GitHub manquants (GITHUB_TOKEN/REPO/FILEPATH/BRANCH).")
-        return
-
-    if not os.path.exists(file_path):
-        st.sidebar.error(f"Fichier introuvable: {file_path}")
-        return
-
-    with open(file_path, "rb") as f:
-        content = f.read()
-    b64 = base64.b64encode(content).decode("utf-8")
-    url = f"https://api.github.com/repos/{repo}/contents/{dstpath}"
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-
-    # Récupérer SHA si le fichier existe déjà
-    sha = None
-    r_get = requests.get(url, headers=headers, params={"ref": branch})
-    if r_get.status_code == 200:
-        try:
-            sha = r_get.json().get("sha")
-        except Exception:
-            sha = None
-
-    data = {
-        "message": f"Update {dstpath}",
-        "content": b64,
-        "branch": branch
-    }
-    if sha:
-        data["sha"] = sha
-
-    r_put = requests.put(url, headers=headers, json=data)
-    if r_put.status_code in (200, 201):
-        st.sidebar.success("📤 Sauvegarde envoyée sur GitHub.")
-    else:
-        st.sidebar.error(f"GitHub PUT {r_put.status_code}: {r_put.text}")
 
 def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
@@ -238,8 +177,6 @@ def sauvegarder_donnees(df: pd.DataFrame):
             _force_telephone_text_format_openpyxl(w, out, "Sheet1")
         st.cache_data.clear()
         st.success("💾 Sauvegarde Excel effectuée.")
-        # --- Push GitHub automatique ---
-        push_to_github(FICHIER)
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
 
@@ -270,6 +207,47 @@ def bouton_telecharger(df: pd.DataFrame):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         disabled=(data_xlsx is None),
     )
+
+# ==============================  JOURNAL SMS  ==============================
+
+@st.cache_data(show_spinner=False)
+def _read_journal_cached(path: str, mtime: float):
+    return pd.read_excel(path)
+
+def charger_journal() -> pd.DataFrame:
+    if not os.path.exists(JOURNAL_FILE):
+        cols = ["timestamp","action","nom_client","plateforme","telephone",
+                "date_arrivee","date_depart","nuitees","message","statut"]
+        return pd.DataFrame(columns=cols)
+    try:
+        mtime = os.path.getmtime(JOURNAL_FILE)
+        df = _read_journal_cached(JOURNAL_FILE, mtime)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["timestamp","action","nom_client","plateforme","telephone",
+                                     "date_arrivee","date_depart","nuitees","message","statut"])
+
+def journal_append(action: str, r: pd.Series, message: str, statut: str):
+    j = charger_journal()
+    row = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "action": action,  # "arrivee", "relance", "manuel"
+        "nom_client": str(r.get("nom_client","")),
+        "plateforme": str(r.get("plateforme","")),
+        "telephone": normalize_tel(r.get("telephone")),
+        "date_arrivee": format_date_str(r.get("date_arrivee")) if isinstance(r.get("date_arrivee"), date) else "",
+        "date_depart":  format_date_str(r.get("date_depart"))  if isinstance(r.get("date_depart"),  date) else "",
+        "nuitees": int(r.get("nuitees") or 0),
+        "message": message,
+        "statut": statut,  # "envoye" / "attente"
+    }
+    j = pd.concat([j, pd.DataFrame([row])], ignore_index=True)
+    try:
+        with pd.ExcelWriter(JOURNAL_FILE, engine="openpyxl") as w:
+            j.to_excel(w, index=False)
+        st.cache_data.clear()
+    except Exception as e:
+        st.warning(f"Journal non sauvegardé: {e}")
 
 # ==============================  ICS EXPORT  ==============================
 
@@ -357,20 +335,15 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     A("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
-# ==============================  TEMPLATES SMS (MANUEL) ====================
+# ==============================  TEMPLATES SMS ==============================
 
 def sms_message_arrivee(row: pd.Series) -> str:
-    """
-    Message d’arrivée EXACT demandé (incluant 'Telephone : ...').
-    """
+    # Message EXACT validé
     d1 = row.get("date_arrivee")
     d2 = row.get("date_depart")
     d1s = d1.strftime("%Y/%m/%d") if isinstance(d1, date) else ""
     d2s = d2.strftime("%Y/%m/%d") if isinstance(d2, date) else ""
-    nuitees = int(
-        row.get("nuitees")
-        or ((d2 - d1).days if isinstance(d1, date) and isinstance(d2, date) else 0)
-    )
+    nuitees = int(row.get("nuitees") or ((d2 - d1).days if isinstance(d1, date) and isinstance(d2, date) else 0))
     plateforme = str(row.get("plateforme") or "")
     nom = str(row.get("nom_client") or "")
     tel_aff = str(row.get("telephone") or "").strip()
@@ -391,7 +364,7 @@ def sms_message_arrivee(row: pd.Series) -> str:
 
 def sms_message_depart(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "")
-    msg = (
+    return (
         f"Bonjour {nom},\n\n"
         "Un grand merci d’avoir choisi notre appartement pour votre séjour ! "
         "Nous espérons que vous avez passé un moment aussi agréable que celui que nous avons eu à vous accueillir.\n\n"
@@ -400,9 +373,8 @@ def sms_message_depart(row: pd.Series) -> str:
         "Au plaisir de vous accueillir à nouveau,\n"
         "Annick & Charley"
     )
-    return msg
 
-# ==============================  VUES  ==============================
+# ==============================  UI : TOTAUX  ==============================
 
 def _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
     return f"""
@@ -419,6 +391,8 @@ def _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
   <div class="chip"><b>Commission moy.</b><div>{pct_moy:.2f} %</div></div>
 </div>
 """
+
+# ==============================  VUES  ==============================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -495,7 +469,8 @@ def vue_ajouter(df: pd.DataFrame):
                 "nuitees": (depart - arrivee).days,
                 "AAAA": arrivee.year,
                 "MM": arrivee.month,
-                "ical_uid": ""
+                "ical_uid": "",
+                "sms": "🟠 En attente"
             }
             df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
             sauvegarder_donnees(df2)
@@ -535,23 +510,28 @@ def vue_modifier(df: pd.DataFrame):
     pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
     c[2].markdown(f"**Charges**: {charges_calc:.2f} €  \n**%**: {pct_calc:.2f}")
 
+    # Statut SMS
+    sms_stat = st.selectbox("Statut SMS", ["🟠 En attente","🟢 Envoyé"],
+                            index=0 if df.at[i,"sms"]!="🟢 Envoyé" else 1)
+
     c1, c2 = st.columns(2)
     if c1.button("💾 Enregistrer"):
         if depart < arrivee + timedelta(days=1):
             st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
             return
-        df.at[i,"nom_client"] = nom.strip()
-        df.at[i,"plateforme"] = plateforme
-        df.at[i,"telephone"]  = normalize_tel(tel)
+        df.at[i,"nom_client"]   = nom.strip()
+        df.at[i,"plateforme"]   = plateforme
+        df.at[i,"telephone"]    = normalize_tel(tel)
         df.at[i,"date_arrivee"] = arrivee
         df.at[i,"date_depart"]  = depart
-        df.at[i,"prix_brut"] = float(brut)
-        df.at[i,"prix_net"]  = float(net)
-        df.at[i,"charges"]   = round(charges_calc, 2)
-        df.at[i,"%"]         = round(pct_calc, 2)
-        df.at[i,"nuitees"]   = (depart - arrivee).days
-        df.at[i,"AAAA"]      = arrivee.year
-        df.at[i,"MM"]        = arrivee.month
+        df.at[i,"prix_brut"]    = float(brut)
+        df.at[i,"prix_net"]     = float(net)
+        df.at[i,"charges"]      = round(charges_calc, 2)
+        df.at[i,"%"]            = round(pct_calc, 2)
+        df.at[i,"nuitees"]      = (depart - arrivee).days
+        df.at[i,"AAAA"]         = arrivee.year
+        df.at[i,"MM"]           = arrivee.month
+        df.at[i,"sms"]          = sms_stat
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df)
         st.success("✅ Modifié")
@@ -588,7 +568,7 @@ def vue_calendrier(df: pd.DataFrame):
     core, _ = split_totals(df)
     for _, row in core.iterrows():
         d1 = row["date_arrivee"]; d2 = row["date_depart"]
-        if not (isinstance(d1, date) and isinstance(d2, date)):
+        if not (isinstance(d1, date) and isinstance(d2, date)): 
             continue
         for j in jours:
             if d1 <= j < d2:
@@ -608,9 +588,6 @@ def vue_calendrier(df: pd.DataFrame):
         table.append(ligne)
 
     st.table(pd.DataFrame(table, columns=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]))
-
-def _totaux_html(total_brut, total_net, total_chg, total_nuits, pct_moy):
-    return _totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy)
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (réservations détaillées)")
@@ -651,7 +628,7 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
-        "prix_brut","prix_net","charges","%"
+        "prix_brut","prix_net","charges","%","sms"
     ]
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
@@ -661,7 +638,7 @@ def vue_rapport(df: pd.DataFrame):
     total_chg    = data["charges"].sum(skipna=True)
     total_nuits  = data["nuitees"].sum(skipna=True)
     pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
-    st.markdown(_totaux_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
+    st.markdown(_totaux_chips_html(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
@@ -726,7 +703,7 @@ def vue_clients(df: pd.DataFrame):
         show[c] = show[c].apply(format_date_str)
 
     cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart",
-            "nuitees","prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"]
+            "nuitees","prix_brut","prix_net","charges","%","sms","prix_brut/nuit","prix_net/nuit"]
     cols = [c for c in cols if c in show.columns]
     st.dataframe(show[cols], use_container_width=True)
     st.download_button(
@@ -771,7 +748,14 @@ def vue_export_ics(df: pd.DataFrame):
     )
     st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
 
-# ==============================  SMS (MANUEL) ====================
+# ==============================  SMS (MANUEL) ==============================
+
+def _update_sms_status(df: pd.DataFrame, row_index, status_emoji: str):
+    """Met à jour la colonne 'sms' (🟢 ou 🟠) pour l'index donné et sauvegarde."""
+    if "sms" not in df.columns:
+        df["sms"] = "🟠 En attente"
+    df.at[row_index, "sms"] = status_emoji
+    sauvegarder_donnees(df)
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
@@ -789,11 +773,11 @@ def vue_sms(df: pd.DataFrame):
     # --- Arrivées demain ---
     with colA:
         st.subheader("📆 Arrivées demain")
-        arrives = df[df["date_arrivee"] == demain].copy()
+        arrives = df[df["date_arrivee"] == demain]
         if arrives.empty:
             st.info("Aucune arrivée demain.")
         else:
-            for idx, r in arrives.reset_index(drop=True).iterrows():
+            for idx, r in arrives.iterrows():  # conserve index d'origine
                 body = sms_message_arrivee(r)
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
@@ -805,24 +789,31 @@ def vue_sms(df: pd.DataFrame):
                             f"Nuitées: {r.get('nuitees','')}")
                 st.code(body)
 
-                c1, c2, c3 = st.columns([1,1,2])
-                ck_call = c1.checkbox("📞 Appeler", key=f"sms_arr_call_{idx}", value=False)
-                ck_sms  = c2.checkbox("📩 SMS", key=f"sms_arr_sms_{idx}", value=True)
-                with c3:
-                    if ck_call and tel_link:
-                        st.link_button(f"Appeler {tel}", tel_link)
-                    if ck_sms and sms_link:
-                        st.link_button("Envoyer SMS", sms_link)
+                c1, c2, c3, c4 = st.columns([1,1,1,2])
+                if tel_link:
+                    c1.link_button("📞 Appeler", tel_link)
+                if sms_link:
+                    c2.link_button("📩 SMS", sms_link)
+                if c3.button("✅ Marquer envoyé", key=f"mark_send_arr_{idx}"):
+                    _update_sms_status(df, idx, "🟢 Envoyé")
+                    journal_append("arrivee", r, body, "envoye")
+                    st.success("Marqué comme envoyé.")
+                    st.rerun()
+                if c4.button("🕒 Marquer en attente", key=f"mark_wait_arr_{idx}"):
+                    _update_sms_status(df, idx, "🟠 En attente")
+                    journal_append("arrivee", r, body, "attente")
+                    st.info("Marqué en attente.")
+                    st.rerun()
                 st.divider()
 
     # --- Relance +24h après départ ---
     with colB:
         st.subheader("🕒 Relance +24h après départ")
-        dep_24h = df[df["date_depart"] == hier].copy()
+        dep_24h = df[df["date_depart"] == hier]
         if dep_24h.empty:
             st.info("Aucun départ hier.")
         else:
-            for idx, r in dep_24h.reset_index(drop=True).iterrows():
+            for idx, r in dep_24h.iterrows():
                 body = sms_message_depart(r)
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
@@ -831,22 +822,38 @@ def vue_sms(df: pd.DataFrame):
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
 
-                c1, c2, c3 = st.columns([1,1,2])
-                ck_call = c1.checkbox("📞 Appeler", key=f"sms_dep_call_{idx}", value=False)
-                ck_sms  = c2.checkbox("📩 SMS", key=f"sms_dep_sms_{idx}", value=True)
-                with c3:
-                    if ck_call and tel_link:
-                        st.link_button(f"Appeler {tel}", tel_link)
-                    if ck_sms and sms_link:
-                        st.link_button("Envoyer SMS", sms_link)
+                c1, c2, c3, c4 = st.columns([1,1,1,2])
+                if tel_link:
+                    c1.link_button("📞 Appeler", tel_link)
+                if sms_link:
+                    c2.link_button("📩 SMS", sms_link)
+                if c3.button("✅ Marquer envoyé", key=f"mark_send_dep_{idx}"):
+                    _update_sms_status(df, idx, "🟢 Envoyé")
+                    journal_append("relance", r, body, "envoye")
+                    st.success("Marqué comme envoyé.")
+                    st.rerun()
+                if c4.button("🕒 Marquer en attente", key=f"mark_wait_dep_{idx}"):
+                    _update_sms_status(df, idx, "🟠 En attente")
+                    journal_append("relance", r, body, "attente")
+                    st.info("Marqué en attente.")
+                    st.rerun()
                 st.divider()
 
     # --- Composeur manuel ---
     st.subheader("✍️ Composer un SMS manuel")
     df_pick = df.copy()
     df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
+    if df_pick.empty:
+        st.info("Aucune réservation pour composer un message.")
+        return
+
     choix = st.selectbox("Choisir une réservation", df_pick["id_aff"])
-    r = df_pick.loc[df_pick["id_aff"] == choix].iloc[0]
+    sel = df_pick[df_pick["id_aff"] == choix]
+    if sel.empty:
+        st.info("Sélection invalide.")
+        return
+    idx = sel.index[0]
+    r = sel.iloc[0]
     tel = normalize_tel(r.get("telephone"))
 
     choix_type = st.radio("Modèle de message",
@@ -854,24 +861,30 @@ def vue_sms(df: pd.DataFrame):
                           horizontal=True)
     if choix_type == "Arrivée (demande d’heure)":
         body = sms_message_arrivee(r)
+        action = "arrivee"
     elif choix_type == "Relance après départ":
         body = sms_message_depart(r)
+        action = "relance"
     else:
         body = st.text_area("Votre message", value="", height=160, placeholder="Tapez votre SMS ici…")
+        action = "manuel"
 
-    c1, c2, c3 = st.columns([2,1,1])
+    c1, c2, c3, c4 = st.columns([2,1,1,1])
     with c1:
         st.code(body or "—")
-    ck_call = c2.checkbox("📞 Appeler", key="sms_manual_call", value=False)
-    ck_sms  = c3.checkbox("📩 SMS", key="sms_manual_sms", value=True)
-
     if tel and body:
-        if ck_call:
-            st.link_button(f"Appeler {tel}", f"tel:{tel}")
-        if ck_sms:
-            st.link_button("Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
+        c2.link_button("📞 Appeler", f"tel:{tel}")
+        c3.link_button("📩 SMS", f"sms:{tel}?&body={quote(body)}")
     else:
-        st.info("Renseignez un téléphone et un message.")
+        c2.write("—")
+        c3.write("—")
+
+    if c4.button("✅ Marquer envoyé", key="sms_manual_mark_send"):
+        _update_sms_status(df, idx, "🟢 Envoyé")
+        journal_append(action, r, body, "envoye")
+        st.success("Marqué comme envoyé.")
+        st.rerun()
+    st.caption("Astuce : utilisez les boutons de marquage pour tenir à jour la colonne 'sms' et le journal.")
 
 # ==============================  APP  ==============================
 
@@ -889,10 +902,10 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS","🗒️ Journal SMS"]
     )
 
-    # Maintenance (vider cache) SOUS la navigation + test GitHub
+    # Maintenance (vider cache) SOUS la navigation
     render_cache_section_sidebar()
 
     # Charger les données après éventuelle restauration
@@ -914,6 +927,37 @@ def main():
         vue_export_ics(df)
     elif onglet == "✉️ SMS":
         vue_sms(df)
+    elif onglet == "🗒️ Journal SMS":
+        j = charger_journal()
+        if j.empty:
+            st.info("Aucun enregistrement de SMS pour le moment.")
+        else:
+            # Filtres journal
+            c1, c2, c3 = st.columns(3)
+            act = c1.selectbox("Action", ["Toutes"] + sorted(j["action"].dropna().unique().tolist()))
+            stat = c2.selectbox("Statut", ["Tous"] + sorted(j["statut"].dropna().unique().tolist()))
+            cli = c3.text_input("Recherche (client / tel)")
+
+            dj = j.copy()
+            if act != "Toutes":
+                dj = dj[dj["action"] == act]
+            if stat != "Tous":
+                dj = dj[dj["statut"] == stat]
+            if cli.strip():
+                q = cli.strip().lower()
+                dj = dj[dj.astype(str).apply(lambda row: q in " ".join(row.str.lower()), axis=1)]
+
+            st.dataframe(dj, use_container_width=True)
+
+            buf = BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                dj.to_excel(w, index=False)
+            st.download_button(
+                "⬇️ Télécharger le journal (XLSX)",
+                data=buf.getvalue(),
+                file_name="journal_sms.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 if __name__ == "__main__":
     main()
