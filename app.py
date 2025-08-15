@@ -1,8 +1,10 @@
-# app.py — Villa Tobias (COMPLET & STABLE)
-# - Base = prix_net - menage - taxes_sejour
-# - % = (prix_brut - prix_net) / prix_brut * 100 (inchangé)
-# - Champs commissions, frais_cb, menage, taxes_sejour pris en compte partout
-# - Téléphone en texte, Sauvegarde/Restaurer, ICS, SMS, Rapport, etc.
+# app.py — Villa Tobias (COMPLET, CALENDRIER STABLE)
+# Champs & calculs:
+#  - prix_net = prix_brut - commissions - frais_cb
+#  - base     = prix_net - menage - taxes_sejour
+#  - %        = (prix_brut - prix_net) / prix_brut * 100
+# Présent partout: commissions, frais_cb, menage, taxes_sejour, base
+# Calendrier simple (fiable), pastilles plateformes, liste du mois
 
 import streamlit as st
 import pandas as pd
@@ -15,8 +17,6 @@ import os
 from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
-
-# Couleurs/pastilles plateformes
 PLATFORM_PASTILLE = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
 
 
@@ -52,11 +52,10 @@ def format_date_str(d):
     return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
 
 def normalize_tel(x):
-    """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
+    """Téléphone en texte (évite .0 / garde +)."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
-    s = str(x).strip()
-    s = s.replace(" ", "")
+    s = str(x).strip().replace(" ", "")
     if s.endswith(".0"):
         s = s[:-2]
     return s
@@ -71,41 +70,34 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "AAAA","MM","ical_uid"
     ]
     if df is None or df.empty:
-        # DF vide avec toutes les colonnes attendues
         return pd.DataFrame(columns=base_cols)
 
     df = df.copy()
 
-    # Dates -> date
+    # Dates
     for c in ["date_arrivee", "date_depart"]:
         if c in df.columns:
             df[c] = df[c].apply(to_date_only)
 
-    # Colonnes numériques à normaliser
+    # Numériques
     numeric_cols = ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%"]
     for c in numeric_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Valeurs par défaut si colonnes manquantes
-    defaults_num = {
-        "commissions": 0.0,
-        "frais_cb": 0.0,
-        "menage": 0.0,
-        "taxes_sejour": 0.0
-    }
-    for k, v in defaults_num.items():
+    # Valeurs par défaut si absentes
+    for k in ["commissions","frais_cb","menage","taxes_sejour"]:
         if k not in df.columns:
-            df[k] = v
+            df[k] = 0.0
 
-    # Calculs principaux:
+    # Calculs auto
     # prix_net = prix_brut - commissions - frais_cb
     if "prix_brut" in df.columns:
         df["prix_net"] = (df.get("prix_brut", 0).fillna(0)
                           - df.get("commissions", 0).fillna(0)
                           - df.get("frais_cb", 0).fillna(0))
 
-    # charges = prix_brut - prix_net  (≈ commissions + frais_cb)
+    # charges = prix_brut - prix_net
     df["charges"] = df.get("prix_brut", 0).fillna(0) - df.get("prix_net", 0).fillna(0)
 
     # % = charges / prix_brut * 100
@@ -118,8 +110,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     # Arrondis
     for c in ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%"]:
-        if c in df.columns:
-            df[c] = df[c].round(2)
+        df[c] = df[c].round(2)
 
     # Nuitées
     if "date_arrivee" in df.columns and "date_depart" in df.columns:
@@ -133,18 +124,16 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else np.nan).astype("Int64")
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
 
-    # Colonnes minimales texte
-    defaults_txt = {"nom_client":"", "plateforme":"Autre", "telephone":"", "ical_uid":""}
-    for k,v in defaults_txt.items():
+    # Champs texte
+    for k,v in {"nom_client":"", "plateforme":"Autre", "telephone":"", "ical_uid":""}.items():
         if k not in df.columns:
             df[k] = v
+    df["telephone"] = df["telephone"].apply(normalize_tel)
 
-    # Téléphone texte propre
-    if "telephone" in df.columns:
-        df["telephone"] = df["telephone"].apply(normalize_tel)
-
-    # Ordre + colonnes restantes à la fin
-    return df[[c for c in base_cols if c in df.columns] + [c for c in df.columns if c not in base_cols]]
+    # Ordre standard
+    ordered = [c for c in base_cols if c in df.columns]
+    rest = [c for c in df.columns if c not in ordered]
+    return df[ordered + rest]
 
 def is_total_row(row: pd.Series) -> bool:
     name_is_total = str(row.get("nom_client","")).strip().lower() == "total"
@@ -273,7 +262,6 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
             "METHOD:PUBLISH\r\n"
             "END:VCALENDAR\r\n"
         )
-
     core, _ = split_totals(df)
     core = sort_core(core)
 
@@ -291,7 +279,6 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
         d2 = row.get("date_depart")
         if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
-
         plateforme = str(row.get("plateforme") or "").strip()
         nom_client = str(row.get("nom_client") or "").strip()
         tel = str(row.get("telephone") or "").strip()
@@ -327,7 +314,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     return "\r\n".join(lines) + "\r\n"
 
 
-# ==============================  TEMPLATES SMS (MANUEL) ====================
+# ==============================  SMS (MANUEL) ====================
 
 def sms_message_arrivee(row: pd.Series) -> str:
     d1 = row.get("date_arrivee")
@@ -403,11 +390,19 @@ def vue_reservations(df: pd.DataFrame):
     for c in ["date_arrivee","date_depart"]:
         if c in show.columns:
             show[c] = show[c].apply(format_date_str)
-    st.dataframe(show, use_container_width=True)
+
+    # Affichage colonnes (inclut nouveaux champs)
+    cols = ["nom_client","plateforme","telephone",
+            "date_arrivee","date_depart","nuitees",
+            "prix_brut","commissions","frais_cb","prix_net",
+            "menage","taxes_sejour","base",
+            "charges","%"]
+    cols = [c for c in cols if c in show.columns]
+    st.dataframe(show[cols], use_container_width=True)
 
 def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
-    st.caption("Saisie rapide (libellés inline)")
+    st.caption("Saisie rapide (ordre demandé)")
 
     def inline_input(label, widget_fn, key=None, **widget_kwargs):
         col1, col2 = st.columns([1,2])
@@ -424,32 +419,27 @@ def vue_ajouter(df: pd.DataFrame):
     depart  = inline_input("Départ",  st.date_input, key="add_depart",
                            value=min_dep, min_value=min_dep)
 
-    brut = inline_input("Prix brut (€)", st.number_input, key="add_brut",
+    # 1 à 8 : ordre exact demandé
+    brut = inline_input("1) Prix brut (€)", st.number_input, key="add_brut",
                         min_value=0.0, step=1.0, format="%.2f")
-    commissions = inline_input("Commissions (€)", st.number_input, key="add_comm",
-                               min_value=0.0, step=0.50, format="%.2f")
-    frais_cb = inline_input("Frais CB (€)", st.number_input, key="add_cb",
-                            min_value=0.0, step=0.50, format="%.2f")
-    menage = inline_input("Ménage (€)", st.number_input, key="add_men",
-                          min_value=0.0, step=0.50, format="%.2f")
-    taxes = inline_input("Taxes séjour (€)", st.number_input, key="add_tax",
-                         min_value=0.0, step=0.50, format="%.2f")
-
-    # Calculs auto
-    net_calc = float(brut) - float(commissions) - float(frais_cb)
-    net_calc = max(net_calc, 0.0)
-    charges_calc = float(commissions) + float(frais_cb)  # = brut - net
-    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
-    base_calc = net_calc - float(menage) - float(taxes)
-
-    inline_input("Prix net (€)", st.number_input, key="add_net",
+    commissions = inline_input("2) Commissions (€)", st.number_input, key="add_comm",
+                               min_value=0.0, step=0.5, format="%.2f")
+    frais_cb = inline_input("3) Frais CB (€)", st.number_input, key="add_cb",
+                            min_value=0.0, step=0.5, format="%.2f")
+    net_calc = max(float(brut) - float(commissions) - float(frais_cb), 0.0)
+    inline_input("4) Prix net (€)", st.number_input, key="add_net",
                  value=round(net_calc,2), step=0.01, format="%.2f", disabled=True)
-    inline_input("Charges (€)", st.number_input, key="add_ch",
-                 value=round(charges_calc,2), step=0.01, format="%.2f", disabled=True)
-    inline_input("Commission (%)", st.number_input, key="add_pct",
-                 value=round(pct_calc,2), step=0.01, format="%.2f", disabled=True)
-    inline_input("Base (€)", st.number_input, key="add_base",
+    menage = inline_input("5) Ménage (€)", st.number_input, key="add_men",
+                          min_value=0.0, step=0.5, format="%.2f")
+    taxes  = inline_input("6) Taxes séjour (€)", st.number_input, key="add_tax",
+                          min_value=0.0, step=0.5, format="%.2f")
+    base_calc = net_calc - float(menage) - float(taxes)
+    inline_input("7) Base (€)", st.number_input, key="add_base",
                  value=round(base_calc,2), step=0.01, format="%.2f", disabled=True)
+    charges_calc = float(brut) - net_calc
+    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
+    inline_input("8) % Commission", st.number_input, key="add_pct",
+                 value=round(pct_calc,2), step=0.01, format="%.2f", disabled=True)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -457,7 +447,6 @@ def vue_ajouter(df: pd.DataFrame):
             if depart < arrivee + timedelta(days=1):
                 st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
                 return
-
             ligne = {
                 "nom_client": (nom or "").strip(),
                 "plateforme": plateforme,
@@ -483,7 +472,7 @@ def vue_ajouter(df: pd.DataFrame):
             st.success("✅ Réservation enregistrée")
             st.rerun()
     with c2:
-        st.info("Le prix net et la base se recalculent automatiquement.")
+        st.info("Les champs Net, Base et % sont calculés automatiquement.")
 
 def vue_modifier(df: pd.DataFrame):
     st.title("✏️ Modifier / Supprimer")
@@ -509,21 +498,21 @@ def vue_modifier(df: pd.DataFrame):
     arrivee = st.date_input("Arrivée", df.at[i,"date_arrivee"] if isinstance(df.at[i,"date_arrivee"], date) else date.today())
     depart  = st.date_input("Départ",  df.at[i,"date_depart"] if isinstance(df.at[i,"date_depart"], date) else arrivee + timedelta(days=1), min_value=arrivee+timedelta(days=1))
 
+    # Ordre 1→8
     c = st.columns(6)
-    brut = c[0].number_input("Prix brut (€)", min_value=0.0, value=float(df.at[i,"prix_brut"]) if pd.notna(df.at[i,"prix_brut"]) else 0.0, step=1.0, format="%.2f")
-    commissions = c[1].number_input("Commissions (€)", min_value=0.0, value=float(df.at[i,"commissions"]) if "commissions" in df.columns and pd.notna(df.at[i,"commissions"]) else 0.0, step=0.50, format="%.2f")
-    frais_cb = c[2].number_input("Frais CB (€)", min_value=0.0, value=float(df.at[i,"frais_cb"]) if "frais_cb" in df.columns and pd.notna(df.at[i,"frais_cb"]) else 0.0, step=0.50, format="%.2f")
-    menage = c[3].number_input("Ménage (€)", min_value=0.0, value=float(df.at[i,"menage"]) if "menage" in df.columns and pd.notna(df.at[i,"menage"]) else 0.0, step=0.50, format="%.2f")
-    taxes  = c[4].number_input("Taxes séjour (€)", min_value=0.0, value=float(df.at[i,"taxes_sejour"]) if "taxes_sejour" in df.columns and pd.notna(df.at[i,"taxes_sejour"]) else 0.0, step=0.50, format="%.2f")
+    brut = c[0].number_input("1) Prix brut (€)", min_value=0.0, value=float(df.at[i,"prix_brut"]) if pd.notna(df.at[i,"prix_brut"]) else 0.0, step=1.0, format="%.2f")
+    commissions = c[1].number_input("2) Commissions (€)", min_value=0.0, value=float(df.at[i,"commissions"]) if "commissions" in df.columns and pd.notna(df.at[i,"commissions"]) else 0.0, step=0.5, format="%.2f")
+    frais_cb = c[2].number_input("3) Frais CB (€)", min_value=0.0, value=float(df.at[i,"frais_cb"]) if "frais_cb" in df.columns and pd.notna(df.at[i,"frais_cb"]) else 0.0, step=0.5, format="%.2f")
+    menage = c[3].number_input("5) Ménage (€)", min_value=0.0, value=float(df.at[i,"menage"]) if "menage" in df.columns and pd.notna(df.at[i,"menage"]) else 0.0, step=0.5, format="%.2f")
+    taxes  = c[4].number_input("6) Taxes séjour (€)", min_value=0.0, value=float(df.at[i,"taxes_sejour"]) if "taxes_sejour" in df.columns and pd.notna(df.at[i,"taxes_sejour"]) else 0.0, step=0.5, format="%.2f")
 
-    # Recalcule auto
     net_calc = max(brut - commissions - frais_cb, 0.0)
-    charges_calc = commissions + frais_cb
-    pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
     base_calc = net_calc - menage - taxes
+    charges_calc = brut - net_calc
+    pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
 
-    c[5].number_input("Prix net (€)", value=round(net_calc,2), step=0.01, format="%.2f", disabled=True)
-    st.markdown(f"**Charges**: {charges_calc:.2f} €  |  **%**: {pct_calc:.2f} %  |  **Base**: {base_calc:.2f} €")
+    c[5].number_input("4) Prix net (€)", value=round(net_calc,2), step=0.01, format="%.2f", disabled=True)
+    st.markdown(f"**7) Base**: {base_calc:.2f} €  |  **8) %**: {pct_calc:.2f} %  |  **Charges**: {charges_calc:.2f} €")
 
     c1, c2 = st.columns(2)
     if c1.button("💾 Enregistrer"):
@@ -578,16 +567,14 @@ def vue_calendrier(df: pd.DataFrame):
     nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours_du_mois = [date(annee, mois_index, j + 1) for j in range(nb_jours)]
 
-    pastille = PLATFORM_PASTILLE
     contenu = {d: [] for d in jours_du_mois}
-
     core, _tot = split_totals(df)
     for _, r in core.iterrows():
         d1, d2 = r.get("date_arrivee"), r.get("date_depart")
         if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
         pf = str(r.get("plateforme") or "Autre")
-        ic = pastille.get(pf, "⬜")
+        ic = PLATFORM_PASTILLE.get(pf, "⬜")
         nom = str(r.get("nom_client") or "").strip()
         for d in jours_du_mois:
             if d1 <= d < d2:
@@ -606,11 +593,7 @@ def vue_calendrier(df: pd.DataFrame):
                 ligne.append("\n".join(bloc))
         grille.append(ligne)
 
-    st.dataframe(
-        pd.DataFrame(grille, columns=headers),
-        use_container_width=True,
-        height=320
-    )
+    st.dataframe(pd.DataFrame(grille, columns=headers), use_container_width=True, height=320)
 
     with st.expander("👥 Réservations du mois"):
         core_month = core[(core["AAAA"] == annee) & (core["MM"] == mois_index)].copy()
@@ -657,9 +640,7 @@ def vue_rapport(df: pd.DataFrame):
     detail = data.copy()
     for c in ["date_arrivee","date_depart"]:
         detail[c] = detail[c].apply(format_date_str)
-    by = [c for c in ["date_arrivee","nom_client"] if c in detail.columns]
-    if by:
-        detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
+    detail = detail.sort_values(["date_arrivee","nom_client"], na_position="last").reset_index(drop=True)
 
     cols_detail = [
         "nom_client","plateforme","telephone",
@@ -689,8 +670,7 @@ def vue_rapport(df: pd.DataFrame):
     )
 
     def chart_of(metric_label, metric_col):
-        if stats.empty:
-            return
+        if stats.empty: return
         pivot = stats.pivot(index="MM", columns="plateforme", values=metric_col).fillna(0)
         pivot = pivot.reindex(range(1,13)).fillna(0)
         pivot.index = [f"{int(m):02d}" for m in pivot.index]
@@ -700,16 +680,6 @@ def vue_rapport(df: pd.DataFrame):
     chart_of("Revenus bruts", "prix_brut")
     chart_of("Revenus nets", "prix_net")
     chart_of("Nuitées", "nuitees")
-
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        detail[cols_detail].to_excel(writer, index=False)
-    st.download_button(
-        "⬇️ Télécharger le détail (XLSX)",
-        data=buf.getvalue(),
-        file_name=f"rapport_detail_{annee}{'' if mois_label=='Tous' else '_'+mois_label}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
@@ -724,11 +694,8 @@ def vue_clients(df: pd.DataFrame):
     mois  = c2.selectbox("Mois", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
 
     data = df.copy()
-    if annee:
-        data = data[data["AAAA"] == int(annee)]
-    if mois != "Tous":
-        data = data[data["MM"] == int(mois)]
-
+    if annee: data = data[data["AAAA"] == int(annee)]
+    if mois != "Tous": data = data[data["MM"] == int(mois)]
     if data.empty:
         st.info("Aucune donnée pour cette période.")
         return
@@ -768,16 +735,11 @@ def vue_export_ics(df: pd.DataFrame):
     pf    = c3.selectbox("Plateforme", pfopt)
 
     data = df.copy()
-    if annee != "Toutes":
-        data = data[data["AAAA"] == int(annee)]
-    if mois != "Tous":
-        data = data[data["MM"] == int(mois)]
-    if pf != "Toutes":
-        data = data[data["plateforme"] == pf]
-
+    if annee != "Toutes": data = data[data["AAAA"] == int(annee)]
+    if mois != "Tous":   data = data[data["MM"] == int(mois)]
+    if pf != "Toutes":   data = data[data["plateforme"] == pf]
     if data.empty:
-        st.info("Aucune réservation pour ces filtres.")
-        return
+        st.info("Aucune réservation pour ces filtres."); return
 
     ics_text = df_to_ics(data)
     st.download_button(
@@ -786,10 +748,6 @@ def vue_export_ics(df: pd.DataFrame):
         file_name="reservations.ics",
         mime="text/calendar"
     )
-    st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
-
-
-# ==============================  SMS (MANUEL) ====================
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
@@ -815,21 +773,17 @@ def vue_sms(df: pd.DataFrame):
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
-
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.markdown(f"Arrivée: {format_date_str(r.get('date_arrivee'))} • "
                             f"Départ: {format_date_str(r.get('date_depart'))} • "
                             f"Nuitées: {r.get('nuitees','')}")
                 st.code(body)
-
                 c1, c2, c3 = st.columns([1,1,2])
                 ck_call = c1.checkbox("📞 Appeler", key=f"sms_arr_call_{idx}", value=False)
                 ck_sms  = c2.checkbox("📩 SMS", key=f"sms_arr_sms_{idx}", value=True)
                 with c3:
-                    if ck_call and tel_link:
-                        st.link_button(f"Appeler {tel}", tel_link)
-                    if ck_sms and sms_link:
-                        st.link_button("Envoyer SMS", sms_link)
+                    if ck_call and tel_link: st.link_button(f"Appeler {tel}", tel_link)
+                    if ck_sms and sms_link:  st.link_button("Envoyer SMS", sms_link)
                 st.divider()
 
     with colB:
@@ -843,18 +797,14 @@ def vue_sms(df: pd.DataFrame):
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
-
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
-
                 c1, c2, c3 = st.columns([1,1,2])
                 ck_call = c1.checkbox("📞 Appeler", key=f"sms_dep_call_{idx}", value=False)
                 ck_sms  = c2.checkbox("📩 SMS", key=f"sms_dep_sms_{idx}", value=True)
                 with c3:
-                    if ck_call and tel_link:
-                        st.link_button(f"Appeler {tel}", tel_link)
-                    if ck_sms and sms_link:
-                        st.link_button("Envoyer SMS", sms_link)
+                    if ck_call and tel_link: st.link_button(f"Appeler {tel}", tel_link)
+                    if ck_sms and sms_link:  st.link_button("Envoyer SMS", sms_link)
                 st.divider()
 
     st.subheader("✍️ Composer un SMS manuel")
@@ -875,16 +825,12 @@ def vue_sms(df: pd.DataFrame):
         body = st.text_area("Votre message", value="", height=160, placeholder="Tapez votre SMS ici…")
 
     c1, c2, c3 = st.columns([2,1,1])
-    with c1:
-        st.code(body or "—")
+    with c1: st.code(body or "—")
     ck_call = c2.checkbox("📞 Appeler", key="sms_manual_call", value=False)
     ck_sms  = c3.checkbox("📩 SMS", key="sms_manual_sms", value=True)
-
     if tel and body:
-        if ck_call:
-            st.link_button(f"Appeler {tel}", f"tel:{tel}")
-        if ck_sms:
-            st.link_button("Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
+        if ck_call: st.link_button(f"Appeler {tel}", f"tel:{tel}")
+        if ck_sms:  st.link_button("Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
     else:
         st.info("Renseignez un téléphone et un message.")
 
@@ -894,7 +840,7 @@ def vue_sms(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-    # Barre latérale : Fichier (Sauvegarde / Restauration)
+    # Fichier
     st.sidebar.title("📁 Fichier")
     df_tmp = charger_donnees()
     bouton_telecharger(df_tmp)
@@ -908,10 +854,10 @@ def main():
          "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
     )
 
-    # Maintenance (vider cache) SOUS la navigation
+    # Maintenance (sous nav)
     render_cache_section_sidebar()
 
-    # Charger les données après éventuelle restauration
+    # Données courantes
     df = charger_donnees()
 
     if onglet == "📋 Réservations":
