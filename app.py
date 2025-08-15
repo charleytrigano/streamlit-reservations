@@ -1,7 +1,7 @@
 # app.py — Villa Tobias (COMPLET)
-# Ajouts : 🎛️ Options d’affichage (couleurs / KPIs / recherche),
-# calendrier colorisé, filtres sur une ligne, recherche activable,
-# sans modifier le schéma ni la sauvegarde.
+# Ajouts : 🎛️ Options d’affichage, calendrier colorisé, filtres sur une ligne, recherche activable
+# + Colonnes financières optionnelles (commissions, frais_cb, menage, taxes_sejour, base)
+#   visibles et éditables si présentes dans l’Excel — sans changer tes calculs charges/%.
 
 import streamlit as st
 import pandas as pd
@@ -14,6 +14,9 @@ import os
 from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
+
+# Colonnes financières optionnelles qu’on supporte si elles existent
+OPT_FIN_COLS = ["commissions", "frais_cb", "menage", "taxes_sejour", "base"]
 
 # ==============================  PALETTE / COULEURS  ==============================
 
@@ -69,7 +72,8 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "AAAA","MM","ical_uid"
     ]
     if df is None or df.empty:
-        return pd.DataFrame(columns=base_cols)
+        # On prépare aussi les colonnes optionnelles si l’utilisateur veut les ajouter ensuite
+        return pd.DataFrame(columns=base_cols + OPT_FIN_COLS)
 
     df = df.copy()
 
@@ -78,12 +82,17 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = df[c].apply(to_date_only)
 
-    # Numériques
+    # Numériques (coeur)
     for c in ["prix_brut", "prix_net", "charges", "%"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Calcul charges/% si manquants
+    # Numériques (optionnels) — s’ils existent, on les garde au propre
+    for c in OPT_FIN_COLS:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Calcul charges/% si manquants (on ne change pas tes règles)
     if "prix_brut" in df.columns and "prix_net" in df.columns:
         if "charges" not in df.columns:
             df["charges"] = df["prix_brut"] - df["prix_net"]
@@ -92,7 +101,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
                 df["%"] = (df["charges"] / df["prix_brut"] * 100).fillna(0)
 
     # Arrondis
-    for c in ["prix_brut","prix_net","charges","%"]:
+    for c in ["prix_brut","prix_net","charges","%"] + [c for c in OPT_FIN_COLS if c in df.columns]:
         if c in df.columns:
             df[c] = df[c].round(2)
 
@@ -118,8 +127,10 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if "telephone" in df.columns:
         df["telephone"] = df["telephone"].apply(normalize_tel)
 
-    cols = base_cols
-    return df[[c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]]
+    # On conserve toutes les colonnes existantes et on place les colonnes "coeur" devant
+    ordered = [c for c in base_cols if c in df.columns]
+    rest = [c for c in df.columns if c not in ordered]
+    return df[ordered + rest]
 
 def is_total_row(row: pd.Series) -> bool:
     name_is_total = str(row.get("nom_client","")).strip().lower() == "total"
@@ -318,7 +329,13 @@ def vue_reservations(df: pd.DataFrame, opt_kpis: bool, opt_search: bool):
     for c in ["date_arrivee","date_depart"]:
         if c in show.columns:
             show[c] = show[c].apply(format_date_str)
-    st.dataframe(show, use_container_width=True)
+
+    # Colonnes affichées (avec optionnelles si présentes)
+    base_cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
+                 "prix_brut","prix_net","charges","%","AAAA","MM"]
+    opt_cols  = [c for c in OPT_FIN_COLS if c in show.columns]
+    cols_to_show = [c for c in base_cols if c in show.columns] + opt_cols
+    st.dataframe(show[cols_to_show], use_container_width=True)
 
 def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
@@ -347,6 +364,20 @@ def vue_ajouter(df: pd.DataFrame):
     inline_label_input("Commission (%)", st.number_input, key="add_pct",
                        value=round(pct_calc,2), step=0.01, format="%.2f", disabled=True)
 
+    # --- Détails financiers optionnels
+    with st.expander("Détails tarif (optionnel): commissions, frais CB, ménage, taxes de séjour"):
+        c1, c2 = st.columns(2)
+        commissions = c1.number_input("Commissions (€)", min_value=0.0, step=0.5, format="%.2f", key="add_comm")
+        frais_cb    = c2.number_input("Frais CB (€)",   min_value=0.0, step=0.5, format="%.2f", key="add_cb")
+        c3, c4 = st.columns(2)
+        menage      = c3.number_input("Ménage (€)",     min_value=0.0, step=0.5, format="%.2f", key="add_men")
+        taxes_sej   = c4.number_input("Taxes séjour (€)",min_value=0.0, step=0.5, format="%.2f", key="add_tax")
+        base_calc = None
+        if any([commissions, frais_cb, menage, taxes_sej]):
+            # On ne change PAS tes calculs officiels; on stocke juste les valeurs + base indicative si souhaitée
+            base_calc = float(net) - float(commissions) - float(frais_cb) - float(menage) - float(taxes_sej)
+            st.caption(f"Base (indicatif) : **{base_calc:.2f} €**")
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Enregistrer"):
@@ -372,6 +403,15 @@ def vue_ajouter(df: pd.DataFrame):
                 "MM": arrivee.month,
                 "ical_uid": ""
             }
+            # On ajoute les colonnes optionnelles si l’utilisateur a saisi quelque chose
+            if any([commissions, frais_cb, menage, taxes_sej]):
+                ligne["commissions"]   = float(commissions)
+                ligne["frais_cb"]      = float(frais_cb)
+                ligne["menage"]        = float(menage)
+                ligne["taxes_sejour"]  = float(taxes_sej)
+                if base_calc is not None:
+                    ligne["base"]      = round(base_calc, 2)
+
             df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
             sauvegarder_donnees(df2)
             st.success("✅ Réservation enregistrée")
@@ -410,6 +450,21 @@ def vue_modifier(df: pd.DataFrame):
     pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
     c[2].markdown(f"**Charges**: {charges_calc:.2f} €  \n**%**: {pct_calc:.2f}")
 
+    # Détails financiers optionnels (pré-remplis si colonnes présentes)
+    with st.expander("Détails tarif (optionnel): commissions, frais CB, ménage, taxes de séjour"):
+        c1, c2 = st.columns(2)
+        commissions = c1.number_input("Commissions (€)", min_value=0.0, step=0.5, format="%.2f",
+                                      value=float(df.at[i,"commissions"]) if "commissions" in df.columns and pd.notna(df.at[i,"commissions"]) else 0.0)
+        frais_cb    = c2.number_input("Frais CB (€)",   min_value=0.0, step=0.5, format="%.2f",
+                                      value=float(df.at[i,"frais_cb"]) if "frais_cb" in df.columns and pd.notna(df.at[i,"frais_cb"]) else 0.0)
+        c3, c4 = st.columns(2)
+        menage      = c3.number_input("Ménage (€)",     min_value=0.0, step=0.5, format="%.2f",
+                                      value=float(df.at[i,"menage"]) if "menage" in df.columns and pd.notna(df.at[i,"menage"]) else 0.0)
+        taxes_sej   = c4.number_input("Taxes séjour (€)",min_value=0.0, step=0.5, format="%.2f",
+                                      value=float(df.at[i,"taxes_sejour"]) if "taxes_sejour" in df.columns and pd.notna(df.at[i,"taxes_sejour"]) else 0.0)
+        base_calc = float(net) - float(commissions) - float(frais_cb) - float(menage) - float(taxes_sej)
+        st.caption(f"Base (indicatif) : **{base_calc:.2f} €**")
+
     c1, c2 = st.columns(2)
     if c1.button("💾 Enregistrer"):
         if depart < arrivee + timedelta(days=1):
@@ -427,6 +482,14 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i,"nuitees"]   = (depart - arrivee).days
         df.at[i,"AAAA"]      = arrivee.year
         df.at[i,"MM"]        = arrivee.month
+
+        # Écrit/maj colonnes optionnelles
+        df.at[i,"commissions"]  = float(commissions)
+        df.at[i,"frais_cb"]     = float(frais_cb)
+        df.at[i,"menage"]       = float(menage)
+        df.at[i,"taxes_sejour"] = float(taxes_sej)
+        df.at[i,"base"]         = round(base_calc, 2)
+
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df)
         st.success("✅ Modifié")
@@ -440,15 +503,12 @@ def vue_modifier(df: pd.DataFrame):
         st.rerun()
 
 def _build_month_grid(annee: int, mois_index: int):
-    # Retourne la matrice 6x7 de jours (0 pour vide)
     return calendar.monthcalendar(annee, mois_index)
 
 def _calendar_colors_for_month(df: pd.DataFrame, annee: int, mois_index: int, colorize: bool):
-    # Construit: display_df (6x7) avec numéros de jour, et color_df (couleur de fond per cell)
     weeks = _build_month_grid(annee, mois_index)
     rows_text = []
     rows_color = []
-    # Prépare planning par jour
     nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours = [date(annee, mois_index, j+1) for j in range(nb_jours)]
     planning = {j: [] for j in jours}
@@ -507,7 +567,6 @@ def vue_calendrier(df: pd.DataFrame, opt_colors: bool):
     display, colors = _calendar_colors_for_month(df, annee, mois_index, colorize=opt_colors)
 
     def _styler(s: pd.DataFrame):
-        # applique une couleur de fond par cellule en lisant 'colors'
         styles = pd.DataFrame("", index=s.index, columns=s.columns)
         for r in s.index:
             for c in s.columns:
@@ -520,7 +579,6 @@ def vue_calendrier(df: pd.DataFrame, opt_colors: bool):
 
     st.dataframe(display.style.apply(_styler, axis=None), use_container_width=True)
 
-    # Légende
     if opt_colors:
         st.markdown("**Légende** :")
         cols = st.columns(len(PLATFORM_COLORS))
@@ -568,11 +626,12 @@ def vue_rapport(df: pd.DataFrame, opt_kpis: bool, opt_search: bool):
     if by:
         detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
 
+    # Colonnes de détail (avec optionnelles si présentes)
     cols_detail = [
         "nom_client","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","prix_net","charges","%"
-    ]
+    ] + [c for c in OPT_FIN_COLS if c in detail.columns]
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
@@ -654,7 +713,8 @@ def vue_clients(df: pd.DataFrame, opt_search: bool):
         show[c] = show[c].apply(format_date_str)
 
     cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart",
-            "nuitees","prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"]
+            "nuitees","prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit"] \
+            + [c for c in OPT_FIN_COLS if c in show.columns]
     cols = [c for c in cols if c in show.columns]
     st.dataframe(show[cols], use_container_width=True)
     st.download_button(
