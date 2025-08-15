@@ -610,10 +610,13 @@ def vue_calendrier(df: pd.DataFrame, colors=None):
         display_text.append(row_text)
         color_map_rows.append(row_colors)
 
-    display_text = pd.DataFrame(display_text, columns=["L","M","M","J","V","S","D"])
-    color_map = pd.DataFrame(color_map_rows, columns=display_text.columns, index=display_text.index)
+    # ⚠️ libellés uniques pour éviter les erreurs de Styler
+    day_cols = ["L","Ma","Me","J","V","S","D"]
+    display_text = pd.DataFrame(display_text, columns=day_cols)
+    color_map = pd.DataFrame(color_map_rows, columns=day_cols, index=display_text.index)
 
     def apply_colors(_df):
+        # DataFrame de styles aux mêmes shape/index/colonnes
         styles = pd.DataFrame("", index=_df.index, columns=_df.columns)
         for r in _df.index:
             for c in _df.columns:
