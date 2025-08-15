@@ -1,6 +1,10 @@
-# app.py — Villa Tobias (COMPLET, nouveaux champs + couleurs plateformes)
-# Compatible avec l'ancien schéma (prix_brut/prix_net/charges/%) et le nouveau
-# (montant_net, commissions, frais_cb, montant_brut, menage, taxes_sejour, base, %)
+# app.py — Villa Tobias (COMPLET)
+# Nouveautés :
+# - Calendrier sans noms (pastilles couleur par plateforme)
+# - Barres de filtres "collantes" (sticky)
+# - KPIs compacts
+# - Recherche dans les tableaux (réservations, rapport, liste clients)
+# - Compat ancien schéma + nouveau schéma financier (montant_net, commissions, frais_cb, ...)
 
 import streamlit as st
 import pandas as pd
@@ -33,11 +37,12 @@ def platform_color(name: str) -> str:
 def platform_manager_sidebar():
     st.sidebar.markdown("## 🎨 Plateformes & couleurs")
     colors = get_platform_colors()
-    # Affichage existant
     if colors:
         for k, v in colors.items():
-            st.sidebar.markdown(f"- <span style='display:inline-block;width:12px;height:12px;background:{v};border-radius:3px;margin-right:6px'></span>**{k}**", unsafe_allow_html=True)
-
+            st.sidebar.markdown(
+                f"- <span style='display:inline-block;width:12px;height:12px;background:{v};border-radius:3px;margin-right:6px'></span>**{k}**",
+                unsafe_allow_html=True,
+            )
     with st.sidebar.expander("Ajouter / modifier une plateforme"):
         new_name = st.text_input("Nom de la plateforme", key="pf_new_name")
         new_col = st.color_picker("Couleur", value="#888888", key="pf_new_color")
@@ -106,13 +111,27 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
     by = [c for c in ["date_arrivee","nom_client"] if c in df.columns]
     return df.sort_values(by=by, na_position="last").reset_index(drop=True)
 
+def filter_by_search(df: pd.DataFrame, query: str, cols=None) -> pd.DataFrame:
+    """Filtre simple 'contient' (insensible à la casse) sur colonnes choisies."""
+    if not query or df.empty:
+        return df
+    q = str(query).strip().lower()
+    if not q:
+        return df
+    if cols is None:
+        cols = [c for c in df.columns if df[c].dtype == "object" or c in ("telephone","nom_client","plateforme")]
+    mask = pd.Series(False, index=df.index)
+    for c in cols:
+        if c in df.columns:
+            mask |= df[c].astype(str).str.lower().str.contains(q, na=False)
+    return df[mask].copy()
+
 # ==============================  SCHEMA (Compat ancien+nouv.)  ==============================
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
     Supporte l'ancien schéma (prix_brut/prix_net/charges/%) et le nouveau
     (montant_net, commissions, frais_cb, montant_brut, menage, taxes_sejour, base, %).
-    Ne supprime rien ; complète ce qui manque ; garde la compat pour rapports/calendrier.
     """
     base_cols = [
         "nom_client","plateforme","telephone",
@@ -121,7 +140,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         "prix_brut","prix_net","charges","%",
         # nouveau schéma:
         "montant_net","commissions","frais_cb","montant_brut","menage","taxes_sejour","base",
-        # horodatage / extra:
+        # extra:
         "AAAA","MM","ical_uid","commentaire"
     ]
 
@@ -166,14 +185,10 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     # === MAPPAGE ANCIEN -> NOUVEAU si nécessaire ===
     need_new = df["montant_net"].isna() & df["montant_brut"].isna()
     if need_new.any():
-        # montant_net ≈ ancien prix_brut (brut côté plateforme)
         df.loc[need_new & df["prix_brut"].notna(), "montant_net"] = df.loc[need_new, "prix_brut"]
-        # commissions+frais_cb ≈ charges (si pas détaillé)
         df.loc[need_new & df["charges"].notna(), "commissions"] = df.loc[need_new, "charges"]
         df.loc[need_new, "frais_cb"] = df.loc[need_new, "frais_cb"].fillna(0)
-        # montant_brut ≈ ancien prix_net (net reçu)
         df.loc[need_new & df["prix_net"].notna(), "montant_brut"] = df.loc[need_new, "prix_net"]
-        # menage/taxes par défaut 0
         df.loc[need_new & df["menage"].isna(), "menage"] = 0.0
         df.loc[need_new & df["taxes_sejour"].isna(), "taxes_sejour"] = 0.0
 
@@ -200,7 +215,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # === MAPPAGE NOUVEAU -> ANCIEN pour compat ===
-    # prix_brut ≈ montant_net ; prix_net ≈ montant_brut ; charges ≈ commissions+frais_cb
     if df["prix_brut"].isna().any() and df["montant_net"].notna().any():
         df.loc[df["prix_brut"].isna(), "prix_brut"] = df.loc[df["prix_brut"].isna(), "montant_net"]
     if df["prix_net"].isna().any() and df["montant_brut"].notna().any():
@@ -279,15 +293,46 @@ def bouton_telecharger(df: pd.DataFrame):
         disabled=(data_xlsx is None),
     )
 
-# ==============================  TOTAUX UI  ==============================
+# ==============================  STYLES (sticky + compacts)  ==============================
 
-def totaux_chips(total_brut, total_net, total_chg, total_nuits, pct_moy):
-    return f"""
+def inject_styles():
+    st.markdown(
+        """
 <style>
-.chips-wrap {{ display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0; }}
-.chip {{ padding:10px 12px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); }}
-.chip b {{ display:block; margin-bottom:4px; }}
+/* Barre de filtres sticky */
+.sticky-bar {
+  position: sticky;
+  top: 62px;       /* sous le header Streamlit */
+  z-index: 50;
+  background: var(--background-color);
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(127,127,127,.25);
+  margin-bottom: 10px;
+}
+
+/* Chips KPIs compacts */
+.chips-wrap { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 8px 0; }
+.chip { padding:6px 8px; border-radius:8px; background: rgba(127,127,127,0.10); border: 1px solid rgba(127,127,127,0.25); }
+.chip b { display:block; margin-bottom:2px; font-size:0.85rem; }
+.chip div { font-weight:600; }
+
+/* Calendrier jours */
+.cal { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+.day { border:1px solid rgba(127,127,127,.25); border-radius:8px; padding:6px; min-height:72px; }
+.dt  { font-weight:700; margin-bottom:4px; }
+.dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin:1px; }
+.head { background:rgba(127,127,127,.07); }
+
+/* Input recherche compact */
+.searchbox { margin:6px 0 6px 0; }
 </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def kpi_chips(total_brut, total_net, total_chg, total_nuits, pct_moy):
+    return f"""
 <div class="chips-wrap">
   <div class="chip"><b>Total Brut</b><div>{total_brut:,.2f} €</div></div>
   <div class="chip"><b>Total Net</b><div>{total_net:,.2f} €</div></div>
@@ -301,18 +346,27 @@ def totaux_chips(total_brut, total_net, total_chg, total_nuits, pct_moy):
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
+    inject_styles()
     df = ensure_schema(df)
     core, totals = split_totals(df)
     core = sort_core(core)
 
-    # Totaux (sur core)
+    # Barre sticky : recherche
+    with st.container():
+        st.markdown('<div class="sticky-bar">', unsafe_allow_html=True)
+        search = st.text_input("🔎 Rechercher (nom, téléphone, plateforme…)", key="res_search", label_visibility="collapsed", placeholder="Rechercher…")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    core = filter_by_search(core, search, cols=["nom_client","plateforme","telephone","commentaire"])
+
+    # KPIs
     if not core.empty:
         total_brut   = core["prix_brut"].sum(skipna=True)
         total_net    = core["prix_net"].sum(skipna=True)
         total_chg    = core["charges"].sum(skipna=True)
         total_nuits  = core["nuitees"].sum(skipna=True)
         pct_moy = (core["charges"].sum() / core["prix_brut"].sum() * 100) if core["prix_brut"].sum() else 0
-        st.markdown(totaux_chips(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
+        st.markdown(kpi_chips(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
     show = pd.concat([core, totals], ignore_index=True)
     for c in ["date_arrivee","date_depart"]:
@@ -321,26 +375,17 @@ def vue_reservations(df: pd.DataFrame):
 
 def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
-    st.caption("Saisie rapide")
-
-    c1, c2 = st.columns(2)
-    nom = c1.text_input("Nom du client")
-    tel = c2.text_input("Téléphone (+33...)", value="")
 
     colors = get_platform_colors()
     pf_list = sorted(colors.keys())
-    c3, c4 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
+    nom = c1.text_input("Nom du client")
+    tel = c2.text_input("Téléphone (+33...)")
     plateforme = c3.selectbox("Plateforme", pf_list, index=pf_list.index("Autre") if "Autre" in pf_list else 0)
-    # Option pour écrire un nom non listé
-    pf_new = c4.text_input("Ou autre plateforme (nouvelle)")
-    if pf_new.strip():
-        plateforme = pf_new.strip()
-        if plateforme not in colors:
-            st.session_state.platform_colors[plateforme] = "#888888"
 
-    c5, c6 = st.columns(2)
-    arrivee = c5.date_input("Date d’arrivée", value=date.today())
-    depart  = c6.date_input("Date de départ", value=arrivee + timedelta(days=1), min_value=arrivee + timedelta(days=1))
+    c4, c5 = st.columns(2)
+    arrivee = c4.date_input("Date d’arrivée", value=date.today())
+    depart  = c5.date_input("Date de départ", value=arrivee + timedelta(days=1), min_value=arrivee + timedelta(days=1))
 
     st.markdown("#### 💶 Détails financiers (nouveau schéma)")
     g1, g2, g3 = st.columns(3)
@@ -348,16 +393,13 @@ def vue_ajouter(df: pd.DataFrame):
     commissions = g2.number_input("Commissions", min_value=0.0, step=0.5, format="%.2f")
     frais_cb    = g3.number_input("Frais CB", min_value=0.0, step=0.5, format="%.2f")
 
-    # Dérivés
     montant_brut = max(montant_net - commissions - frais_cb, 0.0)
-
     h1, h2 = st.columns(2)
     menage = h1.number_input("Ménage", min_value=0.0, step=1.0, format="%.2f", value=0.0)
     taxes  = h2.number_input("Taxes de séjour", min_value=0.0, step=0.5, format="%.2f", value=0.0)
 
     base_calc = max(montant_brut - menage - taxes, 0.0)
     pct_calc  = ((commissions + frais_cb) / montant_net * 100) if montant_net > 0 else 0.0
-
     st.markdown(f"- **Montant BRUT (reçu)** : {montant_brut:.2f} €  \n- **Base (après ménage + taxes)** : {base_calc:.2f} €  \n- **% Commission** : {pct_calc:.2f} %")
 
     if st.button("Enregistrer"):
@@ -365,7 +407,7 @@ def vue_ajouter(df: pd.DataFrame):
             st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
             return
 
-        # Remplir aussi l'ancien schéma (compat)
+        # Ancien schéma (compat)
         prix_brut = montant_net
         prix_net  = montant_brut
         charges   = commissions + frais_cb
@@ -377,12 +419,12 @@ def vue_ajouter(df: pd.DataFrame):
             "date_arrivee": arrivee,
             "date_depart": depart,
             "nuitees": (depart - arrivee).days,
-            # ancien schéma (compat)
+            # ancien
             "prix_brut": prix_brut,
             "prix_net": prix_net,
             "charges": round(charges, 2),
             "%": round((charges / prix_brut * 100) if prix_brut else 0, 2),
-            # nouveau schéma
+            # nouveau
             "montant_net": montant_net,
             "commissions": commissions,
             "frais_cb": frais_cb,
@@ -396,7 +438,6 @@ def vue_ajouter(df: pd.DataFrame):
             "ical_uid": "",
             "commentaire": ""
         }
-
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
         sauvegarder_donnees(df2)
         st.success("✅ Réservation enregistrée")
@@ -417,31 +458,21 @@ def vue_modifier(df: pd.DataFrame):
         return
     i = idx[0]
 
-    # Identité
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     nom = c1.text_input("Nom du client", df.at[i, "nom_client"])
     tel = c2.text_input("Téléphone", normalize_tel(df.at[i, "telephone"]))
 
-    # Plateforme
     colors = get_platform_colors()
     pf_list = sorted(colors.keys())
     pf_current = df.at[i, "plateforme"] if pd.notna(df.at[i, "plateforme"]) else "Autre"
     pf_idx = pf_list.index(pf_current) if pf_current in pf_list else 0
-    c3, c4 = st.columns(2)
     plateforme = c3.selectbox("Plateforme", pf_list, index=pf_idx)
-    pf_new = c4.text_input("Ou autre plateforme (nouvelle)")
-    if pf_new.strip():
-        plateforme = pf_new.strip()
-        if plateforme not in colors:
-            st.session_state.platform_colors[plateforme] = "#888888"
 
-    # Dates
     d1, d2 = st.columns(2)
     arrivee = d1.date_input("Arrivée", df.at[i,"date_arrivee"] if isinstance(df.at[i,"date_arrivee"], date) else date.today())
     depart  = d2.date_input("Départ",  df.at[i,"date_depart"] if isinstance(df.at[i,"date_depart"], date) else arrivee + timedelta(days=1),
                             min_value=arrivee + timedelta(days=1))
 
-    # Nouveau schéma
     st.markdown("#### 💶 Détails financiers (nouveau schéma)")
     g1, g2, g3 = st.columns(3)
     montant_net = g1.number_input("Montant NET (plateforme)", min_value=0.0, step=1.0, format="%.2f",
@@ -460,7 +491,6 @@ def vue_modifier(df: pd.DataFrame):
 
     base_calc = max(montant_brut - menage - taxes, 0.0)
     pct_calc  = ((commissions + frais_cb) / montant_net * 100) if montant_net > 0 else 0.0
-
     st.markdown(f"- **Montant BRUT (reçu)** : {montant_brut:.2f} €  \n- **Base** : {base_calc:.2f} €  \n- **% Commission** : {pct_calc:.2f} %")
 
     csave, cdel = st.columns(2)
@@ -481,13 +511,11 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i,"date_depart"]  = depart
         df.at[i,"nuitees"] = (depart - arrivee).days
 
-        # ancien
         df.at[i,"prix_brut"] = prix_brut
         df.at[i,"prix_net"]  = prix_net
         df.at[i,"charges"]   = round(charges, 2)
         df.at[i,"%"]         = round((charges / prix_brut * 100) if prix_brut else 0, 2)
 
-        # nouveau
         df.at[i,"montant_net"]  = montant_net
         df.at[i,"commissions"]  = commissions
         df.at[i,"frais_cb"]     = frais_cb
@@ -512,19 +540,23 @@ def vue_modifier(df: pd.DataFrame):
         st.rerun()
 
 def vue_calendrier(df: pd.DataFrame):
-    st.title("📅 Calendrier mensuel")
+    st.title("📅 Calendrier mensuel (anonyme)")
+    inject_styles()
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
         return
 
+    # Filtres sticky
+    st.markdown('<div class="sticky-bar">', unsafe_allow_html=True)
     cols = st.columns(2)
     mois_nom = cols[0].selectbox("Mois", list(calendar.month_name)[1:], index=max(0, date.today().month-1))
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    if not annees:
+    annee = cols[1].selectbox("Année", annees, index=len(annees)-1) if annees else None
+    st.markdown('</div>', unsafe_allow_html=True)
+    if not annee:
         st.warning("Aucune année disponible.")
         return
-    annee = cols[1].selectbox("Année", annees, index=len(annees)-1)
 
     mois_index = list(calendar.month_name).index(mois_nom)
     nb_jours = calendar.monthrange(annee, mois_index)[1]
@@ -538,29 +570,30 @@ def vue_calendrier(df: pd.DataFrame):
             continue
         for j in jours:
             if d1 <= j < d2:
-                planning[j].append((row['plateforme'], row['nom_client']))
+                planning[j].append(row['plateforme'])
 
-    # Rendu HTML simple avec pastilles couleur
-    grid = "<style>.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.day{border:1px solid rgba(127,127,127,.3);border-radius:8px;padding:6px;min-height:72px}.dt{font-weight:600}.tag{display:inline-flex;align-items:center;gap:6px;margin:2px 0}.dot{width:8px;height:8px;border-radius:50%}</style>"
-    grid += "<div class='cal'>"
+    # Grille : têtes L M M J V S D
+    grid = "<div class='cal'>"
     for lab in ["L","M","M","J","V","S","D"]:
-        grid += f"<div class='day' style='background:rgba(127,127,127,.06)'><div class='dt'>{lab}</div></div>"
+        grid += f"<div class='day head'><div class='dt'>{lab}</div></div>"
+
     cal_weeks = calendar.monthcalendar(annee, mois_index)
-    # Alignement sur Lundi=0
     for week in cal_weeks:
         for j in week:
             if j == 0:
                 grid += "<div class='day'></div>"
             else:
                 d = date(annee, mois_index, j)
-                items = planning.get(d, [])
-                inner = "".join([f"<div class='tag'><span class='dot' style='background:{platform_color(pf)}'></span><span>{pf} — {nm}</span></div>" for pf, nm in items])
-                grid += f"<div class='day'><div class='dt'>{j}</div>{inner}</div>"
+                plats = planning.get(d, [])
+                # Pastilles (une par réservation), sans nom
+                dots = "".join([f"<span class='dot' style='background:{platform_color(pf)}' title='{pf}'></span>" for pf in plats])
+                grid += f"<div class='day'><div class='dt'>{j}</div>{dots}</div>"
     grid += "</div>"
     st.markdown(grid, unsafe_allow_html=True)
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (une année à la fois)")
+    inject_styles()
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
@@ -581,12 +614,15 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune année disponible.")
         return
 
-    # Filtres alignés sur une ligne
+    # Filtres sticky + recherche
+    st.markdown('<div class="sticky-bar">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     annee = c1.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
     pf_opt = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
     filtre_plateforme = c2.selectbox("Plateforme", pf_opt, key="rapport_pf")
     filtre_mois_label = c3.selectbox("Mois (01–12)", ["Tous"] + [f"{i:02d}" for i in range(1,13)], key="rapport_mois")
+    search = st.text_input("🔎 Rechercher dans le détail…", key="rapport_search", label_visibility="collapsed", placeholder="nom, tél, commentaire…")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     data = df[df["AAAA"] == int(annee)].copy()
     if filtre_plateforme != "Toutes":
@@ -598,8 +634,9 @@ def vue_rapport(df: pd.DataFrame):
         st.info("Aucune donnée pour ces filtres.")
         return
 
-    # Détail (avec noms)
+    # Détail (avec noms) + recherche
     detail = data.copy()
+    detail = filter_by_search(detail, search, cols=["nom_client","plateforme","telephone","commentaire"])
     for c in ["date_arrivee","date_depart"]:
         detail[c] = detail[c].apply(format_date_str)
     by = [c for c in ["date_arrivee","nom_client"] if c in detail.columns]
@@ -609,18 +646,18 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [
         "nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
         "montant_net","commissions","frais_cb","montant_brut","menage","taxes_sejour","base",
-        "prix_brut","prix_net","charges","%"
+        "prix_brut","prix_net","charges","%","commentaire"
     ]
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
-    # Totaux
+    # KPIs
     total_brut   = data["prix_brut"].sum(skipna=True)
     total_net    = data["prix_net"].sum(skipna=True)
     total_chg    = data["charges"].sum(skipna=True)
     total_nuits  = data["nuitees"].sum(skipna=True)
     pct_moy = (data["charges"].sum() / data["prix_brut"].sum() * 100) if data["prix_brut"].sum() else 0
-    st.markdown(totaux_chips(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
+    st.markdown(kpi_chips(total_brut, total_net, total_chg, total_nuits, pct_moy), unsafe_allow_html=True)
 
     # Agrégats par mois/plateforme
     stats = (
@@ -663,21 +700,27 @@ def vue_rapport(df: pd.DataFrame):
 
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
+    inject_styles()
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
         return
 
+    # Filtres sticky + recherche
+    st.markdown('<div class="sticky-bar">', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     annee = c1.selectbox("Année", annees, index=len(annees)-1) if annees else None
     mois  = c2.selectbox("Mois", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
+    search = st.text_input("🔎 Rechercher…", key="clients_search", label_visibility="collapsed", placeholder="nom, tél, plateforme…")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     data = df.copy()
     if annee:
         data = data[data["AAAA"] == int(annee)]
     if mois != "Tous":
         data = data[data["MM"] == int(mois)]
+    data = filter_by_search(data, search, cols=["nom_client","plateforme","telephone","commentaire"])
 
     if data.empty:
         st.info("Aucune donnée pour cette période.")
@@ -692,7 +735,7 @@ def vue_clients(df: pd.DataFrame):
 
     cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart",
             "nuitees","prix_brut","prix_net","charges","%","prix_brut/nuit","prix_net/nuit",
-            "montant_net","commissions","frais_cb","montant_brut","menage","taxes_sejour","base"]
+            "montant_net","commissions","frais_cb","montant_brut","menage","taxes_sejour","base","commentaire"]
     cols = [c for c in cols if c in show.columns]
     st.dataframe(show[cols], use_container_width=True)
 
