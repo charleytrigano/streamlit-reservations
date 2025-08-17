@@ -324,7 +324,7 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Nous sommes ravis de vous accueillir bientot à Nice."
         "Pour organiser au mieux votre reception, merci de nous indiquer votre heure d'arrivee.\n\n "
         "Sachez egalement qu'une place de parking vous est allouee.\n\n "
-        "Nous vous rappelons que le check-in est fixe a 14 h et le check-out a 11 h.\n\n "
+        "Nous vous rappelons que le check-in se fait a partir de 2h PM et le check-out au maximum 11h AM.\n\n "
         "Nous vous informons egalement que vous avez dans tous les quartiers de Nice des consignes a bagages.\n\n "
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n "
         "Annick & Charley"
