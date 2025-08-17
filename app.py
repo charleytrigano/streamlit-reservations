@@ -3,6 +3,7 @@
 # - Calculs automatiques: net, base, %, nuitees, AAAA, MM
 # - Téléphone forcé en texte (évite .0 / garde +33)
 # - KPI corrigés : Charges = commissions + frais_cb / Prix moyen/nuit = Total brut / Nuitées
+# - KPI en cartes avec icônes (pas de tableau)
 # - Options d'affichage, Recherche, Calendrier stable, Rapport, Export ICS, SMS manuel
 # - Sauvegarde/restauration XLSX
 # - Logo (facultatif) dans la barre latérale
@@ -344,37 +345,54 @@ def sms_message_depart(row: pd.Series) -> str:
 # ==============================  UI HELPERS  ==============================
 
 def kpi_chips(df: pd.DataFrame):
-    """KPI côté affichage (charges = commissions + frais_cb ; prix moyen/nuit = brut/nuits)."""
+    """KPI côté affichage (Charges = commissions + frais_cb ; Prix moyen/nuit = brut/nuits) avec icônes."""
     core, _ = split_totals(df)
     if core.empty:
         return
-    total_brut = core["prix_brut"].sum(skipna=True)
-    total_net  = core["prix_net"].sum(skipna=True)
-    total_base = core["base"].sum(skipna=True)
-    total_comm = core["commissions"].sum(skipna=True)
-    total_cb   = core["frais_cb"].sum(skipna=True)
-    total_chg  = total_comm + total_cb
-    total_nuits= core["nuitees"].sum(skipna=True)
-    pct_moy    = (total_chg / total_brut * 100) if total_brut else 0.0
-    prix_moy   = (total_brut / total_nuits) if total_nuits else 0.0
+
+    # Agrégats
+    total_brut  = core["prix_brut"].sum(skipna=True)
+    total_net   = core["prix_net"].sum(skipna=True)
+    total_base  = core["base"].sum(skipna=True)
+    total_comm  = core["commissions"].sum(skipna=True)
+    total_cb    = core["frais_cb"].sum(skipna=True)
+    total_chg   = total_comm + total_cb
+    total_nuits = core["nuitees"].sum(skipna=True)
+    pct_moy     = (total_chg / total_brut * 100) if total_brut else 0.0
+    prix_moy    = (total_brut / total_nuits) if total_nuits else 0.0
+
+    def fm(v):
+        # format français: espace milliers + virgule -> point gardée (Streamlit affiche correct)
+        return f"{v:,.2f}".replace(",", " ")
 
     html = f"""
-    <style>
-    .chips-wrap {{ display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 10px 0; }}
-    .chip {{ padding:8px 10px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); font-size:0.9rem; }}
-    .chip b {{ display:block; margin-bottom:3px; font-size:0.85rem; opacity:0.8; }}
-    .chip .v {{ font-weight:600; }}
-    </style>
-    <div class="chips-wrap">
-      <div class="chip"><b>Total Brut</b><div class="v">{total_brut:,.2f} €</div></div>
-      <div class="chip"><b>Total Net</b><div class="v">{total_net:,.2f} €</div></div>
-      <div class="chip"><b>Total Base</b><div class="v">{total_base:,.2f} €</div></div>
-      <div class="chip"><b>Total Charges</b><div class="v">{total_chg:,.2f} €</div></div>
-      <div class="chip"><b>Nuitées</b><div class="v">{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div>
-      <div class="chip"><b>Commission moy.</b><div class="v">{pct_moy:.2f} %</div></div>
-      <div class="chip"><b>Prix moyen/nuit</b><div class="v">{prix_moy:,.2f} €</div></div>
-    </div>
-    """
+<style>
+.kpi-wrap {{
+  display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0;
+}}
+.kpi {{
+  display:flex; align-items:center; gap:10px;
+  padding:12px 14px; border-radius:12px;
+  background: rgba(127,127,127,0.10);
+  border: 1px solid rgba(127,127,127,0.25);
+  min-width: 220px;
+}}
+.kpi .ico {{
+  font-size: 1.4rem; line-height:1; flex:0 0 auto;
+}}
+.kpi .txt b{{display:block; font-size:.8rem; opacity:.75; margin-bottom:3px;}}
+.kpi .txt .v{{font-weight:700; font-size:1.05rem;}}
+</style>
+<div class="kpi-wrap">
+  <div class="kpi"><div class="ico">💼</div><div class="txt"><b>Total Brut</b><div class="v">{fm(total_brut)} €</div></div></div>
+  <div class="kpi"><div class="ico">💶</div><div class="txt"><b>Total Net</b><div class="v">{fm(total_net)} €</div></div></div>
+  <div class="kpi"><div class="ico">📦</div><div class="txt"><b>Total Base</b><div class="v">{fm(total_base)} €</div></div></div>
+  <div class="kpi"><div class="ico">🧾</div><div class="txt"><b>Total Charges</b><div class="v">{fm(total_chg)} €</div></div></div>
+  <div class="kpi"><div class="ico">🛏️</div><div class="txt"><b>Nuitées</b><div class="v">{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div></div>
+  <div class="kpi"><div class="ico">📊</div><div class="txt"><b>Commission moy.</b><div class="v">{pct_moy:.2f} %</div></div></div>
+  <div class="kpi"><div class="ico">🌙</div><div class="txt"><b>Prix moyen/nuit</b><div class="v">{fm(prix_moy)} €</div></div></div>
+</div>
+"""
     st.markdown(html, unsafe_allow_html=True)
 
 def search_box(df: pd.DataFrame) -> pd.DataFrame:
@@ -657,7 +675,7 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
-    # Totaux + KPI (corrigés)
+    # Totaux + KPI (corrigés, icônes)
     kpi_chips(data)
 
     # Agrégations par MM x plateforme
