@@ -1,12 +1,12 @@
-# app.py — Villa Tobias (COMPLET, STABLE)
+# app.py — Villa Tobias (COMPLET, STABLE + logo + boutons compacts + suivi SMS)
 # - Colonnes enrichies: commissions, frais_cb, menage, taxes_sejour, base
 # - Calculs automatiques: net, base, %, nuitees, AAAA, MM
-# - Téléphone forcé en texte (évite .0 / garde +33)
-# - KPI corrigés : Charges = commissions + frais_cb / Prix moyen/nuit = Total brut / Nuitées
-# - KPI en cartes avec icônes (pas de tableau)
-# - Options d'affichage, Recherche, Calendrier stable, Rapport, Export ICS, SMS manuel
+# - Téléphone forcé en texte (évite .0 / perte du +)
+# - Options d'affichage, KPI, recherche
+# - Calendrier stable, Rapport filtrable, Export ICS, SMS manuel
 # - Sauvegarde/restauration XLSX
-# - Logo (facultatif) dans la barre latérale
+# - Logo en icône (logo.png), boutons compacts (CSS)
+# - Suivi SMS persisté : sms_arrivee, sms_depart (En attente / Envoyé)
 
 import streamlit as st
 import pandas as pd
@@ -69,7 +69,8 @@ BASE_COLS = [
     "date_arrivee","date_depart","nuitees",
     "prix_brut","commissions","frais_cb","prix_net",
     "menage","taxes_sejour","base",
-    "charges","%", "AAAA","MM","ical_uid"
+    "charges","%", "AAAA","MM","ical_uid",
+    "sms_arrivee","sms_depart"  # ← suivi SMS persistant
 ]
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
@@ -108,20 +109,18 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     df["nom_client"] = df["nom_client"].fillna("")
     df["plateforme"] = df["plateforme"].fillna("Autre")
     df["ical_uid"]   = df["ical_uid"].fillna("")
+    # Suivi SMS défaut
+    df["sms_arrivee"] = df["sms_arrivee"].fillna("En attente")
+    df["sms_depart"]  = df["sms_depart"].fillna("En attente")
 
     # Sûreté: NaN -> 0 pour colonnes de calcul
     for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
         df[c] = df[c].fillna(0.0)
 
-    # Calculs officiels :
-    # prix_net = prix_brut - commissions - frais_cb
-    # base     = prix_net - menage - taxes_sejour
-    # charges  = commissions + frais_cb   (≡ prix_brut - prix_net)
-    # %        = (charges / prix_brut) * 100
+    # Calculs :
     df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
     df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).clip(lower=0)
-    df["charges"]  = (df["commissions"] + df["frais_cb"]).clip(lower=0)
-
+    df["charges"]  = (df["prix_brut"] - df["prix_net"]).clip(lower=0)
     with pd.option_context("mode.use_inf_as_na", True):
         df["%"] = (df["charges"] / df["prix_brut"] * 100).fillna(0)
 
@@ -270,7 +269,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
 
     for _, row in core.iterrows():
         d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
-        if not (isinstance(d1, date) and isinstance(d2, date)):
+        if not (isinstance(d1, date) and isinstance(d2, date)): 
             continue
         plateforme = str(row.get("plateforme") or "").strip()
         nom_client = str(row.get("nom_client") or "").strip()
@@ -344,55 +343,57 @@ def sms_message_depart(row: pd.Series) -> str:
 
 # ==============================  UI HELPERS  ==============================
 
+def inject_small_buttons_css():
+    st.markdown(
+        """
+        <style>
+        button[kind="primary"], button[kind="secondary"]{
+            padding: 0.25rem 0.75rem !important;
+            font-size: 0.80rem !important;
+            border-radius: 6px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+def show_logo_icon():
+    # Affiche une icône si logo.png existe (petit format)
+    if os.path.exists("logo.png"):
+        st.sidebar.image("logo.png", width=40)
+
 def kpi_chips(df: pd.DataFrame):
-    """KPI côté affichage (Charges = commissions + frais_cb ; Prix moyen/nuit = brut/nuits) avec icônes."""
     core, _ = split_totals(df)
     if core.empty:
         return
-
-    # Agrégats
-    total_brut  = core["prix_brut"].sum(skipna=True)
-    total_net   = core["prix_net"].sum(skipna=True)
-    total_base  = core["base"].sum(skipna=True)
-    total_comm  = core["commissions"].sum(skipna=True)
-    total_cb    = core["frais_cb"].sum(skipna=True)
-    total_chg   = total_comm + total_cb
-    total_nuits = core["nuitees"].sum(skipna=True)
-    pct_moy     = (total_chg / total_brut * 100) if total_brut else 0.0
-    prix_moy    = (total_brut / total_nuits) if total_nuits else 0.0
-
-    def fm(v):
-        # format français: espace milliers + virgule -> point gardée (Streamlit affiche correct)
-        return f"{v:,.2f}".replace(",", " ")
+    b    = core["prix_brut"].sum()
+    # Total charges = commissions + frais_cb (somme)
+    total_comm = core["commissions"].sum()
+    total_cb   = core["frais_cb"].sum()
+    ch   = total_comm + total_cb
+    n    = core["prix_net"].sum()
+    base = core["base"].sum()
+    nuits= core["nuitees"].sum()
+    pct  = (ch / b * 100) if b else 0
+    pm_nuit = (b / nuits) if nuits else 0
 
     html = f"""
-<style>
-.kpi-wrap {{
-  display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 16px 0;
-}}
-.kpi {{
-  display:flex; align-items:center; gap:10px;
-  padding:12px 14px; border-radius:12px;
-  background: rgba(127,127,127,0.10);
-  border: 1px solid rgba(127,127,127,0.25);
-  min-width: 220px;
-}}
-.kpi .ico {{
-  font-size: 1.4rem; line-height:1; flex:0 0 auto;
-}}
-.kpi .txt b{{display:block; font-size:.8rem; opacity:.75; margin-bottom:3px;}}
-.kpi .txt .v{{font-weight:700; font-size:1.05rem;}}
-</style>
-<div class="kpi-wrap">
-  <div class="kpi"><div class="ico">💼</div><div class="txt"><b>Total Brut</b><div class="v">{fm(total_brut)} €</div></div></div>
-  <div class="kpi"><div class="ico">💶</div><div class="txt"><b>Total Net</b><div class="v">{fm(total_net)} €</div></div></div>
-  <div class="kpi"><div class="ico">📦</div><div class="txt"><b>Total Base</b><div class="v">{fm(total_base)} €</div></div></div>
-  <div class="kpi"><div class="ico">🧾</div><div class="txt"><b>Total Charges</b><div class="v">{fm(total_chg)} €</div></div></div>
-  <div class="kpi"><div class="ico">🛏️</div><div class="txt"><b>Nuitées</b><div class="v">{int(total_nuits) if pd.notna(total_nuits) else 0}</div></div></div>
-  <div class="kpi"><div class="ico">📊</div><div class="txt"><b>Commission moy.</b><div class="v">{pct_moy:.2f} %</div></div></div>
-  <div class="kpi"><div class="ico">🌙</div><div class="txt"><b>Prix moyen/nuit</b><div class="v">{fm(prix_moy)} €</div></div></div>
-</div>
-"""
+    <style>
+    .chips-wrap {{ display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 10px 0; }}
+    .chip {{ padding:8px 10px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); font-size:0.9rem; }}
+    .chip b {{ display:block; margin-bottom:3px; font-size:0.85rem; opacity:0.8; }}
+    .chip .v {{ font-weight:600; }}
+    </style>
+    <div class="chips-wrap">
+      <div class="chip"><b>Total Brut</b><div class="v">{b:,.2f} €</div></div>
+      <div class="chip"><b>Total Net</b><div class="v">{n:,.2f} €</div></div>
+      <div class="chip"><b>Total Base</b><div class="v">{base:,.2f} €</div></div>
+      <div class="chip"><b>Total Charges</b><div class="v">{ch:,.2f} €</div></div>
+      <div class="chip"><b>Nuitées</b><div class="v">{int(nuits) if pd.notna(nuits) else 0}</div></div>
+      <div class="chip"><b>Commission moy.</b><div class="v">{pct:.2f} %</div></div>
+      <div class="chip"><b>Prix moyen/nuit</b><div class="v">{pm_nuit:,.2f} €</div></div>
+    </div>
+    """
     st.markdown(html, unsafe_allow_html=True)
 
 def search_box(df: pd.DataFrame) -> pd.DataFrame:
@@ -433,7 +434,8 @@ def vue_reservations(df: pd.DataFrame):
         show[c] = show[c].apply(format_date_str)
 
     cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart","nuitees",
-            "prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","AAAA","MM"]
+            "prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","AAAA","MM",
+            "sms_arrivee","sms_depart"]
     cols = [c for c in cols if c in show.columns]
     st.dataframe(show[cols], use_container_width=True)
 
@@ -473,9 +475,9 @@ def vue_ajouter(df: pd.DataFrame):
     taxes  = inline_input("Taxes séjour (€)", st.number_input, key="add_taxes",
                           min_value=0.0, step=1.0, format="%.2f")
 
-    base_calc    = max(net_calc - float(menage) - float(taxes), 0.0)
-    charges_calc = float(commissions) + float(frais_cb)
-    pct_calc     = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
+    base_calc = max(net_calc - float(menage) - float(taxes), 0.0)
+    charges_calc = max(float(brut) - net_calc, 0.0)
+    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
 
     inline_input("Base (calculée)", st.number_input, key="add_base",
                  value=round(base_calc,2), step=0.01, format="%.2f", disabled=True)
@@ -504,7 +506,9 @@ def vue_ajouter(df: pd.DataFrame):
             "nuitees": (depart - arrivee).days,
             "AAAA": arrivee.year,
             "MM": arrivee.month,
-            "ical_uid": ""
+            "ical_uid": "",
+            "sms_arrivee": "En attente",
+            "sms_depart": "En attente",
         }
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
         sauvegarder_donnees(df2)
@@ -547,9 +551,14 @@ def vue_modifier(df: pd.DataFrame):
     taxes  = d2.number_input("Taxes séjour (€)", min_value=0.0, value=float(df.at[i,"taxes_sejour"]) if pd.notna(df.at[i,"taxes_sejour"]) else 0.0, step=1.0, format="%.2f")
     base_calc = max(net_calc - menage - taxes, 0.0)
 
-    charges_calc = float(commissions) + float(frais_cb)
+    charges_calc = max(brut - net_calc, 0.0)
     pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
     d3.markdown(f"**Prix net (calculé)**: {net_calc:.2f} €  \n**Base (calculée)**: {base_calc:.2f} €  \n**%**: {pct_calc:.2f}")
+
+    # Suivi SMS
+    s1, s2 = st.columns(2)
+    sms_arrivee_val = s1.selectbox("Statut SMS arrivée", ["En attente","Envoyé"], index=0 if df.at[i,"sms_arrivee"]!="Envoyé" else 1)
+    sms_depart_val  = s2.selectbox("Statut SMS départ",  ["En attente","Envoyé"], index=0 if df.at[i,"sms_depart"] !="Envoyé" else 1)
 
     c_save, c_del = st.columns(2)
     if c_save.button("💾 Enregistrer"):
@@ -561,18 +570,20 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i,"telephone"]  = normalize_tel(tel)
         df.at[i,"date_arrivee"] = arrivee
         df.at[i,"date_depart"]  = depart
-        df.at[i,"prix_brut"]    = float(brut)
-        df.at[i,"commissions"]  = float(commissions)
-        df.at[i,"frais_cb"]     = float(frais_cb)
-        df.at[i,"prix_net"]     = round(net_calc, 2)
-        df.at[i,"menage"]       = float(menage)
+        df.at[i,"prix_brut"] = float(brut)
+        df.at[i,"commissions"] = float(commissions)
+        df.at[i,"frais_cb"] = float(frais_cb)
+        df.at[i,"prix_net"]  = round(net_calc, 2)
+        df.at[i,"menage"] = float(menage)
         df.at[i,"taxes_sejour"] = float(taxes)
-        df.at[i,"base"]         = round(base_calc, 2)
-        df.at[i,"charges"]      = round(charges_calc, 2)
-        df.at[i,"%"]            = round(pct_calc, 2)
+        df.at[i,"base"] = round(base_calc, 2)
+        df.at[i,"charges"] = round(charges_calc, 2)
+        df.at[i,"%"] = round(pct_calc, 2)
         df.at[i,"nuitees"]   = (depart - arrivee).days
         df.at[i,"AAAA"]      = arrivee.year
         df.at[i,"MM"]        = arrivee.month
+        df.at[i,"sms_arrivee"] = sms_arrivee_val
+        df.at[i,"sms_depart"]  = sms_depart_val
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df)
         st.success("✅ Modifié")
@@ -675,10 +686,11 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
-    # Totaux + KPI (corrigés, icônes)
-    kpi_chips(data)
+    # Totaux + KPI
+    core, _ = split_totals(data)
+    kpi_chips(core)
 
-    # Agrégations par MM x plateforme
+    # Agrégations par MM x plateforme (affichage 01..12)
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -744,7 +756,8 @@ def vue_clients(df: pd.DataFrame):
         show[c] = show[c].apply(format_date_str)
 
     cols = ["nom_client","plateforme","telephone","date_arrivee","date_depart",
-            "nuitees","prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","prix_brut/nuit","prix_net/nuit"]
+            "nuitees","prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","prix_brut/nuit","prix_net/nuit",
+            "sms_arrivee","sms_depart"]
     cols = [c for c in cols if c in show.columns]
     st.dataframe(show[cols], use_container_width=True)
     st.download_button(
@@ -814,14 +827,29 @@ def vue_sms(df: pd.DataFrame):
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
+
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.markdown(f"Arrivée: {format_date_str(r.get('date_arrivee'))} • "
                             f"Départ: {format_date_str(r.get('date_depart'))} • "
                             f"Nuitées: {r.get('nuitees','')}")
                 st.code(body)
+
+                # case à cocher persistante
+                sent_default = (str(r.get("sms_arrivee") or "") == "Envoyé")
+                sent = st.checkbox("🟢 SMS arrivée envoyé", value=sent_default, key=f"sms_arrivee_{idx}")
                 c1, c2 = st.columns(2)
                 if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
+
+                # Mise à jour si changement
+                row_index = df[df["nom_client"].astype(str).eq(r["nom_client"]) &
+                               df["date_arrivee"].astype(str).eq(str(r["date_arrivee"]))].index
+                if len(row_index) > 0:
+                    i0 = row_index[0]
+                    new_status = "Envoyé" if sent else "En attente"
+                    if df.at[i0, "sms_arrivee"] != new_status:
+                        df.at[i0, "sms_arrivee"] = new_status
+                        sauvegarder_donnees(df)
                 st.divider()
 
     # Relance +24h après départ
@@ -838,9 +866,21 @@ def vue_sms(df: pd.DataFrame):
                 sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
+
+                sent_default = (str(r.get("sms_depart") or "") == "Envoyé")
+                sent = st.checkbox("🟢 SMS départ envoyé", value=sent_default, key=f"sms_depart_{idx}")
                 c1, c2 = st.columns(2)
                 if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
+
+                row_index = df[df["nom_client"].astype(str).eq(r["nom_client"]) &
+                               df["date_depart"].astype(str).eq(str(r["date_depart"]))].index
+                if len(row_index) > 0:
+                    i0 = row_index[0]
+                    new_status = "Envoyé" if sent else "En attente"
+                    if df.at[i0, "sms_depart"] != new_status:
+                        df.at[i0, "sms_depart"] = new_status
+                        sauvegarder_donnees(df)
                 st.divider()
 
     # Composeur manuel
@@ -875,12 +915,8 @@ def vue_sms(df: pd.DataFrame):
 
 def main():
     st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
-
-    # ----- Logo (facultatif) -----
-    try:
-        st.sidebar.image("logo.png", width=160)
-    except Exception:
-        pass
+    inject_small_buttons_css()
+    show_logo_icon()  # ← icône dans la barre latérale si logo.png présent
 
     # Barre latérale : Fichier
     st.sidebar.title("📁 Fichier")
