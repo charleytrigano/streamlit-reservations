@@ -1,7 +1,8 @@
-# app.py — Villa Tobias (COMPLET, STABLE + Payé & SMS checkboxes)
-# - Ajout colonnes: paye (bool) avant nom_client, sms_envoye (bool) après nom_client
-# - Cases à cocher modifiables dans l’onglet 📋 Réservations via st.data_editor
-# - Rien d’autre n’est modifié (calculs, KPI, calendrier, rapport, SMS, ICS)
+# app.py — Villa Tobias (COMPLET, STABLE + Payé & SMS checkboxes + Filtre Payé)
+# - Colonnes: paye (bool) avant nom_client, sms_envoye (bool) après nom_client
+# - Cases à cocher modifiables dans 📋 Réservations via st.data_editor
+# - NOUVEAU : filtre "Payé / Non payé / Tous" dans 📋 Réservations (et seulement là)
+# - Calculs, KPI, calendrier, rapport, SMS, ICS : inchangés
 
 import streamlit as st
 import pandas as pd
@@ -60,9 +61,9 @@ PLATFORM_ICONS = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
 # ==============================  SCHEMA & CALCULS  ==============================
 
 BASE_COLS = [
-    "paye",                         # <- NOUVEAU (avant nom_client)
+    "paye",                         # <- bool avant nom_client
     "nom_client",
-    "sms_envoye",                   # <- NOUVEAU (après nom_client)
+    "sms_envoye",                   # <- bool après nom_client
     "plateforme","telephone",
     "date_arrivee","date_depart","nuitees",
     "prix_brut","commissions","frais_cb","prix_net",
@@ -120,7 +121,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
         df[c] = df[c].fillna(0.0)
 
-    # Calculs (identiques à la version que tu as validée)
+    # Calculs (validés)
     df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
     df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).clip(lower=0)
     df["charges"]  = (df["prix_brut"] - df["prix_net"]).clip(lower=0)
@@ -275,7 +276,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
 
     for _, row in core.iterrows():
         d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
-        if not (isinstance(d1, date) and isinstance(d2, date)): 
+        if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
         plateforme = str(row.get("plateforme") or "").strip()
         nom_client = str(row.get("nom_client") or "").strip()
@@ -405,10 +406,18 @@ def search_box(df: pd.DataFrame) -> pd.DataFrame:
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
     with st.expander("🎛️ Options d’affichage", expanded=True):
+        # ---- NOUVEAU FILTRE PAYÉ ----
+        filtre_paye = st.selectbox("Filtrer payé", ["Tous", "Payé", "Non payé"])
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
 
     df = ensure_schema(df)
+
+    # Application du filtre payé (avant KPI et recherche)
+    if filtre_paye == "Payé":
+        df = df[df["paye"] == True].copy()
+    elif filtre_paye == "Non payé":
+        df = df[df["paye"] == False].copy()
 
     if show_kpi:
         kpi_chips(df)
