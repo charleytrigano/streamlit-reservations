@@ -1,7 +1,5 @@
-streamlit>=1.36
-pandas>=2.3
-numpy>=1.24
-openpyxl>=3.1
-matplotlib>=3.7
+streamlit
+pandas
+openpyxl
 msal==1.26.0
-requests=2.31.0
+àffice365-rest-python-client
