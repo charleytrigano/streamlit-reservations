@@ -1,4 +1,10 @@
-# app.py — Villa Tobias (COMPLET, STABLE + Payé/SMS + Onglet RATIOS XLSX)
+# app.py — Villa Tobias (COMPLET, STABLE + Payé & SMS checkboxes + 📈 Ratios)
+# - Colonnes: paye (bool) avant nom_client, sms_envoye (bool) après nom_client
+# - Cases à cocher modifiables dans 📋 Réservations via st.data_editor
+# - Calculs inchangés (prix_net, base, %, nuitees, AAAA, MM)
+# - KPI, Calendrier, Rapport, Clients, Export ICS, SMS
+# - NOUVEL ONGLET : 📈 Ratios (lit ratios.xlsx si présent ; sinon propose un modèle)
+# - Sauvegarde/restauration XLSX
 
 import streamlit as st
 import pandas as pd
@@ -11,7 +17,7 @@ import os
 from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
-FICHIER_RATIOS = "ratios.xlsx"   # <= NOUVEAU
+RATIOS_FILE = "ratios.xlsx"  # <-- nouveau
 
 # ==============================  MAINTENANCE / CACHE  ==============================
 
@@ -58,9 +64,9 @@ PLATFORM_ICONS = {"Booking": "🟦", "Airbnb": "🟩", "Autre": "🟧"}
 # ==============================  SCHEMA & CALCULS  ==============================
 
 BASE_COLS = [
-    "paye",                         # bool (avant nom_client)
+    "paye",                         # <- (avant nom_client)
     "nom_client",
-    "sms_envoye",                   # bool (après nom_client)
+    "sms_envoye",                   # <- (après nom_client)
     "plateforme","telephone",
     "date_arrivee","date_depart","nuitees",
     "prix_brut","commissions","frais_cb","prix_net",
@@ -69,7 +75,7 @@ BASE_COLS = [
 ]
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise colonnes/types et recalcule (sans changer vos règles)."""
+    """Normalise les colonnes, types et recalcule tout proprement (sans toucher aux formules validées)."""
     if df is None:
         df = pd.DataFrame()
     df = df.copy()
@@ -79,7 +85,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = np.nan
 
-    # Defaults bool
+    # Defaults pour booléens
     if "paye" in df.columns:
         df["paye"] = df["paye"].fillna(False).astype(bool)
     if "sms_envoye" in df.columns:
@@ -92,7 +98,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     # Téléphone
     df["telephone"] = df["telephone"].apply(normalize_tel)
 
-    # Numériques
+    # Numériques -> float
     for c in ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","nuitees"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -114,11 +120,11 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     df["plateforme"] = df["plateforme"].fillna("Autre")
     df["ical_uid"]   = df["ical_uid"].fillna("")
 
-    # NaN -> 0 pour calculs
+    # NaN -> 0 pour colonnes de calcul
     for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
         df[c] = df[c].fillna(0.0)
 
-    # Calculs (validés)
+    # Calculs validés :
     df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
     df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).clip(lower=0)
     df["charges"]  = (df["prix_brut"] - df["prix_net"]).clip(lower=0)
@@ -159,7 +165,7 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
-    # téléphone en texte ; bool après via ensure_schema
+    # converters: téléphone en texte ; booléens gérés après via ensure_schema
     return pd.read_excel(path, converters={"telephone": normalize_tel})
 
 def charger_donnees() -> pd.DataFrame:
@@ -354,9 +360,10 @@ def kpi_chips(df: pd.DataFrame):
     if core.empty:
         return
     b = core["prix_brut"].sum()
+    # Total charges = commissions + frais_cb (somme)
     total_comm = core["commissions"].sum()
     total_cb   = core["frais_cb"].sum()
-    ch = total_comm + total_cb      # <- charges cumulées = commissions+CB
+    ch = total_comm + total_cb
     n = core["prix_net"].sum()
     base = core["base"].sum()
     nuits = core["nuitees"].sum()
@@ -397,7 +404,96 @@ def search_box(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df[mask].copy()
 
-# ==============================  VUES — RÉSERVATIONS / AJOUT / MODIF ==============================
+# ==============================  RATIOS  ==============================
+
+@st.cache_data(show_spinner=False)
+def charger_ratios() -> pd.DataFrame:
+    """Lit ratios.xlsx si présent, sinon DataFrame vide."""
+    try:
+        if not os.path.exists(RATIOS_FILE):
+            return pd.DataFrame()
+        df_r = pd.read_excel(RATIOS_FILE)
+        return df_r
+    except Exception as e:
+        st.error(f"Erreur de lecture {RATIOS_FILE} : {e}")
+        return pd.DataFrame()
+
+def _ratios_first_col(df: pd.DataFrame, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    lower = {c.lower(): c for c in df.columns}
+    for c in candidates:
+        if c.lower() in lower:
+            return lower[c.lower()]
+    return None
+
+def _ratios_template_bytes() -> bytes:
+    buf = BytesIO()
+    model = pd.DataFrame(columns=["AAAA","plateforme","indicateur","valeur"])
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        model.to_excel(w, index=False, sheet_name="Ratios")
+    return buf.getvalue()
+
+def vue_ratios(df_reservations: pd.DataFrame):
+    st.title("📈 Ratios (fichier externe)")
+    df_rat = charger_ratios()
+
+    if df_rat.empty:
+        st.info("Aucun ratio à afficher. Place **ratios.xlsx** à la racine de l’application.")
+        st.download_button(
+            "📥 Télécharger le modèle ratios.xlsx",
+            data=_ratios_template_bytes(),
+            file_name="ratios.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        return
+
+    # Colonnes pivot (souples)
+    year_col = _ratios_first_col(df_rat, ["AAAA","Année","annee","year"])
+    plat_col = _ratios_first_col(df_rat, ["plateforme","Plateforme"])
+
+    # Filtres
+    c1, c2 = st.columns(2)
+    if year_col:
+        years = sorted([int(x) for x in pd.to_numeric(df_rat[year_col], errors="coerce").dropna().unique()])
+        year_choice = c1.selectbox("Année", ["Toutes"] + years, index=0)
+    else:
+        year_choice = "Toutes"
+
+    if plat_col:
+        plats = ["Toutes"] + sorted([str(x) for x in df_rat[plat_col].dropna().unique()])
+        plat_choice = c2.selectbox("Plateforme", plats, index=0)
+    else:
+        plat_choice = "Toutes"
+
+    # Filtrage
+    data = df_rat.copy()
+    if year_col and year_choice != "Toutes":
+        data = data[pd.to_numeric(data[year_col], errors="coerce") == int(year_choice)]
+    if plat_col and plat_choice != "Toutes":
+        data = data[data[plat_col] == plat_choice]
+
+    if data.empty:
+        st.info("Aucune ligne pour ces filtres.")
+        return
+
+    st.dataframe(data, use_container_width=True)
+
+    # Export du filtré
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        data.to_excel(w, index=False)
+    st.download_button(
+        "⬇️ Télécharger la vue filtrée (XLSX)",
+        data=buf.getvalue(),
+        file_name=f"ratios_filtre.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.caption("Astuce : tri par clic sur les en-têtes ; pour structurer les indicateurs, édite directement ratios.xlsx.")
+
+# ==============================  VUES  ==============================
 
 def vue_reservations(df: pd.DataFrame):
     st.title("📋 Réservations")
@@ -415,8 +511,10 @@ def vue_reservations(df: pd.DataFrame):
     core, totals = split_totals(df)
     core = sort_core(core)
 
+    # -------- Éditeur : on autorise l’édition UNIQUEMENT sur paye & sms_envoye --------
     core_edit = core.copy()
-    core_edit["__rowid"] = core_edit.index
+    core_edit["__rowid"] = core_edit.index  # identifiant de ligne pour réécrire facilement
+    # Affichage formaté pour les dates
     core_edit["date_arrivee"] = core_edit["date_arrivee"].apply(format_date_str)
     core_edit["date_depart"]  = core_edit["date_depart"].apply(format_date_str)
 
@@ -456,17 +554,20 @@ def vue_reservations(df: pd.DataFrame):
         }
     )
 
-    c1, _ = st.columns([1,3])
+    c1, c2 = st.columns([1,3])
     if c1.button("💾 Enregistrer les cases cochées"):
+        # on répercute seulement paye & sms_envoye
         for _, r in edited.iterrows():
             ridx = int(r["__rowid"])
             core.at[ridx, "paye"] = bool(r.get("paye", False))
             core.at[ridx, "sms_envoye"] = bool(r.get("sms_envoye", False))
+        # on recolle avec les totaux et on sauvegarde
         new_df = pd.concat([core, totals], ignore_index=False).reset_index(drop=True)
         sauvegarder_donnees(new_df)
         st.success("✅ Statuts Payé / SMS mis à jour.")
         st.rerun()
 
+    # -------- Totaux éventuels à part (non éditables) --------
     if not totals.empty:
         show_tot = totals.copy()
         for c in ["date_arrivee","date_depart"]:
@@ -640,8 +741,6 @@ def vue_modifier(df: pd.DataFrame):
         st.warning("Supprimé.")
         st.rerun()
 
-# ==============================  VUES — CALENDRIER / RAPPORT / CLIENTS / ICS / SMS  ==============================
-
 def vue_calendrier(df: pd.DataFrame):
     st.title("📅 Calendrier mensuel")
     df = ensure_schema(df)
@@ -732,9 +831,11 @@ def vue_rapport(df: pd.DataFrame):
     cols_detail = [c for c in cols_detail if c in detail.columns]
     st.dataframe(detail[cols_detail], use_container_width=True)
 
+    # Totaux + KPI
     core, _ = split_totals(data)
     kpi_chips(core)
 
+    # Agrégations
     stats = (
         data.groupby(["MM","plateforme"], dropna=True)
             .agg(prix_brut=("prix_brut","sum"),
@@ -857,6 +958,7 @@ def vue_sms(df: pd.DataFrame):
 
     colA, colB = st.columns(2)
 
+    # Arrivées demain
     with colA:
         st.subheader("📆 Arrivées demain")
         arrives = df[df["date_arrivee"] == demain].copy()
@@ -878,6 +980,7 @@ def vue_sms(df: pd.DataFrame):
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
+    # Relance +24h après départ
     with colB:
         st.subheader("🕒 Relance +24h après départ")
         dep_24h = df[df["date_depart"] == hier].copy()
@@ -896,6 +999,7 @@ def vue_sms(df: pd.DataFrame):
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
+    # Composeur manuel
     st.subheader("✍️ Composer un SMS manuel")
     df_pick = df.copy()
     df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
@@ -923,81 +1027,6 @@ def vue_sms(df: pd.DataFrame):
     else:
         st.info("Renseignez un téléphone et un message.")
 
-# ==============================  VUE — RATIOS (XLSX)  ==============================
-
-def _colname_exists(df: pd.DataFrame, names):
-    for n in names:
-        if n in df.columns:
-            return n
-    return None
-
-def charger_ratios() -> pd.DataFrame:
-    """Charge ratios.xlsx tel quel (pas de conversions agressives)."""
-    if not os.path.exists(FICHIER_RATIOS):
-        return pd.DataFrame()
-    try:
-        return pd.read_excel(FICHIER_RATIOS, engine="openpyxl")
-    except Exception as e:
-        st.error(f"Erreur de lecture de {FICHIER_RATIOS} : {e}")
-        return pd.DataFrame()
-
-def vue_ratios():
-    st.title("📈 Ratios (XLSX)")
-    st.caption("Charge un tableau Excel `ratios.xlsx` (format libre). Filtres appliqués si colonnes présentes (Année / Plateforme).")
-
-    # Upload remplaçant
-    up = st.file_uploader("Importer un nouveau ratios.xlsx", type=["xlsx"], help="Remplace le fichier actuel")
-    if up is not None:
-        try:
-            df_new = pd.read_excel(up, engine="openpyxl")
-            with pd.ExcelWriter(FICHIER_RATIOS, engine="openpyxl") as w:
-                df_new.to_excel(w, index=False)
-            st.success("✅ ratios.xlsx importé.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Import impossible : {e}")
-
-    df_rat = charger_ratios()
-    if df_rat.empty:
-        st.info("Aucun fichier ratios.xlsx trouvé. Déposez un fichier ci-dessus.")
-        return
-
-    # Détection colonnes de filtre
-    col_annee = _colname_exists(df_rat, ["Année","annee","AAAA","Annee","Year","year"])
-    col_pf    = _colname_exists(df_rat, ["Plateforme","plateforme","PF","Platform","platform"])
-
-    c1, c2 = st.columns(2)
-    if col_annee:
-        annees = sorted([str(x) for x in df_rat[col_annee].dropna().unique().tolist()])
-        an_sel = c1.selectbox("Année", ["Toutes"] + annees, index=0)
-    else:
-        an_sel = "Toutes"
-
-    if col_pf:
-        pfs = sorted([str(x) for x in df_rat[col_pf].dropna().unique().tolist()])
-        pf_sel = c2.selectbox("Plateforme", ["Toutes"] + pfs, index=0)
-    else:
-        pf_sel = "Toutes"
-
-    view = df_rat.copy()
-    if col_annee and an_sel != "Toutes":
-        view = view[view[col_annee].astype(str) == str(an_sel)]
-    if col_pf and pf_sel != "Toutes":
-        view = view[view[col_pf].astype(str) == str(pf_sel)]
-
-    st.dataframe(view, use_container_width=True)
-
-    # Download XLSX de la vue filtrée
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        view.to_excel(w, index=False)
-    st.download_button(
-        "⬇️ Télécharger la vue (XLSX)",
-        data=buf.getvalue(),
-        file_name="ratios_filtre.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
 # ==============================  APP  ==============================
 
 def main():
@@ -1014,13 +1043,13 @@ def main():
     onglet = st.sidebar.radio(
         "Aller à",
         ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
-         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS","📈 Ratios (XLSX)"]
+         "📅 Calendrier","📊 Rapport","📈 Ratios","👥 Liste clients","📤 Export ICS","✉️ SMS"]
     )
 
-    # Maintenance
+    # Maintenance (vider cache) SOUS la navigation
     render_cache_section_sidebar()
 
-    # Données
+    # Charger les données (après éventuelle restauration)
     df = charger_donnees()
 
     if onglet == "📋 Réservations":
@@ -1033,14 +1062,14 @@ def main():
         vue_calendrier(df)
     elif onglet == "📊 Rapport":
         vue_rapport(df)
+    elif onglet == "📈 Ratios":
+        vue_ratios(df)
     elif onglet == "👥 Liste clients":
         vue_clients(df)
     elif onglet == "📤 Export ICS":
         vue_export_ics(df)
     elif onglet == "✉️ SMS":
         vue_sms(df)
-    elif onglet == "📈 Ratios (XLSX)":
-        vue_ratios()
 
 if __name__ == "__main__":
     main()
