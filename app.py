@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 # ----------------------------
 # CONFIG
 # ----------------------------
+
 st.set_page_config(
     page_title="📋 Réservations",
     page_icon="📅",
