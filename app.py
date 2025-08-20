@@ -666,3 +666,294 @@ def vue_calendrier(df: pd.DataFrame):
         grille.append(ligne)
 
     st.table(pd.DataFrame(grille, columns=headers))
+
+def vue_rapport(df: pd.DataFrame):
+    st.title("📊 Rapport (détaillé)")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
+    if not annees:
+        st.info("Aucune année disponible.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    annee = c1.selectbox("Année", annees, index=len(annees)-1, key="rapport_annee")
+    pf_opt = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    pf = c2.selectbox("Plateforme", pf_opt, key="rapport_pf")
+    mois_opt = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
+    mois_label = c3.selectbox("Mois", mois_opt, key="rapport_mois")
+
+    data = df[df["AAAA"] == int(annee)].copy()
+    if pf != "Toutes":
+        data = data[data["plateforme"] == pf]
+    if mois_label != "Tous":
+        data = data[data["MM"] == int(mois_label)]
+
+    if data.empty:
+        st.info("Aucune donnée pour ces filtres.")
+        return
+
+    detail = data.copy()
+    for c in ["date_arrivee","date_depart"]:
+        detail[c] = detail[c].apply(format_date_str)
+    by = [c for c in ["date_arrivee","nom_client"] if c in detail.columns]
+    if by:
+        detail = detail.sort_values(by=by, na_position="last").reset_index(drop=True)
+
+    cols_detail = [
+        "paye","nom_client","sms_envoye","plateforme","telephone",
+        "date_arrivee","date_depart","nuitees",
+        "prix_brut","commissions","frais_cb","prix_net",
+        "menage","taxes_sejour","base","charges","%"
+    ]
+    cols_detail = [c for c in cols_detail if c in detail.columns]
+    st.dataframe(detail[cols_detail], use_container_width=True)
+
+    # Totaux + KPI
+    core, _ = split_totals(data)
+    kpi_chips(core)
+
+    # Agrégations
+    stats = (
+        data.groupby(["MM","plateforme"], dropna=True)
+            .agg(prix_brut=("prix_brut","sum"),
+                 prix_net=("prix_net","sum"),
+                 base=("base","sum"),
+                 charges=("charges","sum"),
+                 nuitees=("nuitees","sum"))
+            .reset_index()
+    ).sort_values(["MM","plateforme"]).reset_index(drop=True)
+
+    def bar_chart_metric(metric_label, metric_col):
+        if stats.empty:
+            return
+        pvt = stats.pivot(index="MM", columns="plateforme", values=metric_col).fillna(0).sort_index()
+        pvt.index = [f"{int(m):02d}" for m in pvt.index]
+        st.markdown(f"**{metric_label}**")
+        st.bar_chart(pvt)
+
+    bar_chart_metric("Revenus bruts", "prix_brut")
+    bar_chart_metric("Revenus nets", "prix_net")
+    bar_chart_metric("Base", "base")
+    bar_chart_metric("Nuitées", "nuitees")
+
+    # Export XLSX
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        detail[cols_detail].to_excel(writer, index=False)
+    st.download_button(
+        "⬇️ Télécharger le détail (XLSX)",
+        data=buf.getvalue(),
+        file_name=f"rapport_detail_{annee}{'' if mois_label=='Tous' else '_'+mois_label}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def vue_clients(df: pd.DataFrame):
+    st.title("👥 Liste des clients")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    c1, c2 = st.columns(2)
+    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
+    annee = c1.selectbox("Année", annees, index=len(annees)-1) if annees else None
+    mois  = c2.selectbox("Mois", ["Tous"] + [f"{i:02d}" for i in range(1,13)])
+
+    data = df.copy()
+    if annee:
+        data = data[data["AAAA"] == int(annee)]
+    if mois != "Tous":
+        data = data[data["MM"] == int(mois)]
+
+    if data.empty:
+        st.info("Aucune donnée pour cette période.")
+        return
+
+    data["prix_brut/nuit"] = data.apply(lambda r: round((r["prix_brut"]/r["nuitees"]) if r["nuitees"] else 0,2), axis=1)
+    data["prix_net/nuit"]  = data.apply(lambda r: round((r["prix_net"]/r["nuitees"])  if r["nuitees"] else 0,2), axis=1)
+
+    show = data.copy()
+    for c in ["date_arrivee","date_depart"]:
+        show[c] = show[c].apply(format_date_str)
+
+    cols = ["paye","nom_client","sms_envoye","plateforme","telephone","date_arrivee","date_depart",
+            "nuitees","prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","prix_brut/nuit","prix_net/nuit"]
+    cols = [c for c in cols if c in show.columns]
+    st.dataframe(show[cols], use_container_width=True)
+    st.download_button(
+        "📥 Télécharger (CSV)",
+        data=show[cols].to_csv(index=False).encode("utf-8"),
+        file_name="liste_clients.csv",
+        mime="text/csv"
+    )
+
+
+def vue_export_ics(df: pd.DataFrame):
+    st.title("📤 Export ICS (Google Agenda – Import manuel)")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée à exporter.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
+    annee = c1.selectbox("Année", ["Toutes"] + annees, index=len(annees)) if annees else "Toutes"
+    mois  = c2.selectbox("Mois", ["Tous"] + list(range(1,13)))
+    pfopt = ["Toutes"] + sorted(df["plateforme"].dropna().unique().tolist())
+    pf    = c3.selectbox("Plateforme", pfopt)
+
+    data = df.copy()
+    if annee != "Toutes":
+        data = data[data["AAAA"] == int(annee)]
+    if mois != "Tous":
+        data = data[data["MM"] == int(mois)]
+    if pf != "Toutes":
+        data = data[data["plateforme"] == pf]
+
+    if data.empty:
+        st.info("Aucune réservation pour ces filtres.")
+        return
+
+    ics_text = df_to_ics(data)
+    st.download_button(
+        "⬇️ Télécharger reservations.ics",
+        data=ics_text.encode("utf-8"),
+        file_name="reservations.ics",
+        mime="text/calendar"
+    )
+    st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
+
+
+def vue_sms(df: pd.DataFrame):
+    st.title("✉️ SMS (envoi manuel)")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    today = date.today()
+    demain = today + timedelta(days=1)
+    hier = today - timedelta(days=1)
+
+    colA, colB = st.columns(2)
+
+    # Arrivées demain
+    with colA:
+        st.subheader("📆 Arrivées demain")
+        arrives = df[df["date_arrivee"] == demain].copy()
+        if arrives.empty:
+            st.info("Aucune arrivée demain.")
+        else:
+            for _, r in arrives.reset_index(drop=True).iterrows():
+                body = sms_message_arrivee(r)
+                tel = normalize_tel(r.get("telephone"))
+                tel_link = f"tel:{tel}" if tel else ""
+                sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
+                st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
+                st.markdown(f"Arrivée: {format_date_str(r.get('date_arrivee'))} • "
+                            f"Départ: {format_date_str(r.get('date_depart'))} • "
+                            f"Nuitées: {r.get('nuitees','')}")
+                st.code(body)
+                c1, c2 = st.columns(2)
+                if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
+                if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
+                st.divider()
+
+    # Relance +24h après départ
+    with colB:
+        st.subheader("🕒 Relance +24h après départ")
+        dep_24h = df[df["date_depart"] == hier].copy()
+        if dep_24h.empty:
+            st.info("Aucun départ hier.")
+        else:
+            for _, r in dep_24h.reset_index(drop=True).iterrows():
+                body = sms_message_depart(r)
+                tel = normalize_tel(r.get("telephone"))
+                tel_link = f"tel:{tel}" if tel else ""
+                sms_link = f"sms:{tel}?&body={quote(body)}" if tel and body else ""
+                st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
+                st.code(body)
+                c1, c2 = st.columns(2)
+                if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
+                if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
+                st.divider()
+
+    # Composeur manuel
+    st.subheader("✍️ Composer un SMS manuel")
+    df_pick = df.copy()
+    df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
+    choix = st.selectbox("Choisir une réservation", df_pick["id_aff"])
+    r = df_pick.loc[df_pick["id_aff"] == choix].iloc[0]
+    tel = normalize_tel(r.get("telephone"))
+
+    choix_type = st.radio("Modèle de message",
+                          ["Arrivée (demande d’heure)","Relance après départ","Message libre"],
+                          horizontal=True)
+    if choix_type == "Arrivée (demande d’heure)":
+        body = sms_message_arrivee(r)
+    elif choix_type == "Relance après départ":
+        body = sms_message_depart(r)
+    else:
+        body = st.text_area("Votre message", value="", height=160, placeholder="Tapez votre SMS ici…")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.code(body or "—")
+    if tel and body:
+        c1, c2 = st.columns(2)
+        c1.link_button(f"📞 Appeler {tel}", f"tel:{tel}")
+        c2.link_button("📩 Envoyer SMS", f"sms:{tel}?&body={quote(body)}")
+    else:
+        st.info("Renseignez un téléphone et un message.")
+
+
+# ==============================  APP  ==============================
+
+def main():
+    st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+
+    # Barre latérale : Fichier
+    st.sidebar.title("📁 Fichier")
+    df_tmp = charger_donnees()
+    bouton_telecharger(df_tmp)
+    bouton_restaurer()
+
+    # Navigation
+    st.sidebar.title("🧭 Navigation")
+    onglet = st.sidebar.radio(
+        "Aller à",
+        ["📋 Réservations","➕ Ajouter","✏️ Modifier / Supprimer",
+         "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS"]
+    )
+
+    # Maintenance (vider cache) SOUS la navigation
+    render_cache_section_sidebar()
+
+    # Charger les données (après éventuelle restauration)
+    df = charger_donnees()
+
+    if onglet == "📋 Réservations":
+        vue_reservations(df)
+    elif onglet == "➕ Ajouter":
+        vue_ajouter(df)
+    elif onglet == "✏️ Modifier / Supprimer":
+        vue_modifier(df)
+    elif onglet == "📅 Calendrier":
+        vue_calendrier(df)
+    elif onglet == "📊 Rapport":
+        vue_rapport(df)
+    elif onglet == "👥 Liste clients":
+        vue_clients(df)
+    elif onglet == "📤 Export ICS":
+        vue_export_ics(df)
+    elif onglet == "✉️ SMS":
+        vue_sms(df)
+
+
+if __name__ == "__main__":
+    main()
