@@ -1,5 +1,8 @@
-# app.py — Villa Tobias (COMPLET, STABLE + Payé & SMS + filtre Payé)
-# Correction : bouton de sauvegarde XLSX => garantit un binaire Excel valide
+# app.py — Villa Tobias (COMPLET, STABLE + Payé & SMS checkboxes + Filtre Payé corrigé)
+# - Colonnes: paye (bool) avant nom_client, sms_envoye (bool) après nom_client
+# - Cases à cocher modifiables dans 📋 Réservations via st.data_editor
+# - Filtre "Payé / Non payé / Tous" dans 📋 Réservations (corrigé)
+# - Calculs, KPI, calendrier, rapport, SMS, ICS : inchangés
 
 import streamlit as st
 import pandas as pd
@@ -210,30 +213,21 @@ def bouton_restaurer():
         except Exception as e:
             st.sidebar.error(f"Erreur import: {e}")
 
-def _df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    """Toujours renvoyer un binaire Excel valide (évite RuntimeError: Invalid binary)."""
-    buf = BytesIO()
-    safe = ensure_schema(df.copy() if df is not None else pd.DataFrame())
-    if safe.empty:
-        # on écrit quand même une feuille vide avec les colonnes de base
-        safe = pd.DataFrame(columns=BASE_COLS)
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        safe.to_excel(writer, index=False, sheet_name="Sheet1")
-        _force_telephone_text_format_openpyxl(writer, safe, "Sheet1")
-    return buf.getvalue()
-
 def bouton_telecharger(df: pd.DataFrame):
-    # 🔧 Correction : on génère à coup sûr un vrai binaire Excel
+    buf = BytesIO()
+    data_xlsx = None
     try:
-        data_xlsx = _df_to_excel_bytes(df)
+        ensure_schema(df).to_excel(buf, index=False, engine="openpyxl")
+        data_xlsx = buf.getvalue()
     except Exception as e:
         st.sidebar.error(f"Export XLSX indisponible : {e}")
-        data_xlsx = None
     st.sidebar.download_button(
         "💾 Sauvegarde xlsx",
-        data=(data_xlsx if data_xlsx is not None else b" "),  # jamais vide
+        data=data_xlsx if data_xlsx is not None else b"",
         file_name="reservations.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=(data_xlsx is None),
+        help="Utilisez le bouton Sauvegarde depuis les écrans d’édition."
     )
 
 # ==============================  ICS EXPORT  ==============================
@@ -410,34 +404,36 @@ def search_box(df: pd.DataFrame) -> pd.DataFrame:
 
 # ==============================  VUES  ==============================
 
-def vue_reservations(df: pd.DataFrame):
+def vue_reservations(df_all: pd.DataFrame):
     st.title("📋 Réservations")
+
     with st.expander("🎛️ Options d’affichage", expanded=True):
-        # ---- FILTRE PAYÉ ----
         filtre_paye = st.selectbox("Filtrer payé", ["Tous", "Payé", "Non payé"])
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
 
-    df = ensure_schema(df)
+    # Ajout d'un identifiant stable AVANT tout tri/filtre pour répercuter les modifs
+    df_all = ensure_schema(df_all).copy()
+    if "__orig_id" not in df_all.columns:
+        df_all["__orig_id"] = df_all.index
 
-    # Application du filtre payé (avant KPI et recherche)
+    # Vue filtrée
+    df_view = df_all.copy()
     if filtre_paye == "Payé":
-        df = df[df["paye"] == True].copy()
+        df_view = df_view[df_view["paye"] == True].copy()
     elif filtre_paye == "Non payé":
-        df = df[df["paye"] == False].copy()
+        df_view = df_view[df_view["paye"] == False].copy()
 
     if show_kpi:
-        kpi_chips(df)
+        kpi_chips(df_view)
     if enable_search:
-        df = search_box(df)
+        df_view = search_box(df_view)
 
-    core, totals = split_totals(df)
-    core = sort_core(core)
+    core, totals = split_totals(df_view)
+    core = sort_core(core)  # conserve __orig_id
 
-    # -------- Éditeur : on autorise l’édition UNIQUEMENT sur paye & sms_envoye --------
+    # -------- Éditeur : édition UNIQUEMENT paye & sms_envoye --------
     core_edit = core.copy()
-    core_edit["__rowid"] = core_edit.index  # identifiant de ligne pour réécrire facilement
-    # Affichage formaté pour les dates
     core_edit["date_arrivee"] = core_edit["date_arrivee"].apply(format_date_str)
     core_edit["date_depart"]  = core_edit["date_depart"].apply(format_date_str)
 
@@ -445,7 +441,7 @@ def vue_reservations(df: pd.DataFrame):
         "paye","nom_client","sms_envoye","plateforme","telephone",
         "date_arrivee","date_depart","nuitees",
         "prix_brut","commissions","frais_cb","prix_net",
-        "menage","taxes_sejour","base","charges","%","AAAA","MM","__rowid"
+        "menage","taxes_sejour","base","charges","%","AAAA","MM","__orig_id"
     ]
     cols_show = [c for c in cols_order if c in core_edit.columns]
 
@@ -456,7 +452,7 @@ def vue_reservations(df: pd.DataFrame):
         column_config={
             "paye": st.column_config.CheckboxColumn("Payé"),
             "sms_envoye": st.column_config.CheckboxColumn("SMS envoyé"),
-            "__rowid": st.column_config.Column("id", help="Interne", disabled=True, width="small"),
+            "__orig_id": st.column_config.Column("id", help="Interne", disabled=True, width="small"),
             "date_arrivee": st.column_config.TextColumn("date_arrivee", disabled=True),
             "date_depart":  st.column_config.TextColumn("date_depart", disabled=True),
             "nom_client":   st.column_config.TextColumn("nom_client", disabled=True),
@@ -477,16 +473,23 @@ def vue_reservations(df: pd.DataFrame):
         }
     )
 
-    c1, c2 = st.columns([1,3])
+    c1, _ = st.columns([1,3])
     if c1.button("💾 Enregistrer les cases cochées"):
-        # on répercute seulement paye & sms_envoye
+        # Répercussion dans le DF COMPLET via __orig_id (aucune perte due au filtre)
+        df_all_upd = df_all.copy()
         for _, r in edited.iterrows():
-            ridx = int(r["__rowid"])
-            core.at[ridx, "paye"] = bool(r.get("paye", False))
-            core.at[ridx, "sms_envoye"] = bool(r.get("sms_envoye", False))
-        # on recolle avec les totaux et on sauvegarde
-        new_df = pd.concat([core, totals], ignore_index=False).reset_index(drop=True)
-        sauvegarder_donnees(new_df)
+            oid = r.get("__orig_id")
+            if pd.isna(oid):
+                continue
+            oid = int(oid)
+            if oid in df_all_upd.index:
+                df_all_upd.at[oid, "paye"] = bool(r.get("paye", False))
+                df_all_upd.at[oid, "sms_envoye"] = bool(r.get("sms_envoye", False))
+        # on supprime la colonne interne éventuelle avant sauvegarde
+        with pd.option_context("future.no_silent_downcasting", True):
+            if "__orig_id" in df_all_upd.columns:
+                df_all_upd = df_all_upd.drop(columns=["__orig_id"], errors="ignore")
+        sauvegarder_donnees(df_all_upd)
         st.success("✅ Statuts Payé / SMS mis à jour.")
         st.rerun()
 
@@ -958,7 +961,7 @@ def main():
     # Barre latérale : Fichier
     st.sidebar.title("📁 Fichier")
     df_tmp = charger_donnees()
-    bouton_telecharger(df_tmp)   # <-- bouton corrigé (binaire Excel garanti)
+    bouton_telecharger(df_tmp)
     bouton_restaurer()
 
     # Navigation
