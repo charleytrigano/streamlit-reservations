@@ -21,10 +21,10 @@ LOGO_FILE = APP_DIR / "logo.png"
 # UI helpers
 # =====================================================================
 def render_sidebar_header():
-    """Affiche le logo si présent, sinon un titre sobre, sans jamais faire planter l'app."""
+    """Affiche le logo si présent (réduit en icône), sinon un titre sobre."""
     try:
         if LOGO_FILE.exists():
-            st.sidebar.image(str(LOGO_FILE), use_column_width=True)
+            st.sidebar.image(str(LOGO_FILE), width=100)  # <-- Logo réduit
         else:
             st.sidebar.markdown("### Réservations")
     except Exception:
@@ -48,13 +48,7 @@ def load_reservations(path: Path) -> pd.DataFrame:
     """
     Charge le fichier Excel des réservations.
     Essaie d'abord via un éventuel data_loader.py si présent, sinon read_excel direct.
-    Colonnes attendues (souples) :
-      - Date ou Check-in/Check-out (au moins une date)
-      - Plateforme (Airbnb/Booking/Direct/etc.)
-      - Montant / Prix / Total
-      - Statut (Payé / Non payé) ou booléen payé
     """
-    # 1) si un data_loader.py existe avec une fonction load_data(), on l’utilise
     try:
         import importlib.util
         dl_path = APP_DIR / "data_loader.py"
@@ -70,16 +64,14 @@ def load_reservations(path: Path) -> pd.DataFrame:
         else:
             df = pd.read_excel(path)
     except Exception:
-        # fallback ultra simple
         df = pd.read_excel(path)
 
-    # Normalisations douces de colonnes fréquentes
+    # Normalisations
     df = df.copy()
 
-    # Chercher une colonne date principale
+    # --- Dates ---
     date_cols = [c for c in df.columns if str(c).strip().lower() in {"date", "check-in", "checkin", "arrivee", "arrivée"}]
     if not date_cols:
-        # tente de détecter la première colonne de type date
         for c in df.columns:
             if np.issubdtype(df[c].dtype, np.datetime64):
                 date_cols = [c]
@@ -93,14 +85,12 @@ def load_reservations(path: Path) -> pd.DataFrame:
         df["Mois"] = df[dcol].dt.month
         df.rename(columns={dcol: "Date"}, inplace=True)
     else:
-        # s’il n’y a aucune date, on met des champs neutres pour éviter le crash des filtres
         df["Année"] = None
         df["Mois"] = None
         df["Date"] = pd.NaT
 
-    # Colonne Plateforme standard
+    # --- Plateforme ---
     if "Plateforme" not in df.columns:
-        # essaie de trouver un nom proche
         for c in df.columns:
             if str(c).strip().lower() in {"plateforme", "plateform", "platform", "site"}:
                 df.rename(columns={c: "Plateforme"}, inplace=True)
@@ -108,7 +98,7 @@ def load_reservations(path: Path) -> pd.DataFrame:
         if "Plateforme" not in df.columns:
             df["Plateforme"] = "Inconnue"
 
-    # Colonne Statut Payé / Non payé
+    # --- Statut paiement ---
     statut_col = None
     candidats = ["Statut", "StatutPaiement", "Payé", "Paye", "Paid"]
     for c in df.columns:
@@ -118,19 +108,9 @@ def load_reservations(path: Path) -> pd.DataFrame:
     if statut_col is not None and statut_col != "StatutPaiement":
         df.rename(columns={statut_col: "StatutPaiement"}, inplace=True)
     if "StatutPaiement" not in df.columns:
-        # si on a une colonne booléenne paid
-        for c in df.columns:
-            if df[c].dropna().isin([True, False, 0, 1, "Oui", "Non"]).all():
-                # heuristique : on fabrique le statut
-                val = df[c].map(
-                    lambda x: "Payé" if str(x).lower() in {"true", "1", "oui", "payé", "paye", "paid"} else "Non payé"
-                )
-                df["StatutPaiement"] = val
-                break
-        if "StatutPaiement" not in df.columns:
-            df["StatutPaiement"] = "Non renseigné"
+        df["StatutPaiement"] = "Non renseigné"
 
-    # Colonne Montant
+    # --- Montant ---
     montant_col = None
     for c in df.columns:
         cl = str(c).strip().lower()
@@ -138,7 +118,6 @@ def load_reservations(path: Path) -> pd.DataFrame:
             montant_col = c
             break
     if montant_col is None:
-        # Pas de montant → crée une colonne à 0 pour éviter les plantages d'agrégations
         df["Montant"] = 0.0
     elif montant_col != "Montant":
         df.rename(columns={montant_col: "Montant"}, inplace=True)
@@ -146,116 +125,181 @@ def load_reservations(path: Path) -> pd.DataFrame:
     return df
 
 # =====================================================================
+# Filtres & affichage
+# =====================================================================
+def build_sidebar_filters(df: pd.DataFrame) -> dict:
+    render_sidebar_header()
+    st.sidebar.markdown("### Filtres")
+
+    # Année
+    annees = sorted([int(a) for a in df["Année"].dropna().unique()], reverse=True)
+    annee = st.sidebar.selectbox("Année", options=["Toutes"] + annees, index=0)
+
+    # Mois (liste déroulante)
+    mois_uniques = sorted([int(m) for m in df["Mois"].dropna().unique()])
+    mois_labels = ["Tous"] + [f"{m:02d} - {month_name_fr(m).capitalize()}" for m in range(1, 12 + 1) if m in mois_uniques]
+    mois_map = {"Tous": None}
+    for m in range(1, 13):
+        if m in mois_uniques:
+            mois_map[f"{m:02d} - {month_name_fr(m).capitalize()}"] = m
+    mois_label = st.sidebar.selectbox("Mois", options=mois_labels, index=0)
+    mois = mois_map.get(mois_label, None)
+
+    # Plateforme
+    plateformes = sorted(df["Plateforme"].fillna("Inconnue").astype(str).unique())
+    plateformes_sel = st.sidebar.multiselect("Plateforme(s)", options=plateformes, default=plateformes)
+
+    # Normalisation payé / non payé
+    paid_true_vals = {"payé", "paye", "paid", "ok", "oui", "true", "vrai", "yes"}
+    def to_paid(v):
+        if pd.isna(v):
+            return False
+        s = str(v).strip().lower()
+        return s in paid_true_vals
+    if "PayéBool" not in df.columns:
+        df["PayéBool"] = df["StatutPaiement"].map(to_paid)
+
+    statut_map = {"Tous": None, "Payé": True, "Non payé": False}
+    statut_label = st.sidebar.selectbox("Statut", options=list(statut_map.keys()), index=0)
+    statut_val = statut_map[statut_label]
+
+    return {
+        "annee": annee,
+        "mois": mois,
+        "plateformes": plateformes_sel,
+        "statut": statut_val,
+    }
+
+def apply_filters(df: pd.DataFrame, flt: dict) -> pd.DataFrame:
+    out = df.copy()
+
+    if flt["annee"] != "Toutes":
+        out = out[out["Année"] == flt["annee"]]
+
+    if flt["mois"] is not None:
+        out = out[out["Mois"] == flt["mois"]]
+
+    if flt["plateformes"]:
+        out = out[out["Plateforme"].isin(flt["plateformes"])]
+
+    if flt["statut"] is not None:
+        out = out[out["PayéBool"] == flt["statut"]]
+
+    return out
+
+def render_reservations_table(df: pd.DataFrame):
+    if df.empty:
+        st.info("Aucune réservation pour les filtres sélectionnés.")
+        return
+    # Colonnes plus lisibles si présentes
+    cols_order = [c for c in ["Date", "Année", "Mois", "Plateforme", "StatutPaiement", "Montant"] if c in df.columns]
+    rest = [c for c in df.columns if c not in cols_order and not c.endswith("Bool")]
+    st.dataframe(df[cols_order + rest], use_container_width=True)
+
+def render_synthese(df: pd.DataFrame):
+    col1, col2, col3 = st.columns(3)
+    total_res = int(len(df))
+    total_montant = float(df.get("Montant", pd.Series(dtype=float)).fillna(0).sum())
+    taux_paye = float((df.get("PayéBool", pd.Series(dtype=bool)) == True).mean()) if not df.empty else 0.0
+
+    col1.metric("Réservations", f"{total_res}")
+    col2.metric("Montant total", f"{total_montant:,.2f} €".replace(",", " ").replace(".", ","))
+    col3.metric("Taux payé", f"{taux_paye*100:.1f} %")
+
+    # Petits tableaux pivot rapides
+    with st.expander("Détail par plateforme"):
+        if not df.empty:
+            ptf = (
+                df.groupby("Plateforme", dropna=False)
+                  .agg(Reservations=("Plateforme", "size"),
+                       Montant=("Montant", "sum"),
+                       Payé=("PayéBool", "mean"))
+                  .reset_index()
+            )
+            ptf["Taux payé"] = (ptf["Payé"] * 100).round(1).astype(str) + " %"
+            ptf = ptf.drop(columns=["Payé"])
+            st.dataframe(ptf, use_container_width=True)
+        else:
+            st.info("Aucune donnée.")
+
+def render_calendar(df: pd.DataFrame):
+    """
+    Affiche un mini calendrier du mois filtré (si un mois a été choisi) avec le nombre de réservations par jour.
+    Si aucun mois précis n'est sélectionné, on affiche un message.
+    """
+    if "Année" not in df.columns or "Mois" not in df.columns or "Date" not in df.columns or df.empty:
+        st.info("Sélectionnez une année et un mois pour afficher le calendrier.")
+        return
+
+    # Déterminer un (année, mois) à partir des données filtrées
+    val_annee = df["Année"].dropna().unique()
+    val_mois = df["Mois"].dropna().unique()
+    if len(val_annee) != 1 or len(val_mois) != 1:
+        st.info("Le calendrier s'affiche lorsque **un seul** mois est filtré.")
+        return
+
+    annee = int(val_annee[0])
+    mois = int(val_mois[0])
+
+    st.subheader(f"Calendrier — {month_name_fr(mois).capitalize()} {annee}")
+
+    # Compte par jour
+    counts = df["Date"].dt.day.value_counts().to_dict()
+
+    cal = calendar.Calendar(firstweekday=0)  # lundi=0? En Python, lundi=0 si setfirstweekday(0). Ici 0 = lundi.
+    calendar.setfirstweekday(calendar.MONDAY)
+    weeks = calendar.monthcalendar(annee, mois)
+
+    # Rendu simple en texte (robuste dans Streamlit)
+    for w in weeks:
+        cols = st.columns(7)
+        for i, d in enumerate(w):
+            if d == 0:
+                cols[i].markdown("&nbsp;")
+            else:
+                n = counts.get(d, 0)
+                if n > 0:
+                    cols[i].markdown(f"**{d}**  \n{n} rés.")
+                else:
+                    cols[i].markdown(f"{d}")
+
+# =====================================================================
 # App
 # =====================================================================
 def main():
-    st.set_page_config(page_title="Réservations", layout="wide")
-    render_sidebar_header()
+    st.set_page_config(page_title="Réservations", page_icon="📒", layout="wide")
 
-    st.title("Tableau de bord — Réservations")
-
-    # Vérif présence fichier
+    # Vérif fichiers
     if not DATA_FILE.exists():
-        st.error(f"Fichier introuvable : `{DATA_FILE.name}` dans le même dossier que `app.py`.")
-        st.info("Placez votre fichier Excel dans le repo (même niveau que app.py) et relancez.")
+        st.error(f"Fichier de données introuvable : `{DATA_FILE.name}`\n\n"
+                 "Vérifie le nom exact dans le dépôt (sans accent) et qu'il est bien à la racine.")
         return
 
+    # Chargement
     df = load_reservations(DATA_FILE)
 
-    # =======================
-    # Filtres latéraux
-    # =======================
-    st.sidebar.subheader("Filtres")
+    # Filtres
+    flt = build_sidebar_filters(df)
+    df_f = apply_filters(df, flt)
 
-    # Année
-    annees = sorted([a for a in df["Année"].dropna().unique().tolist() if a is not None])
-    annee_sel = st.sidebar.multiselect("Année", annees, default=annees)
+    # Onglets
+    tab1, tab2, tab3 = st.tabs(["📋 Réservations", "📆 Calendrier", "📊 Synthèse"])
 
-    # Mois (liste déroulante)
-    mois_uniques = sorted([int(m) for m in df["Mois"].dropna().unique().tolist() if m == m])
-    # par défaut : tous les mois (1..12) présents
-    mois_labels = {m: month_name_fr(int(m)).capitalize() for m in mois_uniques}
-    mois_def = mois_uniques
-    mois_sel_labels = st.sidebar.multiselect(
-        "Mois",
-        options=[mois_labels[m] for m in mois_uniques],
-        default=[mois_labels[m] for m in mois_def]
-    )
-    # remap labels -> numéros
-    mois_sel = [m for m in mois_uniques if mois_labels[m] in mois_sel_labels]
+    with tab1:
+        render_reservations_table(df_f)
 
-    # Plateforme
-    plateformes = sorted(df["Plateforme"].astype(str).fillna("Inconnue").unique().tolist())
-    platform_sel = st.sidebar.multiselect("Plateforme", plateformes, default=plateformes)
+    with tab2:
+        render_calendar(df_f)
 
-    # Statut paiement
-    statuts = sorted(df["StatutPaiement"].astype(str).fillna("Non renseigné").unique().tolist())
-    # si on veut seulement Payé / Non payé comme vous l’aviez demandé
-    # on force l’ordre si présent
-    ordre_statuts = [s for s in ["Payé", "Non payé"] if s in statuts] + [s for s in statuts if s not in {"Payé", "Non payé"}]
-    statut_sel = st.sidebar.multiselect("Statut", ordre_statuts, default=ordre_statuts)
+    with tab3:
+        render_synthese(df_f)
 
-    # =======================
-    # Application des filtres
-    # =======================
-    dff = df.copy()
-    if annee_sel:
-        dff = dff[dff["Année"].isin(annee_sel)]
-    if mois_sel:
-        dff = dff[dff["Mois"].isin(mois_sel)]
-    if platform_sel:
-        dff = dff[dff["Plateforme"].astype(str).isin(platform_sel)]
-    if statut_sel:
-        dff = dff[dff["StatutPaiement"].astype(str).isin(statut_sel)]
-
-    # =======================
-    # KPIs simples
-    # =======================
-    total_resa = len(dff)
-    total_revenu = pd.to_numeric(dff.get("Montant", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()
-    nb_payees = (dff["StatutPaiement"].astype(str) == "Payé").sum() if "StatutPaiement" in dff.columns else 0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Réservations", f"{total_resa:,}".replace(",", " "))
-    c2.metric("Revenu total", f"{total_revenu:,.2f} €".replace(",", " "))
-    c3.metric("Réservations payées", f"{nb_payees:,}".replace(",", " "))
-
-    st.divider()
-
-    # =======================
-    # Tableau détaillé
-    # =======================
-    with st.expander("Voir le tableau filtré", expanded=True):
-        st.dataframe(
-            dff.sort_values(by=["Date", "Plateforme"], ascending=[False, True]),
-            use_container_width=True,
-            hide_index=True
-        )
-
-    # =======================
-    # Vue "calendrier" simple (par jour)
-    # =======================
-    # On agrège par date pour une vue rapide “agenda”
-    if "Date" in dff.columns and dff["Date"].notna().any():
-        agenda = (
-            dff.groupby(dff["Date"].dt.date)
-            .agg(
-                nb=("Date", "count"),
-                revenu=("Montant", lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum())
-            )
-            .reset_index()
-            .rename(columns={"Date": "Jour"})
-            .sort_values("Jour")
-        )
-        st.subheader("Calendrier (agrégé par jour)")
-        st.dataframe(agenda, use_container_width=True, hide_index=True)
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"Fichier : `{DATA_FILE.name}`")
+    if LOGO_FILE.exists():
+        st.sidebar.caption("Logo chargé ✔️")
     else:
-        st.info("Aucune colonne de date exploitable pour afficher un calendrier agrégé.")
+        st.sidebar.caption("Logo non trouvé (facultatif)")
 
-    st.caption("💡 Astuce : utilisez les filtres à gauche (Année / Mois / Plateforme / Statut).")
-
-# =====================================================================
-# Lancement
-# =====================================================================
 if __name__ == "__main__":
     main()
