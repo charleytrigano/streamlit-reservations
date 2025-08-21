@@ -385,4 +385,4 @@ def make_ics(df: pd.DataFrame) -> str:
             f"DTSTART;VALUE=DATE:{d1}",
             f"DTEND;VALUE=DATE:{d2}",
             f"SUMMARY:{title}",
-            "END:VEVENT
+            "END:VEVENT"
