@@ -1,4 +1,11 @@
-# app.py — Villa Tobias (COMPLET, palette persistante + restauration XLSX + calendrier coloré + SMS)
+# app.py — Villa Tobias (COMPLET)
+# - Palette plateformes éditable (ajout/suppression/couleur) en sidebar
+# - Pastilles de couleurs dans 📋 Réservations
+# - Calendrier mensuel coloré (fond pastel par plateforme + texte auto noir/blanc)
+# - Filtre Payé corrigé
+# - Boutons Sauvegarder/Télécharger + Restauration XLSX en sidebar
+# - SMS manuel, Export ICS, Rapport, Liste clients
+# - Pas d’expander imbriqué
 
 import streamlit as st
 import pandas as pd
@@ -8,12 +15,10 @@ from datetime import date, timedelta, datetime, timezone
 from io import BytesIO
 import hashlib
 import os
-import json
 from urllib.parse import quote
 import colorsys
 
 FICHIER = "reservations.xlsx"
-PALETTE_FILE = "plateformes.json"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -26,48 +31,19 @@ DEFAULT_PALETTE = {
     "Autre":   "#f59e0b",  # orange
 }
 
-def _valid_hex(c: str) -> bool:
-    return isinstance(c, str) and c.startswith("#") and len(c) in (4, 7)
-
-@st.cache_resource(show_spinner=False)
-def _load_palette_from_file() -> dict:
-    """Charge la palette depuis plateformes.json, sinon valeurs par défaut."""
-    try:
-        if os.path.exists(PALETTE_FILE):
-            with open(PALETTE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data = {str(k): str(v) for k, v in data.items() if _valid_hex(v)}
-            # merge avec défauts sans écraser l'existant
-            for k, v in DEFAULT_PALETTE.items():
-                data.setdefault(k, v)
-            return data
-    except Exception:
-        pass
-    return DEFAULT_PALETTE.copy()
-
-def _save_palette_to_file(pal: dict):
-    """Sauvegarde la palette sur disque ET en session."""
-    pal2 = {str(k): str(v) for k, v in pal.items() if k and _valid_hex(v)}
-    try:
-        with open(PALETTE_FILE, "w", encoding="utf-8") as f:
-            json.dump(pal2, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.sidebar.warning(f"Palette non sauvegardée sur disque : {e}")
-    st.session_state.palette = pal2
-
 def get_palette() -> dict:
     if "palette" not in st.session_state:
-        st.session_state.palette = _load_palette_from_file()
-    # nettoyage mini
+        st.session_state.palette = DEFAULT_PALETTE.copy()
+    # Nettoyage minimal
     pal = {}
     for k, v in st.session_state.palette.items():
-        if k and isinstance(k, str) and _valid_hex(v):
+        if k and isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4,7):
             pal[k] = v
     st.session_state.palette = pal
     return st.session_state.palette
 
 def save_palette(palette: dict):
-    _save_palette_to_file(palette)
+    st.session_state.palette = {str(k): str(v) for k, v in palette.items() if k and v}
 
 def platform_badge(name: str, palette: dict) -> str:
     color = palette.get(name, "#999999")
@@ -77,7 +53,7 @@ def platform_badge(name: str, palette: dict) -> str:
     )
 
 def render_palette_editor_sidebar():
-    """Éditeur palette en sidebar (pas d’imbrication d’expander)."""
+    """Éditeur palette en sidebar (sans imbrication)."""
     palette = get_palette()
     st.sidebar.markdown("## 🎨 Plateformes")
     with st.sidebar.expander("➕ Ajouter / modifier des plateformes", expanded=False):
@@ -95,11 +71,9 @@ def render_palette_editor_sidebar():
                 palette[name] = new_color
                 save_palette(palette)
                 st.success(f"✅ Plateforme « {name} » enregistrée.")
-                st.rerun()
         if colB.button("Réinitialiser la palette"):
             save_palette(DEFAULT_PALETTE.copy())
             st.success("✅ Palette réinitialisée.")
-            st.rerun()
     # Liste / suppression
     if palette:
         st.sidebar.markdown("**Plateformes existantes :**")
@@ -154,8 +128,7 @@ def normalize_tel(x):
     """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
-    s = str(x).strip()
-    s = s.replace(" ", "")
+    s = str(x).strip().replace(" ", "")
     if s.endswith(".0"):
         s = s[:-2]
     return s
@@ -180,33 +153,37 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = np.nan
 
-    if "paye" in df.columns:
-        df["paye"] = df["paye"].fillna(False).astype(bool)
-    if "sms_envoye" in df.columns:
-        df["sms_envoye"] = df["sms_envoye"].fillna(False).astype(bool)
+    # Booléens
+    df["paye"] = df["paye"].fillna(False).astype(bool)
+    df["sms_envoye"] = df["sms_envoye"].fillna(False).astype(bool)
 
+    # Dates
     for c in ["date_arrivee", "date_depart"]:
         df[c] = df[c].apply(to_date_only)
+
+    # Tel
     df["telephone"] = df["telephone"].apply(normalize_tel)
 
+    # Numériques
     for c in ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","nuitees"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    if "date_arrivee" in df.columns and "date_depart" in df.columns:
-        df["nuitees"] = [
-            (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else np.nan
-            for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
-        ]
+    # Nuitées
+    df["nuitees"] = [
+        (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else np.nan
+        for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
+    ]
 
-    if "date_arrivee" in df.columns:
-        df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else np.nan).astype("Int64")
-        df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
+    # AAAA/MM
+    df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else np.nan).astype("Int64")
+    df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
 
+    # Defaults
     df["nom_client"] = df["nom_client"].fillna("")
     df["plateforme"] = df["plateforme"].fillna("Autre")
     df["ical_uid"]   = df["ical_uid"].fillna("")
 
+    # Calculs
     for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
         df[c] = df[c].fillna(0.0)
     df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
@@ -296,7 +273,9 @@ def bouton_restaurer():
         try:
             df_new = pd.read_excel(up, converters={"telephone": normalize_tel})
             df_new = ensure_schema(df_new)
-            sauvegarder_donnees(df_new)  # écrit sur reservations.xlsx
+            with pd.ExcelWriter(FICHIER, engine="openpyxl") as w:
+                df_new.to_excel(w, index=False, sheet_name="Sheet1")
+            st.cache_data.clear()
             st.sidebar.success("✅ Fichier restauré.")
             st.rerun()
         except Exception as e:
@@ -500,13 +479,14 @@ def vue_reservations(df: pd.DataFrame):
         filtre_paye = st.selectbox("Filtrer payé", ["Tous", "Payé", "Non payé"])
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
-
+    # Aperçu plateformes (pastilles)
     st.markdown("### Plateformes")
     if palette:
         badges = " &nbsp;&nbsp;".join([platform_badge(pf, palette) for pf in sorted(palette.keys())])
         st.markdown(badges, unsafe_allow_html=True)
 
     df = ensure_schema(df)
+    # Filtre payé
     if filtre_paye == "Payé":
         df = df[df["paye"] == True].copy()
     elif filtre_paye == "Non payé":
@@ -750,10 +730,11 @@ def vue_modifier(df: pd.DataFrame):
         st.warning("Supprimé.")
         st.rerun()
 
-# ==== Couleurs calendrier ====
-
 def lighten_color(hex_color: str, factor: float = 0.75) -> str:
+    """Éclaircit une couleur hex vers un pastel; factor ∈ [0..1]."""
     hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 3:  # #rgb -> #rrggbb
+        hex_color = "".join([c*2 for c in hex_color])
     r = int(hex_color[0:2], 16)
     g = int(hex_color[2:4], 16)
     b = int(hex_color[4:6], 16)
@@ -764,6 +745,8 @@ def lighten_color(hex_color: str, factor: float = 0.75) -> str:
 
 def ideal_text_color(bg_hex: str) -> str:
     bg_hex = bg_hex.lstrip("#")
+    if len(bg_hex) == 3:
+        bg_hex = "".join([c*2 for c in bg_hex])
     r = int(bg_hex[0:2], 16)
     g = int(bg_hex[2:4], 16)
     b = int(bg_hex[4:6], 16)
@@ -822,9 +805,9 @@ def vue_calendrier(df: pd.DataFrame):
                 d = date(annee, mois_index, jour)
                 items = planning.get(d, [])
                 if len(items) > 5:
-                    content = [str(jour)] + [f"{nom}" for _, nom in items[:5]] + [f"... (+{len(items)-5})"]
+                    content = [str(jour)] + [f"{pf} · {nom}" for pf, nom in items[:5]] + [f"... (+{len(items)-5})"]
                 else:
-                    content = [str(jour)] + [f"{nom}" for _, nom in items]
+                    content = [str(jour)] + [f"{pf} · {nom}" for pf, nom in items]
                 row_text.append("\n".join(content))
 
                 if items:
@@ -1107,8 +1090,8 @@ def main():
     # Sidebar : Fichier & Palette & Maintenance
     st.sidebar.title("📁 Fichier")
     df_tmp = charger_donnees()
-    bouton_telecharger(df_tmp)
-    bouton_restaurer()
+    bouton_telecharger(df_tmp)   # Télécharger état actuel
+    bouton_restaurer()           # Restaurer depuis un xlsx
 
     render_palette_editor_sidebar()
     render_cache_section_sidebar()
