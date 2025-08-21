@@ -1,388 +1,359 @@
+# app.py — Villa Tobias (COMPLET, palette + calendrier coloré + ICS corrigé)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import calendar
-from datetime import datetime, timedelta
-import openpyxl
+from datetime import date, timedelta, datetime, timezone
+from io import BytesIO
+import hashlib
+import os
+from urllib.parse import quote
+import colorsys
 
-# ==========================
-# 📌 Constantes
-# ==========================
-DATA_FILE = "reservations.xlsx"
-LOGO_FILE = "logo.png"
+FICHIER = "reservations.xlsx"
 
-# couleurs par plateforme
-PLATFORM_COLORS = {
-    "Booking": "#1e90ff",
-    "Airbnb": "#ff5a5f",
-    "Abritel": "#f08080",
-    "Autre": "#f59e0b",
+# ==============================  PAGE CONFIG  ==============================
+st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
+
+# ==============================  PALETTE (PLATEFORMES) ==============================
+
+DEFAULT_PALETTE = {
+    "Booking": "#1e90ff",  # bleu
+    "Airbnb":  "#e74c3c",  # rouge
+    "Autre":   "#f59e0b",  # orange
 }
 
-# ==========================
-# 📌 Fonctions utilitaires
-# ==========================
-def load_data():
-    if os.path.exists(DATA_FILE):
-        return pd.read_excel(DATA_FILE)
-    else:
-        return pd.DataFrame(columns=[
-            "Plateforme", "Nom du client", "Date arrivée", "Date départ",
-            "Prix brut", "Commission", "Frais CB", "Prix net",
-            "Ménage", "Taxe séjour", "Base", "%", "Payé", "SMS"
-        ])
+def get_palette() -> dict:
+    if "palette" not in st.session_state:
+        st.session_state.palette = DEFAULT_PALETTE.copy()
+    # Nettoyage: ne garder que str->str et #xxx / #xxxxxx
+    pal = {}
+    for k, v in st.session_state.palette.items():
+        if isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
+            pal[k] = v
+    st.session_state.palette = pal
+    return st.session_state.palette
 
-def save_data(df):
-    df.to_excel(DATA_FILE, index=False)
+def save_palette(palette: dict):
+    st.session_state.palette = {str(k): str(v) for k, v in palette.items() if k and v}
 
-# formater une date
-def format_date(d):
-    if pd.isna(d):
-        return ""
-    return pd.to_datetime(d).strftime("%d/%m/%Y")
+def platform_badge(name: str, palette: dict) -> str:
+    color = palette.get(name, "#999999")
+    return (
+        f'<span style="display:inline-block;width:0.9em;height:0.9em;'
+        f'background:{color};border-radius:3px;margin-right:6px;vertical-align:-0.1em;"></span>{name}'
+    )
 
-# ==========================
-# 📌 Vue : Réservations
-# ==========================
-def vue_reservations(df: pd.DataFrame):
-    st.header("📋 Réservations")
-
-    filtre_paye = st.radio("Filtrer payé", ["Tous", "Payé", "Non payé"], horizontal=True)
-    if filtre_paye == "Payé":
-        df = df[df["Payé"] == True]
-    elif filtre_paye == "Non payé":
-        df = df[df["Payé"] == False]
-
-    plateforme_filtre = st.multiselect("Plateformes", options=df["Plateforme"].unique(), default=df["Plateforme"].unique())
-    df = df[df["Plateforme"].isin(plateforme_filtre)]
-
-    st.dataframe(df, use_container_width=True)
-
-# ==========================
-# 📌 Vue : Calendrier
-# ==========================
-def vue_calendrier(df: pd.DataFrame):
-    st.header("📅 Calendrier")
-
-    # Sélection du mois et de l'année
-    today = datetime.today()
-    col1, col2 = st.columns(2)
-    mois = col1.selectbox("Mois", list(calendar.month_name)[1:], index=today.month-1)
-    annee = col2.number_input("Année", value=today.year, step=1)
-
-    mois_num = list(calendar.month_name).index(mois)
-    cal = calendar.Calendar(firstweekday=0)
-
-    jours = cal.monthdatescalendar(annee, mois_num)
-
-    # Construire la grille
-    grille = []
-    for semaine in jours:
-        ligne = []
-        for jour in semaine:
-            if jour.month != mois_num:
-                ligne.append("")
+def render_palette_editor_sidebar():
+    """Éditeur palette en sidebar (pas d’imbrication d’expander)."""
+    palette = get_palette()
+    st.sidebar.markdown("## 🎨 Plateformes")
+    with st.sidebar.expander("➕ Ajouter / modifier des plateformes", expanded=False):
+        c1, c2 = st.columns([2,1])
+        with c1:
+            new_name = st.text_input("Nom de la plateforme", key="pal_new_name", placeholder="Ex: Expedia")
+        with c2:
+            new_color = st.color_picker("Couleur", key="pal_new_color", value="#9b59b6")
+        colA, colB = st.columns(2)
+        if colA.button("Ajouter / Mettre à jour"):
+            name = (new_name or "").strip()
+            if not name:
+                st.warning("Entrez un nom de plateforme.")
             else:
-                resa_jour = df[(pd.to_datetime(df["Date arrivée"]) <= jour) & (pd.to_datetime(df["Date départ"]) > jour)]
-                if not resa_jour.empty:
-                    contenu = ""
-                    color = PLATFORM_COLORS.get(resa_jour.iloc[0]["Plateforme"], "#cccccc")
-                    for _, r in resa_jour.iterrows():
-                        contenu += f"<div style='background:{color};color:white;padding:2px;border-radius:4px;margin:1px'>{r['Nom du client']}</div>"
-                    ligne.append(f"<b>{jour.day}</b><br>{contenu}")
-                else:
-                    ligne.append(str(jour.day))
-        grille.append(ligne)
+                palette[name] = new_color
+                save_palette(palette)
+                st.success(f"✅ Plateforme « {name} » enregistrée.")
+        if colB.button("Réinitialiser la palette"):
+            save_palette(DEFAULT_PALETTE.copy())
+            st.success("✅ Palette réinitialisée.")
+    if palette:
+        st.sidebar.markdown("**Plateformes existantes :**")
+        for pf in sorted(palette.keys()):
+            cols = st.sidebar.columns([1, 3, 1])
+            with cols[0]:
+                st.markdown(
+                    f'<span style="display:inline-block;width:1.1em;height:1.1em;background:{palette[pf]};border-radius:3px;"></span>',
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                st.markdown(f"{pf}")
+            with cols[2]:
+                if st.button("🗑", key=f"del_{pf}"):
+                    pal = get_palette()
+                    if pf in pal:
+                        del pal[pf]
+                        save_palette(pal)
+                        st.rerun()
 
-    # Afficher la grille avec st.markdown (HTML)
-    table_html = "<table style='width:100%;border-collapse:collapse;text-align:center'>"
-    jours_sem = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
-    table_html += "<tr>" + "".join([f"<th style='border:1px solid #ccc;padding:4px'>{j}</th>" for j in jours_sem]) + "</tr>"
-    for semaine in grille:
-        table_html += "<tr>" + "".join([f"<td style='border:1px solid #ccc;vertical-align:top;height:80px'>{c}</td>" for c in semaine]) + "</tr>"
-    table_html += "</table>"
+# ==============================  MAINTENANCE / CACHE  ==============================
 
-    st.markdown(table_html, unsafe_allow_html=True)
+def render_cache_section_sidebar():
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("## 🧰 Maintenance")
+    if st.sidebar.button("♻️ Vider le cache et relancer"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
+        st.sidebar.success("Cache vidé. Redémarrage…")
+        st.rerun()
 
-    # Légende
-    st.subheader("🎨 Légende plateformes")
-    legende = ""
-    for pf, color in PLATFORM_COLORS.items():
-        legende += f"<span style='background:{color};color:white;padding:4px;border-radius:4px;margin-right:8px'>{pf}</span>"
-    st.markdown(legende, unsafe_allow_html=True)
+# ==============================  OUTILS  ==============================
 
-
-# ==========================
-# 📌 Normalisation & calculs
-# ==========================
-def to_date(x):
+def to_date_only(x):
     if pd.isna(x) or x is None:
-        return pd.NaT
+        return None
     try:
-        return pd.to_datetime(x).normalize()
+        return pd.to_datetime(x).date()
     except Exception:
-        return pd.NaT
+        return None
+
+def format_date_str(d):
+    return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
+
+def normalize_tel(x):
+    """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return ""
+    s = str(x).strip()
+    s = s.replace(" ", "")
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+# ==============================  SCHEMA & CALCULS  ==============================
+
+BASE_COLS = [
+    "paye", "nom_client", "sms_envoye",
+    "plateforme","telephone",
+    "date_arrivee","date_depart","nuitees",
+    "prix_brut","commissions","frais_cb","prix_net",
+    "menage","taxes_sejour","base",
+    "charges","%", "AAAA","MM","ical_uid"
+]
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    cols = [
-        "Plateforme", "Nom du client", "Date arrivée", "Date départ",
-        "Prix brut", "Commission", "Frais CB", "Prix net",
-        "Ménage", "Taxe séjour", "Base", "%", "Payé", "SMS"
-    ]
-    for c in cols:
+    if df is None:
+        df = pd.DataFrame()
+    df = df.copy()
+
+    for c in BASE_COLS:
         if c not in df.columns:
             df[c] = np.nan
 
-    # Types
-    df["Plateforme"] = df["Plateforme"].fillna("Autre").astype(str)
-    df["Nom du client"] = df["Nom du client"].fillna("").astype(str)
-    df["Date arrivée"] = df["Date arrivée"].apply(to_date)
-    df["Date départ"] = df["Date départ"].apply(to_date)
-    num_cols = ["Prix brut","Commission","Frais CB","Prix net","Ménage","Taxe séjour","Base","%"]
-    for c in num_cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+    if "paye" in df.columns:
+        df["paye"] = df["paye"].fillna(False).astype(bool)
+    if "sms_envoye" in df.columns:
+        df["sms_envoye"] = df["sms_envoye"].fillna(False).astype(bool)
 
-    # Calculs
-    df["Prix net"] = (df["Prix brut"] - df["Commission"] - df["Frais CB"]).clip(lower=0)
-    df["Base"] = (df["Prix net"] - df["Ménage"] - df["Taxe séjour"]).clip(lower=0)
+    for c in ["date_arrivee", "date_depart"]:
+        df[c] = df[c].apply(to_date_only)
+    df["telephone"] = df["telephone"].apply(normalize_tel)
+
+    for c in ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%","nuitees"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if "date_arrivee" in df.columns and "date_depart" in df.columns:
+        df["nuitees"] = [
+            (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else np.nan
+            for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
+        ]
+
+    if "date_arrivee" in df.columns:
+        df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else np.nan).astype("Int64")
+        df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
+
+    df["nom_client"] = df["nom_client"].fillna("")
+    df["plateforme"] = df["plateforme"].fillna("Autre")
+    df["ical_uid"]   = df["ical_uid"].fillna("")
+
+    for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
+        df[c] = df[c].fillna(0.0)
+    df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
+    df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).clip(lower=0)
+    df["charges"]  = (df["prix_brut"] - df["prix_net"]).clip(lower=0)
     with pd.option_context("mode.use_inf_as_na", True):
-        df["%"] = (df["Commission"] + df["Frais CB"]) / df["Prix brut"] * 100
-    df["%"] = df["%"].fillna(0).round(2)
+        df["%"] = (df["charges"] / df["prix_brut"] * 100).fillna(0)
 
-    # Bool
-    df["Payé"] = df["Payé"].fillna(False).astype(bool)
-    df["SMS"] = df["SMS"].fillna(False).astype(bool)
+    for c in ["prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges","%"]:
+        df[c] = df[c].round(2)
 
-    # Tri par date
-    df = df.sort_values(by=["Date arrivée","Nom du client"], na_position="last").reset_index(drop=True)
-    return df
+    ordered_cols = [c for c in BASE_COLS if c in df.columns]
+    rest_cols = [c for c in df.columns if c not in ordered_cols]
+    return df[ordered_cols + rest_cols]
 
+def is_total_row(row: pd.Series) -> bool:
+    name_is_total = str(row.get("nom_client","")).strip().lower() == "total"
+    pf_is_total   = str(row.get("plateforme","")).strip().lower() == "total"
+    d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
+    no_dates = not isinstance(d1, date) and not isinstance(d2, date)
+    has_money = any(pd.notna(row.get(c)) and float(row.get(c) or 0) != 0
+                    for c in ["prix_brut","prix_net","base","charges"])
+    return name_is_total or pf_is_total or (no_dates and has_money)
 
-# ==========================
-# 📌 Vue : Ajouter
-# ==========================
-def vue_ajouter(df: pd.DataFrame):
-    st.header("➕ Ajouter une réservation")
+def split_totals(df: pd.DataFrame):
+    if df is None or df.empty:
+        return df, df
+    mask = df.apply(is_total_row, axis=1)
+    return df[~mask].copy(), df[mask].copy()
 
-    c1, c2 = st.columns(2)
-    plateforme = c1.selectbox("Plateforme", options=list(PLATFORM_COLORS.keys()), index=0)
-    nom = c2.text_input("Nom du client")
+def sort_core(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    by = [c for c in ["date_arrivee","nom_client"] if c in df.columns]
+    return df.sort_values(by=by, na_position="last").reset_index(drop=True)
 
-    c3, c4 = st.columns(2)
-    d1 = c3.date_input("Date arrivée", value=datetime.today().date())
-    d2 = c4.date_input("Date départ", value=(datetime.today() + timedelta(days=1)).date(), min_value=d1 + timedelta(days=1))
+# ==============================  EXCEL I/O  ==============================
 
-    c5, c6, c7 = st.columns(3)
-    brut = c5.number_input("Prix brut (€)", min_value=0.0, step=1.0)
-    commission = c6.number_input("Commission (€)", min_value=0.0, step=1.0)
-    frais_cb = c7.number_input("Frais CB (€)", min_value=0.0, step=1.0)
+@st.cache_data(show_spinner=False)
+def _read_excel_cached(path: str, mtime: float):
+    return pd.read_excel(path, converters={"telephone": normalize_tel})
 
-    c8, c9 = st.columns(2)
-    menage = c8.number_input("Ménage (€)", min_value=0.0, step=1.0)
-    taxe = c9.number_input("Taxe séjour (€)", min_value=0.0, step=1.0)
+def charger_donnees() -> pd.DataFrame:
+    if not os.path.exists(FICHIER):
+        return ensure_schema(pd.DataFrame())
+    try:
+        mtime = os.path.getmtime(FICHIER)
+        df = _read_excel_cached(FICHIER, mtime)
+        return ensure_schema(df)
+    except Exception as e:
+        st.error(f"Erreur de lecture Excel : {e}")
+        return ensure_schema(pd.DataFrame())
 
-    c10, c11 = st.columns(2)
-    paye = c10.checkbox("Payé", value=False)
-    sms = c11.checkbox("SMS envoyé", value=False)
+def _force_telephone_text_format_openpyxl(writer, df_to_save: pd.DataFrame, sheet_name: str):
+    try:
+        ws = writer.sheets.get(sheet_name) or writer.sheets.get('Sheet1', None)
+        if ws is None or "telephone" not in df_to_save.columns:
+            return
+        col_idx = df_to_save.columns.get_loc("telephone") + 1
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+            row[0].number_format = '@'
+    except Exception:
+        pass
 
-    if st.button("Enregistrer"):
-        new_row = {
-            "Plateforme": plateforme,
-            "Nom du client": nom.strip(),
-            "Date arrivée": pd.to_datetime(d1),
-            "Date départ": pd.to_datetime(d2),
-            "Prix brut": float(brut),
-            "Commission": float(commission),
-            "Frais CB": float(frais_cb),
-            "Prix net": 0.0,  # recalculé par ensure_schema
-            "Ménage": float(menage),
-            "Taxe séjour": float(taxe),
-            "Base": 0.0,      # recalculé
-            "%": 0.0,         # recalculé
-            "Payé": bool(paye),
-            "SMS": bool(sms)
-        }
-        df2 = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        df2 = ensure_schema(df2)
-        save_data(df2)
-        st.success("✅ Réservation ajoutée.")
-        st.experimental_rerun()
-
-
-# ==========================
-# 📌 Vue : Modifier / Supprimer
-# ==========================
-def vue_modifier(df: pd.DataFrame):
-    st.header("✏️ Modifier / Supprimer une réservation")
-    if df.empty:
-        st.info("Aucune réservation.")
-        return
-
-    df_show = df.copy()
-    df_show["Arrivée"] = df_show["Date arrivée"].dt.strftime("%d/%m/%Y").fillna("")
-    options = (df_show["Nom du client"] + " — " + df_show["Plateforme"] + " — " + df_show["Arrivée"]).tolist()
-    choix = st.selectbox("Choisir une réservation", options)
-
-    idx = options.index(choix)
-    r = df.iloc[idx]
-
-    c1, c2 = st.columns(2)
-    plateforme = c1.selectbox("Plateforme", options=list(PLATFORM_COLORS.keys()), index=list(PLATFORM_COLORS.keys()).index(r["Plateforme"]) if r["Plateforme"] in PLATFORM_COLORS else 0)
-    nom = c2.text_input("Nom du client", value=r["Nom du client"])
-
-    c3, c4 = st.columns(2)
-    d1 = c3.date_input("Date arrivée", value=r["Date arrivée"].date() if not pd.isna(r["Date arrivée"]) else datetime.today().date())
-    d2 = c4.date_input("Date départ", value=r["Date départ"].date() if not pd.isna(r["Date départ"]) else (datetime.today()+timedelta(days=1)).date(), min_value=d1 + timedelta(days=1))
-
-    c5, c6, c7 = st.columns(3)
-    brut = c5.number_input("Prix brut (€)", min_value=0.0, step=1.0, value=float(r["Prix brut"]))
-    commission = c6.number_input("Commission (€)", min_value=0.0, step=1.0, value=float(r["Commission"]))
-    frais_cb = c7.number_input("Frais CB (€)", min_value=0.0, step=1.0, value=float(r["Frais CB"]))
-
-    c8, c9 = st.columns(2)
-    menage = c8.number_input("Ménage (€)", min_value=0.0, step=1.0, value=float(r["Ménage"]))
-    taxe = c9.number_input("Taxe séjour (€)", min_value=0.0, step=1.0, value=float(r["Taxe séjour"]))
-
-    c10, c11 = st.columns(2)
-    paye = c10.checkbox("Payé", value=bool(r["Payé"]))
-    sms = c11.checkbox("SMS envoyé", value=bool(r["SMS"]))
-
-    colA, colB = st.columns(2)
-    if colA.button("💾 Enregistrer les modifications"):
-        df.at[idx, "Plateforme"] = plateforme
-        df.at[idx, "Nom du client"] = nom.strip()
-        df.at[idx, "Date arrivée"] = pd.to_datetime(d1)
-        df.at[idx, "Date départ"] = pd.to_datetime(d2)
-        df.at[idx, "Prix brut"] = float(brut)
-        df.at[idx, "Commission"] = float(commission)
-        df.at[idx, "Frais CB"] = float(frais_cb)
-        df.at[idx, "Ménage"] = float(menage)
-        df.at[idx, "Taxe séjour"] = float(taxe)
-        df.at[idx, "Payé"] = bool(paye)
-        df.at[idx, "SMS"] = bool(sms)
-
-        df = ensure_schema(df)
-        save_data(df)
-        st.success("✅ Modifications enregistrées.")
-        st.experimental_rerun()
-
-    if colB.button("🗑 Supprimer cette réservation"):
-        df2 = df.drop(index=idx).reset_index(drop=True)
-        save_data(ensure_schema(df2))
-        st.warning("🗑 Réservation supprimée.")
-        st.experimental_rerun()
-
-
-# ==========================
-# 📌 Vue : Rapport
-# ==========================
-def vue_rapport(df: pd.DataFrame):
-    st.header("📊 Rapport")
-    if df.empty:
-        st.info("Aucune donnée.")
-        return
-
+def sauvegarder_donnees(df: pd.DataFrame):
     df = ensure_schema(df)
-    df["Année"] = df["Date arrivée"].dt.year
-    df["Mois"] = df["Date arrivée"].dt.month
+    core, totals = split_totals(df)
+    core = sort_core(core)
+    out = pd.concat([core, totals], ignore_index=True)
+    try:
+        with pd.ExcelWriter(FICHIER, engine="openpyxl") as w:
+            out.to_excel(w, index=False, sheet_name="Sheet1")
+            _force_telephone_text_format_openpyxl(w, out, "Sheet1")
+        st.cache_data.clear()
+        st.success("💾 Sauvegarde Excel effectuée.")
+    except Exception as e:
+        st.error(f"Échec de sauvegarde Excel : {e}")
 
-    c1, c2, c3 = st.columns(3)
-    annees = sorted([int(x) for x in df["Année"].dropna().unique()])
-    annee = c1.selectbox("Année", annees, index=len(annees)-1)
-    pf_opt = ["Toutes"] + sorted(df["Plateforme"].dropna().unique().tolist())
-    pf = c2.selectbox("Plateforme", pf_opt)
-    mois_opt = ["Tous"] + [f"{i:02d}" for i in range(1,13)]
-    mois_label = c3.selectbox("Mois", mois_opt)
+def bouton_restaurer():
+    up = st.sidebar.file_uploader("📤 Restauration xlsx", type=["xlsx"], help="Remplace le fichier actuel")
+    if up is not None:
+        try:
+            df_new = pd.read_excel(up, converters={"telephone": normalize_tel})
+            df_new = ensure_schema(df_new)
+            sauvegarder_donnees(df_new)
+            st.sidebar.success("✅ Fichier restauré.")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erreur import: {e}")
 
-    data = df[df["Année"] == int(annee)].copy()
-    if pf != "Toutes":
-        data = data[data["Plateforme"] == pf]
-    if mois_label != "Tous":
-        data = data[data["Mois"] == int(mois_label)]
-
-    if data.empty:
-        st.info("Aucune donnée pour ces filtres.")
-        return
-
-    # Détail
-    show = data[[
-        "Payé","Nom du client","Plateforme","Date arrivée","Date départ",
-        "Prix brut","Commission","Frais CB","Prix net","Ménage","Taxe séjour","Base","%"
-    ]].copy()
-    show["Date arrivée"] = show["Date arrivée"].dt.strftime("%d/%m/%Y")
-    show["Date départ"] = show["Date départ"].dt.strftime("%d/%m/%Y")
-    st.dataframe(show, use_container_width=True)
-
-    # Totaux
-    tot_brut = data["Prix brut"].sum()
-    tot_net = data["Prix net"].sum()
-    tot_base = data["Base"].sum()
-    tot_com = (data["Commission"] + data["Frais CB"]).sum()
-    colA, colB, colC, colD = st.columns(4)
-    colA.metric("Total brut", f"{tot_brut:,.2f} €")
-    colB.metric("Total net", f"{tot_net:,.2f} €")
-    colC.metric("Base", f"{tot_base:,.2f} €")
-    colD.metric("Commissions + CB", f"{tot_com:,.2f} €")
-
-    # Export XLSX
-    from io import BytesIO
+def bouton_telecharger(df: pd.DataFrame):
     buf = BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        show.to_excel(writer, index=False, sheet_name="Rapport")
-    st.download_button(
-        "⬇️ Export XLSX",
-        data=buf.getvalue(),
-        file_name=f"rapport_{annee}{'' if mois_label=='Tous' else '_'+mois_label}.xlsx",
+    data_xlsx = b""
+    try:
+        ensure_schema(df).to_excel(buf, index=False, engine="openpyxl")
+        data_xlsx = buf.getvalue()
+    except Exception as e:
+        st.sidebar.error(f"Export XLSX indisponible : {e}")
+        data_xlsx = b""
+    st.sidebar.download_button(
+        "💾 Sauvegarde xlsx",
+        data=data_xlsx,
+        file_name="reservations.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=(len(data_xlsx) == 0),
+        help="Utilisez le bouton Sauvegarde depuis les écrans d’édition."
     )
 
+# ==============================  ICS EXPORT  ==============================
 
-# ==========================
-# 📌 Vue : Clients
-# ==========================
-def vue_clients(df: pd.DataFrame):
-    st.header("👥 Liste des clients")
-    if df.empty:
-        st.info("Aucune donnée.")
-        return
+def _ics_escape(text: str) -> str:
+    if text is None:
+        return ""
+    s = str(text)
+    s = s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+    s = s.replace("\n", "\\n")
+    return s
 
+def _fmt_date_ics(d: date) -> str:
+    return d.strftime("%Y%m%d")
+
+def _dtstamp_utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+def _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1"):
+    base = f"{nom_client}|{plateforme}|{d1}|{d2}|{tel}|{salt}"
+    h = hashlib.sha1(base.encode("utf-8")).hexdigest()
+    return f"vt-{h}@villatobias"
+
+def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations") -> str:
     df = ensure_schema(df)
-    show = df[[
-        "Nom du client","Plateforme","Date arrivée","Date départ",
-        "Prix brut","Prix net","Base","Payé"
-    ]].copy()
-    show["Date arrivée"] = show["Date arrivée"].dt.strftime("%d/%m/%Y")
-    show["Date départ"] = show["Date départ"].dt.strftime("%d/%m/%Y")
-    st.dataframe(show, use_container_width=True)
 
-    st.download_button(
-        "⬇️ Export CSV",
-        data=show.to_csv(index=False).encode("utf-8"),
-        file_name="clients.csv",
-        mime="text/csv"
-    )
+    # En-tête si vide
+    if df.empty:
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//Villa Tobias//Reservations//FR",
+            f"X-WR-CALNAME:{_ics_escape(cal_name)}",
+            "CALSCALE:GREGORIAN",
+            "METHOD:PUBLISH",
+            "END:VCALENDAR",
+        ]
+        return "\r\n".join(lines) + "\r\n"
 
+    core, _ = split_totals(df)
+    core = sort_core(core)
 
-# ==========================
-# 📌 Vue : Export ICS simple
-# ==========================
-def make_ics(df: pd.DataFrame) -> str:
-    # ICS minimal (événements all-day)
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Villa Tobias//FR"
+        "PRODID:-//Villa Tobias//Reservations//FR",
+        f"X-WR-CALNAME:{_ics_escape(cal_name)}",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
     ]
-    for _, r in df.iterrows():
-        if pd.isna(r["Date arrivée"]) or pd.isna(r["Date départ"]):
+
+    for _, row in core.iterrows():
+        d1 = row.get("date_arrivee")
+        d2 = row.get("date_depart")
+        if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
-        d1 = pd.to_datetime(r["Date arrivée"]).strftime("%Y%m%d")
-        d2 = pd.to_datetime(r["Date départ"]).strftime("%Y%m%d")
-        title = f"{r['Plateforme']} - {r['Nom du client']}"
-        lines += [
-            "BEGIN:VEVENT",
-            f"DTSTART;VALUE=DATE:{d1}",
-            f"DTEND;VALUE=DATE:{d2}",
-            f"SUMMARY:{title}",
-            "END:VEVENT"
+
+        plateforme = str(row.get("plateforme") or "").strip()
+        nom_client = str(row.get("nom_client") or "").strip()
+        tel = str(row.get("telephone") or "").strip()
+        brut = float(row.get("prix_brut") or 0.0)
+        net = float(row.get("prix_net") or 0.0)
+        nuitees = int(row.get("nuitees") or ((d2 - d1).days))
+
+        summary = " - ".join([x for x in [plateforme, nom_client, tel] if x])
+
+        desc = (
+            f"Plateforme: {plateforme}\\n"
+            f"Client: {nom_client}\\n"
+            f"Téléphone: {tel}\\n"
+            f"Arrivee: {d1.strftime('%Y/%m/%d')}\\n"
+            f"Depart: {d2.strftime('%Y/%m/%d')}\\n"
+            f"Nuitees: {nuitees}\\n"
+            f"Brut: {brut:.2f} €\\nNet: {net:.2f} €"
+        )
+
+        uid_existing = str(row.get("ical_uid") or "").strip()
+        uid = uid_existing if uid_existing else _stable_uid(n
