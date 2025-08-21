@@ -1,10 +1,11 @@
-# app.py — Villa Tobias (COMPLET, calendrier "type Google Calendar" par case)
-# - Calendrier mensuel en grille
-# - Chaque case (jour) est colorée selon la plateforme (dominante) et affiche le(s) nom(s) client
-# - Légende des plateformes (couleur) sous le calendrier
-# - Palette plateformes éditable en sidebar (ajout / suppression / couleur)
-# - Sauvegarde/restauration Excel inchangées
-# - Filtre Payé corrigé, SMS, ICS, Rapport, Liste clients inchangés
+# app.py — Villa Tobias (COMPLET)
+# - Palette plateformes éditable & persistée (plateformes.json) en sidebar
+# - Calendrier mensuel en grille :
+#     * 1 résa : case colorée avec couleur de la plateforme + nom(s)
+#     * >1 résa : fond neutre + noms avec pastilles colorées
+#   + Légende plateformes
+# - Restauration / Sauvegarde Excel (XLSX) en sidebar
+# - Filtre Payé corrigé, SMS, ICS, Rapport, Liste
 # - Pas d’expander imbriqué
 
 import streamlit as st
@@ -15,11 +16,12 @@ from datetime import date, timedelta, datetime, timezone
 from io import BytesIO
 import hashlib
 import os
-from urllib.parse import quote
+import json
 import colorsys
-from collections import Counter
+from urllib.parse import quote
 
 FICHIER = "reservations.xlsx"
+PALETTE_FILE = "plateformes.json"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -32,19 +34,46 @@ DEFAULT_PALETTE = {
     "Autre":   "#f59e0b",  # orange
 }
 
+def _load_palette_file() -> dict:
+    try:
+        if os.path.exists(PALETTE_FILE):
+            with open(PALETTE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    # nettoyage simple
+                    clean = {}
+                    for k, v in data.items():
+                        if isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4,7):
+                            clean[k] = v
+                    return clean
+    except Exception:
+        pass
+    return DEFAULT_PALETTE.copy()
+
+def _save_palette_file(palette: dict):
+    try:
+        with open(PALETTE_FILE, "w", encoding="utf-8") as f:
+            json.dump(palette, f, ensure_ascii=False, indent=2)
+    except Exception:
+        # Pas bloquant pour l'app si l'écriture échoue
+        pass
+
 def get_palette() -> dict:
+    # Priorité : session_state -> fichier -> défaut
     if "palette" not in st.session_state:
-        st.session_state.palette = DEFAULT_PALETTE.copy()
-    # Nettoyage minimal
+        st.session_state.palette = _load_palette_file()
+    # Nettoyage minimal en runtime
     pal = {}
     for k, v in st.session_state.palette.items():
-        if k and isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
+        if k and isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4,7):
             pal[k] = v
     st.session_state.palette = pal
     return st.session_state.palette
 
 def save_palette(palette: dict):
-    st.session_state.palette = {str(k): str(v) for k, v in palette.items() if k and v}
+    pal = {str(k): str(v) for k, v in palette.items() if k and v}
+    st.session_state.palette = pal
+    _save_palette_file(pal)
 
 def platform_badge(name: str, palette: dict) -> str:
     color = palette.get(name, "#999999")
@@ -54,9 +83,10 @@ def platform_badge(name: str, palette: dict) -> str:
     )
 
 def render_palette_editor_sidebar():
-    """Éditeur palette en sidebar (pas d’imbrication d’expander)."""
+    """Éditeur palette en sidebar (pas d’imbrication d’expander dans la page principale)."""
     palette = get_palette()
     st.sidebar.markdown("## 🎨 Plateformes")
+
     with st.sidebar.expander("➕ Ajouter / modifier des plateformes", expanded=False):
         c1, c2 = st.columns([2,1])
         with c1:
@@ -64,7 +94,7 @@ def render_palette_editor_sidebar():
         with c2:
             new_color = st.color_picker("Couleur", key="pal_new_color", value="#9b59b6")
         colA, colB = st.columns(2)
-        if colA.button("Ajouter / Mettre à jour"):
+        if colA.button("Ajouter / Mettre à jour", use_container_width=True):
             name = (new_name or "").strip()
             if not name:
                 st.warning("Entrez un nom de plateforme.")
@@ -72,10 +102,13 @@ def render_palette_editor_sidebar():
                 palette[name] = new_color
                 save_palette(palette)
                 st.success(f"✅ Plateforme « {name} » enregistrée.")
-        if colB.button("Réinitialiser la palette"):
+                st.rerun()
+        if colB.button("Réinitialiser la palette", use_container_width=True):
             save_palette(DEFAULT_PALETTE.copy())
             st.success("✅ Palette réinitialisée.")
-    # Liste / suppression
+            st.rerun()
+
+    # Liste & suppression
     if palette:
         st.sidebar.markdown("**Plateformes existantes :**")
         for pf in sorted(palette.keys()):
@@ -86,7 +119,7 @@ def render_palette_editor_sidebar():
                     unsafe_allow_html=True,
                 )
             with cols[1]:
-                st.markdown(f"{pf}")
+                st.markdown(pf)
             with cols[2]:
                 if st.button("🗑", key=f"del_{pf}"):
                     pal = get_palette()
@@ -129,10 +162,34 @@ def normalize_tel(x):
     """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
-    s = str(x).strip().replace(" ", "")
+    s = str(x).strip()
+    s = s.replace(" ", "")
     if s.endswith(".0"):
         s = s[:-2]
     return s
+
+# Couleur : éclaircir et texte idéal
+def lighten_color(hex_color: str, factor: float = 0.8) -> str:
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = "".join([c*2 for c in hex_color])
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
+    l = min(1.0, l + (1.0 - l) * factor)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
+
+def ideal_text_color(bg_hex: str) -> str:
+    bg_hex = bg_hex.lstrip("#")
+    if len(bg_hex) == 3:
+        bg_hex = "".join([c*2 for c in bg_hex])
+    r = int(bg_hex[0:2], 16)
+    g = int(bg_hex[2:4], 16)
+    b = int(bg_hex[4:6], 16)
+    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
+    return "#000000" if luminance > 0.6 else "#ffffff"
 
 # ==============================  SCHEMA & CALCULS  ==============================
 
@@ -392,8 +449,8 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Nous sommes ravis de vous accueillir bientot à Nice. Pour organiser au mieux votre reception, merci de nous indiquer "
         "votre heure d'arrivee.\n\n "
         "Sachez egalement qu'une place de parking vous est allouee.\n\n "
-        "Nous vous rappelons que le check-in se fait a partir de 2h pm et que le check-out au maximum 11h am.\n\n "
-        "Vous trouverez des consignes a bagages en cas de besoin.\n\n "
+        "Nous vous rappelons que le check-inse fait a partir de 2h pm et que le check-outau maximum 11h am.\n\n "
+        "Vous trouverez des consignes a bagages des consignes a bagages, en cas de besoin.\n\n "
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n "
         "Annick & Charley"
     )
@@ -470,14 +527,13 @@ def vue_reservations(df: pd.DataFrame):
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
 
-    # Pastilles plateformes
+    # Pastilles plateformes (hors expander)
     st.markdown("### Plateformes")
     if palette:
         badges = " &nbsp;&nbsp;".join([platform_badge(pf, palette) for pf in sorted(palette.keys())])
         st.markdown(badges, unsafe_allow_html=True)
 
     df = ensure_schema(df)
-    # Filtre payé
     if filtre_paye == "Payé":
         df = df[df["paye"] == True].copy()
     elif filtre_paye == "Non payé":
@@ -532,7 +588,7 @@ def vue_reservations(df: pd.DataFrame):
         }
     )
 
-    c1, c2 = st.columns([1,3])
+    c1, _ = st.columns([1,3])
     if c1.button("💾 Enregistrer les cases cochées"):
         for _, r in edited.iterrows():
             ridx = int(r["__rowid"])
@@ -721,29 +777,7 @@ def vue_modifier(df: pd.DataFrame):
         st.warning("Supprimé.")
         st.rerun()
 
-# -------- Couleurs utilitaires pour le calendrier --------
-
-def lighten_color(hex_color: str, factor: float = 0.75) -> str:
-    hex_color = hex_color.lstrip("#")
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
-    l = min(1.0, l + (1.0 - l) * factor)
-    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
-    return f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
-
-def ideal_text_color(bg_hex: str) -> str:
-    bg_hex = bg_hex.lstrip("#")
-    r = int(bg_hex[0:2], 16)
-    g = int(bg_hex[2:4], 16)
-    b = int(bg_hex[4:6], 16)
-    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
-    return "#000000" if luminance > 0.6 else "#ffffff"
-
 def vue_calendrier(df: pd.DataFrame):
-    """Grille mensuelle : chaque case/jour colorée selon la plateforme dominante,
-       texte = noms des clients (un par ligne)."""
     palette = get_palette()
     st.title("📅 Calendrier mensuel")
     df = ensure_schema(df)
@@ -763,90 +797,89 @@ def vue_calendrier(df: pd.DataFrame):
     nb_jours = calendar.monthrange(annee, mois_index)[1]
     jours = [date(annee, mois_index, j+1) for j in range(nb_jours)]
 
-    # Préparer contenu par jour
+    # Construire planning jour -> [(pf, nom)]
     core, _ = split_totals(df)
-    day_entries = {j: [] for j in jours}  # liste de tuples (plateforme, nom_client)
+    planning = {j: [] for j in jours}
     for _, row in core.iterrows():
         d1 = row["date_arrivee"]; d2 = row["date_depart"]
         if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
-        pf = str(row.get("plateforme") or "Autre")
-        nom = str(row.get("nom_client") or "").strip()
+        pf = str(row["plateforme"] or "Autre")
+        nom = str(row["nom_client"] or "")
         for j in jours:
             if d1 <= j < d2:
-                day_entries[j].append((pf, nom))
+                planning[j].append((pf, nom))
 
-    # Construire le tableau (texte + styles)
     headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
     monthcal = calendar.monthcalendar(annee, mois_index)
 
-    table_text = []
-    table_bg = []
-    table_fg = []
+    table = []
+    bg_table = []
+    fg_table = []
 
     for semaine in monthcal:
-        row_txt = []
+        row_text = []
         row_bg = []
         row_fg = []
         for jour in semaine:
             if jour == 0:
-                row_txt.append("")                 # case vide
+                row_text.append("")
                 row_bg.append("transparent")
                 row_fg.append(None)
-                continue
-
-            d = date(annee, mois_index, jour)
-            items = day_entries.get(d, [])
-
-            # Texte = jour + liste des noms
-            lines = [str(jour)]
-            if items:
-                # n'afficher que les noms (comme demandé)
-                names = [n for (_, n) in items if n]
-                # couper après 6 lignes pour lisibilité
-                if len(names) > 6:
-                    names = names[:6] + [f"... (+{len(items)-6})"]
-                lines.extend(names)
-            cell_text = "\n".join(lines)
-            row_txt.append(cell_text)
-
-            # Couleur : plateforme dominante du jour (la plus fréquente). À égalité -> première.
-            if items:
-                pf_list = [pf for (pf, _) in items]
-                pf_dom = Counter(pf_list).most_common(1)[0][0]
-                base = palette.get(pf_dom, "#999999")
-                bg = lighten_color(base, 0.75)  # pastel pour lisibilité
-                fg = ideal_text_color(bg)
             else:
-                bg = "transparent"
-                fg = None
-            row_bg.append(bg)
-            row_fg.append(fg)
-        table_text.append(row_txt)
-        table_bg.append(row_bg)
-        table_fg.append(row_fg)
+                d = date(annee, mois_index, jour)
+                items = planning.get(d, [])
+                # Contenu : jour + liste des noms (avec pastille si >1)
+                if len(items) == 0:
+                    content = [str(jour)]
+                    bg = "transparent"
+                    fg = None
+                elif len(items) == 1:
+                    pf, nom = items[0]
+                    base = palette.get(pf, "#999999")
+                    bg = lighten_color(base, 0.8)
+                    fg = ideal_text_color(bg)
+                    content = [str(jour), nom]
+                else:
+                    # Plusieurs résas : fond neutre + pastilles colorées par plateforme
+                    content = [str(jour)]
+                    for pf, nom in items:
+                        dot = f'<span style="display:inline-block;width:0.7em;height:0.7em;background:{palette.get(pf,"#999")};border-radius:50%;margin-right:6px;"></span>'
+                        content.append(f"{dot}{nom}")
+                    bg = "#f7f7f7"
+                    fg = "#111111"
 
-    df_table = pd.DataFrame(table_text, columns=headers)
+                # Joindre : garder HTML pour les pastilles multi-résa
+                row_text.append("\n".join(content))
+                row_bg.append(bg)
+                row_fg.append(fg)
+        table.append(row_text)
+        bg_table.append(row_bg)
+        fg_table.append(row_fg)
 
-    def style_row(vals, r):
+    df_table = pd.DataFrame(table, columns=headers)
+
+    def style_row(vals, row_idx):
         css = []
-        for c in range(len(vals)):
-            bg = table_bg[r][c]
-            fg = table_fg[r][c] or "inherit"
+        for col_idx, _ in enumerate(vals):
+            bg = bg_table[row_idx][col_idx]
+            fg = fg_table[row_idx][col_idx] or "inherit"
             css.append(
                 f"background-color:{bg};color:{fg};white-space:pre-wrap;"
-                f"border:1px solid rgba(127,127,127,0.25);"
+                f"vertical-align:top;border:1px solid rgba(127,127,127,0.25);"
             )
         return css
 
+    # Permettre HTML dans les cellules (pour pastilles)
+    df_table = df_table.replace("\n", "<br>", regex=True)
     styler = df_table.style
     for r in range(df_table.shape[0]):
         styler = styler.apply(lambda v, r=r: style_row(v, r), axis=1)
+    styler = styler.format(escape="html")
 
-    st.dataframe(styler, use_container_width=True, height=460)
+    st.dataframe(styler, use_container_width=True, height=480)
 
-    # Légende
-    st.caption("Légende des plateformes :")
+    st.caption("Légende :")
     leg = " • ".join([
         f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{get_palette()[p]};margin-right:6px;border-radius:3px;"></span>{p}'
         for p in sorted(get_palette().keys())
@@ -1028,7 +1061,7 @@ def vue_sms(df: pd.DataFrame):
         if arrives.empty:
             st.info("Aucune arrivée demain.")
         else:
-            for idx, r in arrives.reset_index(drop=True).iterrows():
+            for _, r in arrives.reset_index(drop=True).iterrows():
                 body = sms_message_arrivee(r)
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
@@ -1049,7 +1082,7 @@ def vue_sms(df: pd.DataFrame):
         if dep_24h.empty:
             st.info("Aucun départ hier.")
         else:
-            for idx, r in dep_24h.reset_index(drop=True).iterrows():
+            for _, r in dep_24h.reset_index(drop=True).iterrows():
                 body = sms_message_depart(r)
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
