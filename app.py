@@ -416,10 +416,222 @@ def sms_message_depart(row: pd.Series) -> str:
         "Annick & Charley"
     )
 
+
 # ==============================  UI HELPERS  ==============================
 
 def kpi_chips(df: pd.DataFrame):
     core, _ = split_totals(df)
     if core.empty:
         return
-    b =
+    b = core["prix_brut"].sum()
+    total_comm = core["commissions"].sum()
+    total_cb   = core["frais_cb"].sum()
+    ch = total_comm + total_cb
+    n = core["prix_net"].sum()
+    base = core["base"].sum()
+    nuits = core["nuitees"].sum()
+    pct = (ch / b * 100) if b else 0
+    pm_nuit = (b / nuits) if nuits else 0
+
+    html = f"""
+    <style>
+    .chips-wrap {{ display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 10px 0; }}
+    .chip {{ padding:8px 10px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); font-size:0.9rem; }}
+    .chip b {{ display:block; margin-bottom:3px; font-size:0.85rem; opacity:0.8; }}
+    .chip .v {{ font-weight:600; }}
+    </style>
+    <div class="chips-wrap">
+      <div class="chip"><b>Total Brut</b><div class="v">{b:,.2f} €</div></div>
+      <div class="chip"><b>Total Net</b><div class="v">{n:,.2f} €</div></div>
+      <div class="chip"><b>Total Base</b><div class="v">{base:,.2f} €</div></div>
+      <div class="chip"><b>Total Charges</b><div class="v">{ch:,.2f} €</div></div>
+      <div class="chip"><b>Nuitées</b><div class="v">{int(nuits) if pd.notna(nuits) else 0}</div></div>
+      <div class="chip"><b>Commission moy.</b><div class="v">{pct:.2f} %</div></div>
+      <div class="chip"><b>Prix moyen/nuit</b><div class="v">{pm_nuit:,.2f} €</div></div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+def search_box(df: pd.DataFrame) -> pd.DataFrame:
+    q = st.text_input("🔎 Recherche (nom, plateforme, téléphone…)", "")
+    if not q:
+        return df
+    ql = q.strip().lower()
+    def _match(v):
+        s = "" if pd.isna(v) else str(v)
+        return ql in s.lower()
+    mask = (
+        df["nom_client"].apply(_match) |
+        df["plateforme"].apply(_match) |
+        df["telephone"].apply(_match)
+    )
+    return df[mask].copy()
+
+
+# ==============================  VUES  ==============================
+
+def vue_reservations(df: pd.DataFrame):
+    palette = get_palette()
+    st.title("📋 Réservations")
+    with st.expander("🎛️ Options d’affichage", expanded=True):
+        filtre_paye = st.selectbox("Filtrer payé", ["Tous", "Payé", "Non payé"])
+        show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
+        enable_search = st.checkbox("Activer la recherche", value=True)
+
+    # Aperçu plateformes (pastilles)
+    st.markdown("### Plateformes")
+    if palette:
+        badges = " &nbsp;&nbsp;".join([platform_badge(pf, palette) for pf in sorted(palette.keys())])
+        st.markdown(badges, unsafe_allow_html=True)
+
+    df = ensure_schema(df)
+    # Filtre payé
+    if filtre_paye == "Payé":
+        df = df[df["paye"] == True].copy()
+    elif filtre_paye == "Non payé":
+        df = df[df["paye"] == False].copy()
+
+    if show_kpi:
+        kpi_chips(df)
+    if enable_search:
+        df = search_box(df)
+
+    core, totals = split_totals(df)
+    core = sort_core(core)
+
+    core_edit = core.copy()
+    core_edit["__rowid"] = core_edit.index
+    core_edit["date_arrivee"] = core_edit["date_arrivee"].apply(format_date_str)
+    core_edit["date_depart"]  = core_edit["date_depart"].apply(format_date_str)
+
+    cols_order = [
+        "paye","nom_client","sms_envoye","plateforme","telephone",
+        "date_arrivee","date_depart","nuitees",
+        "prix_brut","commissions","frais_cb","prix_net",
+        "menage","taxes_sejour","base","charges","%","AAAA","MM","__rowid"
+    ]
+    cols_show = [c for c in cols_order if c in core_edit.columns]
+
+    edited = st.data_editor(
+        core_edit[cols_show],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "paye": st.column_config.CheckboxColumn("Payé"),
+            "sms_envoye": st.column_config.CheckboxColumn("SMS envoyé"),
+            "__rowid": st.column_config.Column("id", disabled=True, width="small"),
+            "date_arrivee": st.column_config.TextColumn("date_arrivee", disabled=True),
+            "date_depart":  st.column_config.TextColumn("date_depart", disabled=True),
+            "nom_client":   st.column_config.TextColumn("nom_client", disabled=True),
+            "plateforme":   st.column_config.TextColumn("plateforme", disabled=True),
+            "telephone":    st.column_config.TextColumn("telephone", disabled=True),
+            "nuitees":      st.column_config.NumberColumn("nuitees", disabled=True),
+            "prix_brut":    st.column_config.NumberColumn("prix_brut", disabled=True),
+            "commissions":  st.column_config.NumberColumn("commissions", disabled=True),
+            "frais_cb":     st.column_config.NumberColumn("frais_cb", disabled=True),
+            "prix_net":     st.column_config.NumberColumn("prix_net", disabled=True),
+            "menage":       st.column_config.NumberColumn("menage", disabled=True),
+            "taxes_sejour": st.column_config.NumberColumn("taxes_sejour", disabled=True),
+            "base":         st.column_config.NumberColumn("base", disabled=True),
+            "charges":      st.column_config.NumberColumn("charges", disabled=True),
+            "%":            st.column_config.NumberColumn("%", disabled=True),
+            "AAAA":         st.column_config.NumberColumn("AAAA", disabled=True),
+            "MM":           st.column_config.NumberColumn("MM", disabled=True),
+        }
+    )
+
+    c1, c2 = st.columns([1,3])
+    if c1.button("💾 Enregistrer les cases cochées"):
+        for _, r in edited.iterrows():
+            ridx = int(r["__rowid"])
+            core.at[ridx, "paye"] = bool(r.get("paye", False))
+            core.at[ridx, "sms_envoye"] = bool(r.get("sms_envoye", False))
+        new_df = pd.concat([core, totals], ignore_index=False).reset_index(drop=True)
+        sauvegarder_donnees(new_df)
+        st.success("✅ Statuts Payé / SMS mis à jour.")
+        st.rerun()
+
+    if not totals.empty:
+        show_tot = totals.copy()
+        for c in ["date_arrivee","date_depart"]:
+            show_tot[c] = show_tot[c].apply(format_date_str)
+        st.caption("Lignes de totaux (non éditables) :")
+        cols_tot = [
+            "paye","nom_client","sms_envoye","plateforme","telephone",
+            "date_arrivee","date_depart","nuitees",
+            "prix_brut","commissions","frais_cb","prix_net",
+            "menage","taxes_sejour","base","charges","%","AAAA","MM"
+        ]
+        cols_tot = [c for c in cols_tot if c in show_tot.columns]
+        st.dataframe(show_tot[cols_tot], use_container_width=True)
+
+def vue_ajouter(df: pd.DataFrame):
+    st.title("➕ Ajouter une réservation")
+    st.caption("Saisie rapide")
+    palette = get_palette()
+
+    def inline_input(label, widget_fn, key=None, **widget_kwargs):
+        col1, col2 = st.columns([1,2])
+        with col1: st.markdown(f"**{label}**")
+        with col2: return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
+
+    paye = inline_input("Payé", st.checkbox, key="add_paye", value=False)
+    nom = inline_input("Nom", st.text_input, key="add_nom", value="")
+    sms_envoye = inline_input("SMS envoyé", st.checkbox, key="add_sms", value=False)
+    tel = inline_input("Téléphone", st.text_input, key="add_tel", value="")
+    pf_options = sorted(palette.keys())
+    pf_index = pf_options.index("Booking") if "Booking" in pf_options else 0
+    plateforme = inline_input("Plateforme", st.selectbox, key="add_pf",
+                              options=pf_options, index=pf_index)
+
+    arrivee = inline_input("Arrivée", st.date_input, key="add_arrivee", value=date.today())
+    min_dep = arrivee + timedelta(days=1)
+    depart  = inline_input("Départ",  st.date_input, key="add_depart", value=min_dep, min_value=min_dep)
+
+    brut = inline_input("Prix brut (€)", st.number_input, key="add_brut",
+                        min_value=0.0, step=1.0, format="%.2f")
+    commissions = inline_input("Commissions (€)", st.number_input, key="add_comm",
+                               min_value=0.0, step=1.0, format="%.2f")
+    frais_cb = inline_input("Frais CB (€)", st.number_input, key="add_cb",
+                            min_value=0.0, step=1.0, format="%.2f")
+
+    net_calc = max(float(brut) - float(commissions) - float(frais_cb), 0.0)
+    menage = inline_input("Ménage (€)", st.number_input, key="add_menage",
+                          min_value=0.0, step=1.0, format="%.2f")
+    taxes  = inline_input("Taxes séjour (€)", st.number_input, key="add_taxes",
+                          min_value=0.0, step=1.0, format="%.2f")
+
+    base_calc = max(net_calc - float(menage) - float(taxes), 0.0)
+    charges_calc = max(float(brut) - net_calc, 0.0)
+    pct_calc = (charges_calc / float(brut) * 100) if brut > 0 else 0.0
+
+    if st.button("Enregistrer"):
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
+            return
+        ligne = {
+            "paye": bool(paye),
+            "nom_client": nom.strip(),
+            "sms_envoye": bool(sms_envoye),
+            "plateforme": plateforme,
+            "telephone": normalize_tel(tel),
+            "date_arrivee": arrivee,
+            "date_depart": depart,
+            "prix_brut": float(brut),
+            "commissions": float(commissions),
+            "frais_cb": float(frais_cb),
+            "prix_net": round(net_calc, 2),
+            "menage": float(menage),
+            "taxes_sejour": float(taxes),
+            "base": round(base_calc, 2),
+            "charges": round(charges_calc, 2),
+            "%": round(pct_calc, 2),
+            "nuitees": (depart - arrivee).days,
+            "AAAA": arrivee.year,
+            "MM": arrivee.month,
+            "ical_uid": ""
+        }
+        df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
+        sauvegarder_donnees(df2)
+        st.success("✅ Réservation enregistrée")
+        st.rerun()
