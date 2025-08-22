@@ -1069,3 +1069,14 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# --- LANCEUR SÉCURISÉ (à placer tout en bas du fichier) ---
+if __name__ == "__main__":
+    import traceback
+    try:
+        st.set_option("client.showErrorDetails", True)
+        main()
+    except Exception as e:
+        st.error("💥 L’application a rencontré une erreur. Détails ci-dessous :")
+        st.exception(e)  # affiche la stack courte et le message
+        st.code(traceback.format_exc())  # affiche la stack complète
