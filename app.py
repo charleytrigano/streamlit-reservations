@@ -1,4 +1,5 @@
-# app.py — Villa Tobias (COMPLET, stockage Excel PERSISTANT)
+# app.py — Villa Tobias (COMPLET, palette + calendrier + ICS + SMS)
+# ✅ Correction incluse : pd.read_excel(..., engine="openpyxl")
 
 import streamlit as st
 import pandas as pd
@@ -11,17 +12,7 @@ import os
 from urllib.parse import quote
 import colorsys
 
-# ==============================  CHEMINS & PERSISTENCE  ==============================
-# Fichier du dépôt (fallback), dossier persistant, et chemin prioritaire persistant
-REPO_FILE = os.path.join("/mount/src/streamlit-reservations", "reservations.xlsx")
-DATA_DIR = "/mount/data"
-PERSIST_FILE = os.path.join(DATA_DIR, "reservations.xlsx")
-
-def get_data_path() -> str:
-    """Utilise le fichier persistant s'il existe, sinon celui du dépôt."""
-    if os.path.exists(PERSIST_FILE):
-        return PERSIST_FILE
-    return REPO_FILE
+FICHIER = "reservations.xlsx"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -219,19 +210,19 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
     by = [c for c in ["date_arrivee","nom_client"] if c in df.columns]
     return df.sort_values(by=by, na_position="last").reset_index(drop=True)
 
-# ==============================  EXCEL I/O (PERSISTANT)  ==============================
+# ==============================  EXCEL I/O  ==============================
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
-    return pd.read_excel(path, converters={"telephone": normalize_tel})
+    # ✅ Forcer l'engine openpyxl
+    return pd.read_excel(path, engine="openpyxl", converters={"telephone": normalize_tel})
 
 def charger_donnees() -> pd.DataFrame:
-    path = get_data_path()
-    if not os.path.exists(path):
+    if not os.path.exists(FICHIER):
         return ensure_schema(pd.DataFrame())
     try:
-        mtime = os.path.getmtime(path)
-        df = _read_excel_cached(path, mtime)
+        mtime = os.path.getmtime(FICHIER)
+        df = _read_excel_cached(FICHIER, mtime)
         return ensure_schema(df)
     except Exception as e:
         st.error(f"Erreur de lecture Excel : {e}")
@@ -249,14 +240,12 @@ def _force_telephone_text_format_openpyxl(writer, df_to_save: pd.DataFrame, shee
         pass
 
 def sauvegarder_donnees(df: pd.DataFrame):
-    # On écrit TOUJOURS dans le stockage persistant
-    os.makedirs(DATA_DIR, exist_ok=True)
     df = ensure_schema(df)
     core, totals = split_totals(df)
     core = sort_core(core)
     out = pd.concat([core, totals], ignore_index=True)
     try:
-        with pd.ExcelWriter(PERSIST_FILE, engine="openpyxl") as w:
+        with pd.ExcelWriter(FICHIER, engine="openpyxl") as w:
             out.to_excel(w, index=False, sheet_name="Sheet1")
             _force_telephone_text_format_openpyxl(w, out, "Sheet1")
         st.cache_data.clear()
@@ -268,15 +257,11 @@ def bouton_restaurer():
     up = st.sidebar.file_uploader("📤 Restauration xlsx", type=["xlsx"], help="Remplace le fichier actuel")
     if up is not None:
         try:
-            # Valider le fichier en mémoire (lecture pandas)
-            _ = pd.read_excel(up, converters={"telephone": normalize_tel})
-            up.seek(0)  # Revenir début du buffer
-            # Copie binaire 1:1 dans le stockage persistant
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(PERSIST_FILE, "wb") as f:
-                f.write(up.getbuffer())
-            st.cache_data.clear()
-            st.sidebar.success("✅ Fichier restauré (stockage persistant).")
+            # ✅ Forcer l'engine openpyxl
+            df_new = pd.read_excel(up, engine="openpyxl", converters={"telephone": normalize_tel})
+            df_new = ensure_schema(df_new)
+            sauvegarder_donnees(df_new)
+            st.sidebar.success("✅ Fichier restauré.")
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"Erreur import: {e}")
@@ -323,7 +308,6 @@ def _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1"):
 def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations") -> str:
     df = ensure_schema(df)
 
-    # En-tête si vide
     if df.empty:
         lines = [
             "BEGIN:VCALENDAR",
@@ -411,8 +395,8 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Nous sommes ravis de vous accueillir bientot à Nice. Pour organiser au mieux votre reception, merci de nous indiquer "
         "votre heure d'arrivee.\n\n "
         "Sachez egalement qu'une place de parking vous est allouee.\n\n "
-        "Nous vous rappelons que le check-inse fait a partir de 2h pm et que le check-outau maximum 11h am.\n\n "
-        "Vous trouverez des consignes a bagages des consignes a bagages, en cas de besoin.\n\n "
+        "Nous vous rappelons que le check-in se fait a partir de 14h et le check-out au maximum 11h.\n\n "
+        "Vous trouverez des consignes à bagages en cas de besoin.\n\n "
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n "
         "Annick & Charley"
     )
@@ -488,7 +472,8 @@ def vue_reservations(df: pd.DataFrame):
         filtre_paye = st.selectbox("Filtrer payé", ["Tous", "Payé", "Non payé"])
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
-    # Aperçu plateformes (pastilles)
+
+    # Aperçu plateformes
     st.markdown("### Plateformes")
     if palette:
         badges = " &nbsp;&nbsp;".join([platform_badge(pf, palette) for pf in sorted(palette.keys())])
@@ -575,169 +560,7 @@ def vue_reservations(df: pd.DataFrame):
         cols_tot = [c for c in cols_tot if c in show_tot.columns]
         st.dataframe(show_tot[cols_tot], use_container_width=True)
 
-def vue_ajouter(df: pd.DataFrame):
-    st.title("➕ Ajouter une réservation")
-    st.caption("Saisie compacte (libellés inline)")
-    palette = get_palette()
-
-    def inline_input(label, widget_fn, key=None, **widget_kwargs):
-        col1, col2 = st.columns([1,2])
-        with col1: st.markdown(f"**{label}**")
-        with col2: return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
-
-    paye = inline_input("Payé", st.checkbox, key="add_paye", value=False)
-    nom = inline_input("Nom", st.text_input, key="add_nom", value="")
-    sms_envoye = inline_input("SMS envoyé", st.checkbox, key="add_sms", value=False)
-
-    tel = inline_input("Téléphone (+33...)", st.text_input, key="add_tel", value="")
-    pf_options = sorted(palette.keys())
-    pf_index = pf_options.index("Booking") if "Booking" in pf_options else 0
-    plateforme = inline_input("Plateforme", st.selectbox, key="add_pf",
-                              options=pf_options, index=pf_index)
-
-    arrivee = inline_input("Arrivée", st.date_input, key="add_arrivee", value=date.today())
-    min_dep = arrivee + timedelta(days=1)
-    depart  = inline_input("Départ",  st.date_input, key="add_depart",
-                           value=min_dep, min_value=min_dep)
-
-    brut = inline_input("Prix brut (€)", st.number_input, key="add_brut",
-                        min_value=0.0, step=1.0, format="%.2f")
-    commissions = inline_input("Commissions (€)", st.number_input, key="add_comm",
-                               min_value=0.0, step=1.0, format="%.2f")
-    frais_cb = inline_input("Frais CB (€)", st.number_input, key="add_cb",
-                            min_value=0.0, step=1.0, format="%.2f")
-
-    net_calc = max(float(brut) - float(commissions) - float(frais_cb), 0.0)
-    inline_input("Prix net (calculé)", st.number_input, key="add_net",
-                 value=round(net_calc,2), step=0.01, format="%.2f", disabled=True)
-
-    menage = inline_input("Ménage (€)", st.number_input, key="add_menage",
-                          min_value=0.0, step=1.0, format="%.2f")
-    taxes  = inline_input("Taxes séjour (€)", st.number_input, key="add_taxes",
-                          min_value=0.0, step=1.0, format="%.2f")
-
-    base_calc = max(net_calc - float(menage) - float(taxes), 0.0)
-    charges_calc = max(float(brut) - net_calc, 0.0)
-    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
-
-    inline_input("Base (calculée)", st.number_input, key="add_base",
-                 value=round(base_calc,2), step=0.01, format="%.2f", disabled=True)
-    inline_input("Commission (%)", st.number_input, key="add_pct",
-                 value=round(pct_calc,2), step=0.01, format="%.2f", disabled=True)
-
-    if st.button("Enregistrer"):
-        if depart < arrivee + timedelta(days=1):
-            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
-            return
-        ligne = {
-            "paye": bool(paye),
-            "nom_client": (nom or "").strip(),
-            "sms_envoye": bool(sms_envoye),
-            "plateforme": plateforme,
-            "telephone": normalize_tel(tel),
-            "date_arrivee": arrivee,
-            "date_depart": depart,
-            "prix_brut": float(brut),
-            "commissions": float(commissions),
-            "frais_cb": float(frais_cb),
-            "prix_net": round(net_calc, 2),
-            "menage": float(menage),
-            "taxes_sejour": float(taxes),
-            "base": round(base_calc, 2),
-            "charges": round(charges_calc, 2),
-            "%": round(pct_calc, 2),
-            "nuitees": (depart - arrivee).days,
-            "AAAA": arrivee.year,
-            "MM": arrivee.month,
-            "ical_uid": ""
-        }
-        df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
-        sauvegarder_donnees(df2)
-        st.success("✅ Réservation enregistrée")
-        st.rerun()
-
-def vue_modifier(df: pd.DataFrame):
-    st.title("✏️ Modifier / Supprimer")
-    df = ensure_schema(df)
-    if df.empty:
-        st.info("Aucune réservation.")
-        return
-
-    df["identifiant"] = df["nom_client"].astype(str) + " | " + df["date_arrivee"].apply(format_date_str)
-    choix = st.selectbox("Choisir une réservation", df["identifiant"])
-    idx = df.index[df["identifiant"] == choix]
-    if len(idx) == 0:
-        st.warning("Sélection invalide.")
-        return
-    i = idx[0]
-
-    t0, t1, t2 = st.columns(3)
-    paye = t0.checkbox("Payé", value=bool(df.at[i, "paye"]))
-    nom = t1.text_input("Nom", df.at[i, "nom_client"])
-    sms_envoye = t2.checkbox("SMS envoyé", value=bool(df.at[i, "sms_envoye"]))
-
-    col = st.columns(2)
-    tel = col[0].text_input("Téléphone", normalize_tel(df.at[i, "telephone"]))
-    palette = get_palette()
-    options_pf = sorted(palette.keys())
-    cur_pf = df.at[i,"plateforme"]
-    pf_index = options_pf.index(cur_pf) if cur_pf in options_pf else 0
-    plateforme = col[1].selectbox("Plateforme", options_pf, index=pf_index)
-
-    arrivee = st.date_input("Arrivée", df.at[i,"date_arrivee"] if isinstance(df.at[i,"date_arrivee"], date) else date.today())
-    depart  = st.date_input("Départ",  df.at[i,"date_depart"] if isinstance(df.at[i,"date_depart"], date) else arrivee + timedelta(days=1), min_value=arrivee+timedelta(days=1))
-
-    c1, c2, c3 = st.columns(3)
-    brut = c1.number_input("Prix brut (€)", min_value=0.0, value=float(df.at[i,"prix_brut"]) if pd.notna(df.at[i,"prix_brut"]) else 0.0, step=1.0, format="%.2f")
-    commissions = c2.number_input("Commissions (€)", min_value=0.0, value=float(df.at[i,"commissions"]) if pd.notna(df.at[i,"commissions"]) else 0.0, step=1.0, format="%.2f")
-    frais_cb = c3.number_input("Frais CB (€)", min_value=0.0, value=float(df.at[i,"frais_cb"]) if pd.notna(df.at[i,"frais_cb"]) else 0.0, step=1.0, format="%.2f")
-
-    net_calc = max(brut - commissions - frais_cb, 0.0)
-
-    d1, d2, d3 = st.columns(3)
-    menage = d1.number_input("Ménage (€)", min_value=0.0, value=float(df.at[i,"menage"]) if pd.notna(df.at[i,"menage"]) else 0.0, step=1.0, format="%.2f")
-    taxes  = d2.number_input("Taxes séjour (€)", min_value=0.0, value=float(df.at[i,"taxes_sejour"]) if pd.notna(df.at[i,"taxes_sejour"]) else 0.0, step=1.0, format="%.2f")
-    base_calc = max(net_calc - menage - taxes, 0.0)
-
-    charges_calc = max(brut - net_calc, 0.0)
-    pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
-    d3.markdown(f"**Prix net (calculé)**: {net_calc:.2f} €  \n**Base (calculée)**: {base_calc:.2f} €  \n**%**: {pct_calc:.2f}")
-
-    c_save, c_del = st.columns(2)
-    if c_save.button("💾 Enregistrer"):
-        if depart < arrivee + timedelta(days=1):
-            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
-            return
-        df.at[i,"paye"] = bool(paye)
-        df.at[i,"nom_client"] = nom.strip()
-        df.at[i,"sms_envoye"] = bool(sms_envoye)
-        df.at[i,"plateforme"] = plateforme
-        df.at[i,"telephone"]  = normalize_tel(tel)
-        df.at[i,"date_arrivee"] = arrivee
-        df.at[i,"date_depart"]  = depart
-        df.at[i,"prix_brut"] = float(brut)
-        df.at[i,"commissions"] = float(commissions)
-        df.at[i,"frais_cb"] = float(frais_cb)
-        df.at[i,"prix_net"]  = round(net_calc, 2)
-        df.at[i,"menage"] = float(menage)
-        df.at[i,"taxes_sejour"] = float(taxes)
-        df.at[i,"base"] = round(base_calc, 2)
-        df.at[i,"charges"] = round(charges_calc, 2)
-        df.at[i,"%"] = round(pct_calc, 2)
-        df.at[i,"nuitees"]   = (depart - arrivee).days
-        df.at[i,"AAAA"]      = arrivee.year
-        df.at[i,"MM"]        = arrivee.month
-        df.drop(columns=["identifiant"], inplace=True, errors="ignore")
-        sauvegarder_donnees(df)
-        st.success("✅ Modifié")
-        st.rerun()
-
-    if c_del.button("🗑 Supprimer"):
-        df2 = df.drop(index=i)
-        df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
-        sauvegarder_donnees(df2)
-        st.warning("Supprimé.")
-        st.rerun()
+# ---------- helpers pour le calendrier ----------
 
 def lighten_color(hex_color: str, factor: float = 0.75) -> str:
     hex_color = hex_color.lstrip("#")
@@ -808,17 +631,15 @@ def vue_calendrier(df: pd.DataFrame):
             else:
                 d = date(annee, mois_index, jour)
                 items = planning.get(d, [])
-                # contenu : numéro du jour + noms (limités pour la lisibilité)
-                max_lines = 6
-                lines = [str(jour)]
-                for k, (pf, nom) in enumerate(items[:max_lines-1]):
-                    lines.append(nom or pf)
-                if len(items) >= max_lines:
-                    lines.append(f"+{len(items)-(max_lines-1)}")
-                row_text.append("\n".join(lines))
+                # On affiche NOM CLIENT (1 par ligne), jusqu’à 5 lignes + compteur
+                if len(items) > 5:
+                    content_lines = [str(jour)] + [f"{nom}" for _, nom in items[:5]] + [f"... (+{len(items)-5})"]
+                else:
+                    content_lines = [str(jour)] + [f"{nom}" for _, nom in items]
+                row_text.append("\n".join(content_lines))
 
                 if items:
-                    base = palette.get(items[0][0], "#777777")
+                    base = palette.get(items[0][0], "#999999")
                     bg = lighten_color(base, 0.75)
                     fg = ideal_text_color(bg)
                 else:
@@ -854,7 +675,7 @@ def vue_calendrier(df: pd.DataFrame):
     ])
     st.markdown(leg, unsafe_allow_html=True)
 
-    st.dataframe(styler, use_container_width=True, height=460)
+    st.dataframe(styler, use_container_width=True, height=450)
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (détaillé)")
@@ -1130,6 +951,172 @@ def main():
         vue_export_ics(df)
     elif onglet == "✉️ SMS":
         vue_sms(df)
+
+# ---- Vues Ajouter / Modifier (après main pour garder le fichier compact)
+
+def vue_ajouter(df: pd.DataFrame):
+    st.title("➕ Ajouter une réservation")
+    st.caption("Saisie compacte (libellés inline)")
+    palette = get_palette()
+
+    def inline_input(label, widget_fn, key=None, **widget_kwargs):
+        col1, col2 = st.columns([1,2])
+        with col1: st.markdown(f"**{label}**")
+        with col2: return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
+
+    paye = inline_input("Payé", st.checkbox, key="add_paye", value=False)
+    nom = inline_input("Nom", st.text_input, key="add_nom", value="")
+    sms_envoye = inline_input("SMS envoyé", st.checkbox, key="add_sms", value=False)
+
+    tel = inline_input("Téléphone (+33...)", st.text_input, key="add_tel", value="")
+    pf_options = sorted(palette.keys())
+    pf_index = pf_options.index("Booking") if "Booking" in pf_options else 0
+    plateforme = inline_input("Plateforme", st.selectbox, key="add_pf",
+                              options=pf_options, index=pf_index)
+
+    arrivee = inline_input("Arrivée", st.date_input, key="add_arrivee", value=date.today())
+    min_dep = arrivee + timedelta(days=1)
+    depart  = inline_input("Départ",  st.date_input, key="add_depart",
+                           value=min_dep, min_value=min_dep)
+
+    brut = inline_input("Prix brut (€)", st.number_input, key="add_brut",
+                        min_value=0.0, step=1.0, format="%.2f")
+    commissions = inline_input("Commissions (€)", st.number_input, key="add_comm",
+                               min_value=0.0, step=1.0, format="%.2f")
+    frais_cb = inline_input("Frais CB (€)", st.number_input, key="add_cb",
+                            min_value=0.0, step=1.0, format="%.2f")
+
+    net_calc = max(float(brut) - float(commissions) - float(frais_cb), 0.0)
+    inline_input("Prix net (calculé)", st.number_input, key="add_net",
+                 value=round(net_calc,2), step=0.01, format="%.2f", disabled=True)
+
+    menage = inline_input("Ménage (€)", st.number_input, key="add_menage",
+                          min_value=0.0, step=1.0, format="%.2f")
+    taxes  = inline_input("Taxes séjour (€)", st.number_input, key="add_taxes",
+                          min_value=0.0, step=1.0, format="%.2f")
+
+    base_calc = max(net_calc - float(menage) - float(taxes), 0.0)
+    charges_calc = max(float(brut) - net_calc, 0.0)
+    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
+
+    inline_input("Base (calculée)", st.number_input, key="add_base",
+                 value=round(base_calc,2), step=0.01, format="%.2f", disabled=True)
+    inline_input("Commission (%)", st.number_input, key="add_pct",
+                 value=round(pct_calc,2), step=0.01, format="%.2f", disabled=True)
+
+    if st.button("Enregistrer"):
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
+            return
+        ligne = {
+            "paye": bool(paye),
+            "nom_client": (nom or "").strip(),
+            "sms_envoye": bool(sms_envoye),
+            "plateforme": plateforme,
+            "telephone": normalize_tel(tel),
+            "date_arrivee": arrivee,
+            "date_depart": depart,
+            "prix_brut": float(brut),
+            "commissions": float(commissions),
+            "frais_cb": float(frais_cb),
+            "prix_net": round(net_calc, 2),
+            "menage": float(menage),
+            "taxes_sejour": float(taxes),
+            "base": round(base_calc, 2),
+            "charges": round(charges_calc, 2),
+            "%": round(pct_calc, 2),
+            "nuitees": (depart - arrivee).days,
+            "AAAA": arrivee.year,
+            "MM": arrivee.month,
+            "ical_uid": ""
+        }
+        df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
+        sauvegarder_donnees(df2)
+        st.success("✅ Réservation enregistrée")
+        st.rerun()
+
+def vue_modifier(df: pd.DataFrame):
+    st.title("✏️ Modifier / Supprimer")
+    df = ensure_schema(df)
+    if df.empty:
+        st.info("Aucune réservation.")
+        return
+
+    df["identifiant"] = df["nom_client"].astype(str) + " | " + df["date_arrivee"].apply(format_date_str)
+    choix = st.selectbox("Choisir une réservation", df["identifiant"])
+    idx = df.index[df["identifiant"] == choix]
+    if len(idx) == 0:
+        st.warning("Sélection invalide.")
+        return
+    i = idx[0]
+
+    t0, t1, t2 = st.columns(3)
+    paye = t0.checkbox("Payé", value=bool(df.at[i, "paye"]))
+    nom = t1.text_input("Nom", df.at[i, "nom_client"])
+    sms_envoye = t2.checkbox("SMS envoyé", value=bool(df.at[i, "sms_envoye"]))
+
+    col = st.columns(2)
+    tel = col[0].text_input("Téléphone", normalize_tel(df.at[i, "telephone"]))
+    palette = get_palette()
+    options_pf = sorted(palette.keys())
+    cur_pf = df.at[i,"plateforme"]
+    pf_index = options_pf.index(cur_pf) if cur_pf in options_pf else 0
+    plateforme = col[1].selectbox("Plateforme", options_pf, index=pf_index)
+
+    arrivee = st.date_input("Arrivée", df.at[i,"date_arrivee"] if isinstance(df.at[i,"date_arrivee"], date) else date.today())
+    depart  = st.date_input("Départ",  df.at[i,"date_depart"] if isinstance(df.at[i,"date_depart"], date) else arrivee + timedelta(days=1), min_value=arrivee+timedelta(days=1))
+
+    c1, c2, c3 = st.columns(3)
+    brut = c1.number_input("Prix brut (€)", min_value=0.0, value=float(df.at[i,"prix_brut"]) if pd.notna(df.at[i,"prix_brut"]) else 0.0, step=1.0, format="%.2f")
+    commissions = c2.number_input("Commissions (€)", min_value=0.0, value=float(df.at[i,"commissions"]) if pd.notna(df.at[i,"commissions"]) else 0.0, step=1.0, format="%.2f")
+    frais_cb = c3.number_input("Frais CB (€)", min_value=0.0, value=float(df.at[i,"frais_cb"]) if pd.notna(df.at[i,"frais_cb"]) else 0.0, step=1.0, format="%.2f")
+
+    net_calc = max(brut - commissions - frais_cb, 0.0)
+
+    d1, d2, d3 = st.columns(3)
+    menage = d1.number_input("Ménage (€)", min_value=0.0, value=float(df.at[i,"menage"]) if pd.notna(df.at[i,"menage"]) else 0.0, step=1.0, format="%.2f")
+    taxes  = d2.number_input("Taxes séjour (€)", min_value=0.0, value=float(df.at[i,"taxes_sejour"]) if pd.notna(df.at[i,"taxes_sejour"]) else 0.0, step=1.0, format="%.2f")
+    base_calc = max(net_calc - menage - taxes, 0.0)
+
+    charges_calc = max(brut - net_calc, 0.0)
+    pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
+    d3.markdown(f"**Prix net (calculé)**: {net_calc:.2f} €  \n**Base (calculée)**: {base_calc:.2f} €  \n**%**: {pct_calc:.2f}")
+
+    c_save, c_del = st.columns(2)
+    if c_save.button("💾 Enregistrer"):
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l’arrivée.")
+            return
+        df.at[i,"paye"] = bool(paye)
+        df.at[i,"nom_client"] = nom.strip()
+        df.at[i,"sms_envoye"] = bool(sms_envoye)
+        df.at[i,"plateforme"] = plateforme
+        df.at[i,"telephone"]  = normalize_tel(tel)
+        df.at[i,"date_arrivee"] = arrivee
+        df.at[i,"date_depart"]  = depart
+        df.at[i,"prix_brut"] = float(brut)
+        df.at[i,"commissions"] = float(commissions)
+        df.at[i,"frais_cb"] = float(frais_cb)
+        df.at[i,"prix_net"]  = round(net_calc, 2)
+        df.at[i,"menage"] = float(menage)
+        df.at[i,"taxes_sejour"] = float(taxes)
+        df.at[i,"base"] = round(base_calc, 2)
+        df.at[i,"charges"] = round(charges_calc, 2)
+        df.at[i,"%"] = round(pct_calc, 2)
+        df.at[i,"nuitees"]   = (depart - arrivee).days
+        df.at[i,"AAAA"]      = arrivee.year
+        df.at[i,"MM"]        = arrivee.month
+        df.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        sauvegarder_donnees(df)
+        st.success("✅ Modifié")
+        st.rerun()
+
+    if c_del.button("🗑 Supprimer"):
+        df2 = df.drop(index=i)
+        df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        sauvegarder_donnees(df2)
+        st.warning("Supprimé.")
+        st.rerun()
 
 if __name__ == "__main__":
     main()
