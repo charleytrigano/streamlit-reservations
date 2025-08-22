@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET, palette + calendrier coloré + ICS corrigé)
+# app.py — Villa Tobias (COMPLET, palette + calendrier HTML coloré sombre + ICS OK)
 
 import streamlit as st
 import pandas as pd
@@ -64,9 +64,11 @@ def render_palette_editor_sidebar():
                 palette[name] = new_color
                 save_palette(palette)
                 st.success(f"✅ Plateforme « {name} » enregistrée.")
+                st.rerun()
         if colB.button("Réinitialiser la palette"):
             save_palette(DEFAULT_PALETTE.copy())
             st.success("✅ Palette réinitialisée.")
+            st.rerun()
     if palette:
         st.sidebar.markdown("**Plateformes existantes :**")
         for pf in sorted(palette.keys()):
@@ -305,7 +307,6 @@ def _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1"):
 def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations") -> str:
     df = ensure_schema(df)
 
-    # En-tête si vide
     if df.empty:
         lines = [
             "BEGIN:VCALENDAR",
@@ -355,6 +356,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
             f"Brut: {brut:.2f} €\\nNet: {net:.2f} €"
         )
 
+        uid_existing = str(row.get("ical_uid") or "").strip()
         uid = uid_existing if uid_existing else _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1")
 
         lines += [
@@ -778,69 +780,67 @@ def vue_calendrier(df: pd.DataFrame):
     headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
     monthcal = calendar.monthcalendar(annee, mois_index)
 
-    # Tableau affiché (texte), et tables de couleurs de fond/texte
-    table = []
-    bg_table = []
-    fg_table = []
+    # === Rendu HTML (robuste en thème sombre) ===
+    # Styles : bordures claires, fond neutre sombre pour les jours vides, et couleur de case pastel
+    base_css = """
+    <style>
+      .cal-wrap { width: 100%; overflow-x: auto; }
+      table.cal { width: 100%; border-collapse: separate; border-spacing: 6px; }
+      table.cal th { text-align:center; font-weight:600; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.2); }
+      table.cal td {
+        vertical-align: top;
+        min-width: 120px;
+        height: 110px;
+        padding: 8px 10px;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 10px;
+        background: rgba(255,255,255,0.04); /* neutre lisible sur fond sombre */
+        color: inherit;
+        white-space: pre-wrap;
+        line-height: 1.25;
+        font-size: 0.92rem;
+      }
+      .cal .daynum { font-weight:700; opacity:0.9; margin-bottom:6px; display:block; }
+      .cal .item { display:block; }
+    </style>
+    """
 
+    # Construire le body du calendrier
+    rows_html = []
     for semaine in monthcal:
-        row_text = []
-        row_bg = []
-        row_fg = []
+        tds = []
         for jour in semaine:
             if jour == 0:
-                row_text.append("")
-                row_bg.append("transparent")
-                row_fg.append(None)
+                tds.append('<td></td>')
             else:
                 d = date(annee, mois_index, jour)
                 items = planning.get(d, [])
-                # Texte: jour + noms clients
-                if len(items) > 5:
-                    content = [str(jour)] + [f"{nom}" for _, nom in items[:5]] + [f"... (+{len(items)-5})"]
-                else:
-                    content = [str(jour)] + [f"{nom}" for _, nom in items]
-                row_text.append("\n".join(content))
-
-                # Couleur: on prend la plateforme du 1er élément du jour
+                # couleur de fond selon 1ère résa (pastel)
                 if items:
                     base = palette.get(items[0][0], "#999999")
                     bg = lighten_color(base, 0.75)
                     fg = ideal_text_color(bg)
+                    # contenu: noms clients (un par ligne)
+                    noms = "<br/>".join([f'<span class="item">{nom}</span>' for _, nom in items])
+                    cell = f'<td style="background:{bg}; color:{fg}; border-color: rgba(0,0,0,0.15);">' \
+                           f'<span class="daynum">{jour}</span>{noms}</td>'
                 else:
-                    bg = "transparent"
-                    fg = None
-                row_bg.append(bg)
-                row_fg.append(fg)
-        table.append(row_text)
-        bg_table.append(row_bg)
-        fg_table.append(row_fg)
+                    cell = f'<td><span class="daynum">{jour}</span></td>'
+                tds.append(cell)
+        rows_html.append("<tr>" + "".join(tds) + "</tr>")
 
-    df_table = pd.DataFrame(table, columns=headers)
+    thead = "<thead><tr>" + "".join([f"<th>{h}</th>" for h in headers]) + "</tr></thead>"
+    tbody = "<tbody>" + "".join(rows_html) + "</tbody>"
+    cal_html = base_css + f'<div class="cal-wrap"><table class="cal">{thead}{tbody}</table></div>'
 
-    def style_row(vals, row_idx):
-        css = []
-        for col_idx, _ in enumerate(vals):
-            bg = bg_table[row_idx][col_idx]
-            fg = fg_table[row_idx][col_idx] or "inherit"
-            css.append(
-                f"background-color:{bg};color:{fg};white-space:pre-wrap;"
-                f"border:1px solid rgba(127,127,127,0.25);"
-            )
-        return css
-
-    styler = df_table.style
-    for r in range(df_table.shape[0]):
-        styler = styler.apply(lambda v, r=r: style_row(v, r), axis=1)
-
-    st.caption("Légende :")
+    st.markdown("Légende :")
     leg = " • ".join([
         f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{get_palette()[p]};margin-right:6px;border-radius:3px;"></span>{p}'
         for p in sorted(get_palette().keys())
     ])
     st.markdown(leg, unsafe_allow_html=True)
 
-    st.dataframe(styler, use_container_width=True, height=450)
+    st.markdown(cal_html, unsafe_allow_html=True)
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (détaillé)")
