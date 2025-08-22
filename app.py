@@ -1,4 +1,5 @@
-# app.py — Villa Tobias (COMPLET, palette + calendrier HTML coloré sombre + ICS OK)
+# app.py — Villa Tobias (COMPLET, palette éditable + calendrier coloré multi-lignes + filtres + sauvegarde/restauration + ICS + SMS)
+# Sections claires : Réservations / Ajouter / Modifier / Calendrier / Rapport / Clients / Export ICS / SMS
 
 import streamlit as st
 import pandas as pd
@@ -10,13 +11,16 @@ import hashlib
 import os
 from urllib.parse import quote
 import colorsys
+import html
 
 FICHIER = "reservations.xlsx"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-# ==============================  PALETTE (PLATEFORMES) ==============================
+# =====================================================================================
+#                                🎨 PALETTE PLATEFORMES
+# =====================================================================================
 
 DEFAULT_PALETTE = {
     "Booking": "#1e90ff",  # bleu
@@ -25,9 +29,10 @@ DEFAULT_PALETTE = {
 }
 
 def get_palette() -> dict:
+    """Palette en session (clé -> #hex)."""
     if "palette" not in st.session_state:
         st.session_state.palette = DEFAULT_PALETTE.copy()
-    # Nettoyage: ne garder que str->str et #xxx / #xxxxxx
+    # Nettoyage (str -> str, #rgb ou #rrggbb)
     pal = {}
     for k, v in st.session_state.palette.items():
         if isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4, 7):
@@ -42,7 +47,7 @@ def platform_badge(name: str, palette: dict) -> str:
     color = palette.get(name, "#999999")
     return (
         f'<span style="display:inline-block;width:0.9em;height:0.9em;'
-        f'background:{color};border-radius:3px;margin-right:6px;vertical-align:-0.1em;"></span>{name}'
+        f'background:{color};border-radius:3px;margin-right:6px;vertical-align:-0.1em;"></span>{html.escape(name)}'
     )
 
 def render_palette_editor_sidebar():
@@ -64,11 +69,11 @@ def render_palette_editor_sidebar():
                 palette[name] = new_color
                 save_palette(palette)
                 st.success(f"✅ Plateforme « {name} » enregistrée.")
-                st.rerun()
+                st.experimental_rerun()
         if colB.button("Réinitialiser la palette"):
             save_palette(DEFAULT_PALETTE.copy())
             st.success("✅ Palette réinitialisée.")
-            st.rerun()
+            st.experimental_rerun()
     if palette:
         st.sidebar.markdown("**Plateformes existantes :**")
         for pf in sorted(palette.keys()):
@@ -86,9 +91,11 @@ def render_palette_editor_sidebar():
                     if pf in pal:
                         del pal[pf]
                         save_palette(pal)
-                        st.rerun()
+                        st.experimental_rerun()
 
-# ==============================  MAINTENANCE / CACHE  ==============================
+# =====================================================================================
+#                                   🧰 MAINTENANCE
+# =====================================================================================
 
 def render_cache_section_sidebar():
     st.sidebar.markdown("---")
@@ -103,9 +110,11 @@ def render_cache_section_sidebar():
         except Exception:
             pass
         st.sidebar.success("Cache vidé. Redémarrage…")
-        st.rerun()
+        st.experimental_rerun()
 
-# ==============================  OUTILS  ==============================
+# =====================================================================================
+#                                       🔧 OUTILS
+# =====================================================================================
 
 def to_date_only(x):
     if pd.isna(x) or x is None:
@@ -122,13 +131,35 @@ def normalize_tel(x):
     """Force la lecture du téléphone en TEXTE, retire .0 éventuel, espaces, et garde le +."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
-    s = str(x).strip()
-    s = s.replace(" ", "")
+    s = str(x).strip().replace(" ", "")
     if s.endswith(".0"):
         s = s[:-2]
     return s
 
-# ==============================  SCHEMA & CALCULS  ==============================
+def lighten_color(hex_color: str, factor: float = 0.78) -> str:
+    """Éclaircit une couleur hex pour fond pastel."""
+    hex_color = (hex_color or "#999999").lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = "".join(2*c for c in hex_color)
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
+    l = min(1.0, l + (1.0 - l) * factor)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
+
+def ideal_text_color(bg_hex: str) -> str:
+    bg_hex = bg_hex.lstrip("#")
+    r = int(bg_hex[0:2], 16)
+    g = int(bg_hex[2:4], 16)
+    b = int(bg_hex[4:6], 16)
+    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
+    return "#000000" if luminance > 0.6 else "#ffffff"
+
+# =====================================================================================
+#                                📐 SCHEMA & CALCULS
+# =====================================================================================
 
 BASE_COLS = [
     "paye", "nom_client", "sms_envoye",
@@ -211,7 +242,9 @@ def sort_core(df: pd.DataFrame) -> pd.DataFrame:
     by = [c for c in ["date_arrivee","nom_client"] if c in df.columns]
     return df.sort_values(by=by, na_position="last").reset_index(drop=True)
 
-# ==============================  EXCEL I/O  ==============================
+# =====================================================================================
+#                                      📥 EXCEL I/O
+# =====================================================================================
 
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float):
@@ -261,7 +294,7 @@ def bouton_restaurer():
             df_new = ensure_schema(df_new)
             sauvegarder_donnees(df_new)
             st.sidebar.success("✅ Fichier restauré.")
-            st.rerun()
+            st.experimental_rerun()
         except Exception as e:
             st.sidebar.error(f"Erreur import: {e}")
 
@@ -283,7 +316,9 @@ def bouton_telecharger(df: pd.DataFrame):
         help="Utilisez le bouton Sauvegarde depuis les écrans d’édition."
     )
 
-# ==============================  ICS EXPORT  ==============================
+# =====================================================================================
+#                                    📤 ICS EXPORT
+# =====================================================================================
 
 def _ics_escape(text: str) -> str:
     if text is None:
@@ -373,7 +408,9 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
-# ==============================  SMS (MANUEL) ====================
+# =====================================================================================
+#                                   ✉️  SMS (MANUEL)
+# =====================================================================================
 
 def sms_message_arrivee(row: pd.Series) -> str:
     d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
@@ -412,7 +449,9 @@ def sms_message_depart(row: pd.Series) -> str:
         "Annick & Charley"
     )
 
-# ==============================  UI HELPERS  ==============================
+# =====================================================================================
+#                                      🧩 UI HELPERS
+# =====================================================================================
 
 def kpi_chips(df: pd.DataFrame):
     core, _ = split_totals(df)
@@ -428,7 +467,7 @@ def kpi_chips(df: pd.DataFrame):
     pct = (ch / b * 100) if b else 0
     pm_nuit = (b / nuits) if nuits else 0
 
-    html = f"""
+    html_block = f"""
     <style>
     .chips-wrap {{ display:flex; flex-wrap:wrap; gap:8px; margin:6px 0 10px 0; }}
     .chip {{ padding:8px 10px; border-radius:10px; background: rgba(127,127,127,0.12); border: 1px solid rgba(127,127,127,0.25); font-size:0.9rem; }}
@@ -445,7 +484,7 @@ def kpi_chips(df: pd.DataFrame):
       <div class="chip"><b>Prix moyen/nuit</b><div class="v">{pm_nuit:,.2f} €</div></div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(html_block, unsafe_allow_html=True)
 
 def search_box(df: pd.DataFrame) -> pd.DataFrame:
     q = st.text_input("🔎 Recherche (nom, plateforme, téléphone…)", "")
@@ -462,7 +501,9 @@ def search_box(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df[mask].copy()
 
-# ==============================  VUES  ==============================
+# =====================================================================================
+#                                       📋 RÉSERVATIONS
+# =====================================================================================
 
 def vue_reservations(df: pd.DataFrame):
     palette = get_palette()
@@ -472,6 +513,7 @@ def vue_reservations(df: pd.DataFrame):
         show_kpi = st.checkbox("Afficher les totaux (KPI)", value=True)
         enable_search = st.checkbox("Activer la recherche", value=True)
 
+    # Pastilles plateformes
     st.markdown("### Plateformes")
     if palette:
         badges = " &nbsp;&nbsp;".join([platform_badge(pf, palette) for pf in sorted(palette.keys())])
@@ -541,7 +583,7 @@ def vue_reservations(df: pd.DataFrame):
         new_df = pd.concat([core, totals], ignore_index=False).reset_index(drop=True)
         sauvegarder_donnees(new_df)
         st.success("✅ Statuts Payé / SMS mis à jour.")
-        st.rerun()
+        st.experimental_rerun()
 
     if not totals.empty:
         show_tot = totals.copy()
@@ -556,6 +598,10 @@ def vue_reservations(df: pd.DataFrame):
         ]
         cols_tot = [c for c in cols_tot if c in show_tot.columns]
         st.dataframe(show_tot[cols_tot], use_container_width=True)
+
+# =====================================================================================
+#                                         ➕ AJOUTER
+# =====================================================================================
 
 def vue_ajouter(df: pd.DataFrame):
     st.title("➕ Ajouter une réservation")
@@ -636,7 +682,11 @@ def vue_ajouter(df: pd.DataFrame):
         df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
         sauvegarder_donnees(df2)
         st.success("✅ Réservation enregistrée")
-        st.rerun()
+        st.experimental_rerun()
+
+# =====================================================================================
+#                                   ✏️ MODIFIER / SUPPRIMER
+# =====================================================================================
 
 def vue_modifier(df: pd.DataFrame):
     st.title("✏️ Modifier / Supprimer")
@@ -712,41 +762,120 @@ def vue_modifier(df: pd.DataFrame):
         df.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df)
         st.success("✅ Modifié")
-        st.rerun()
+        st.experimental_rerun()
 
     if c_del.button("🗑 Supprimer"):
         df2 = df.drop(index=i)
         df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
         sauvegarder_donnees(df2)
         st.warning("Supprimé.")
-        st.rerun()
+        st.experimental_rerun()
 
-# === Couleurs utilitaires pour le calendrier ===
-def lighten_color(hex_color: str, factor: float = 0.75) -> str:
-    hex_color = hex_color.lstrip("#")
-    if len(hex_color) == 3:
-        hex_color = "".join(2*c for c in hex_color)
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
-    l = min(1.0, l + (1.0 - l) * factor)
-    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
-    return f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
+# =====================================================================================
+#                                📅 CALENDRIER (multi-lignes colorées)
+# =====================================================================================
 
-def ideal_text_color(bg_hex: str) -> str:
-    bg_hex = bg_hex.lstrip("#")
-    if len(bg_hex) == 3:
-        bg_hex = "".join(2*c for c in bg_hex)
-    r = int(bg_hex[0:2], 16)
-    g = int(bg_hex[2:4], 16)
-    b = int(bg_hex[4:6], 16)
-    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
-    return "#000000" if luminance > 0.6 else "#ffffff"
+def _html_calendar_cell(day_num: int | None, items: list[tuple[str,str]], palette: dict) -> str:
+    """
+    Construit le HTML d'une cellule de calendrier.
+    items: liste de tuples (plateforme, nom_client). Chaque ligne est colorée selon la plateforme.
+    """
+    if not day_num:
+        return '<div class="cell empty"></div>'
+
+    # Lignes réservations
+    lines_html = []
+    for pf, nom in items:
+        base = palette.get(pf, "#999999")
+        bg = lighten_color(base, 0.78)
+        fg = ideal_text_color(bg)
+        safe_nom = html.escape(nom or "")
+        safe_pf  = html.escape(pf or "")
+        lines_html.append(
+            f'<div class="resline" style="background:{bg};color:{fg};">'
+            f'{safe_nom}'
+            f'</div>'
+        )
+
+    content = "".join(lines_html)
+    return (
+        f'<div class="cell">'
+        f'  <div class="day">{day_num}</div>'
+        f'  <div class="lines">{content}</div>'
+        f'</div>'
+    )
+
+def _render_month_calendar_html(df: pd.DataFrame, annee: int, mois: int, palette: dict) -> str:
+    """Construit le tableau HTML complet du mois (7 colonnes, nb de semaines lignes)."""
+    nb_jours = calendar.monthrange(annee, mois)[1]
+    jours = [date(annee, mois, j+1) for j in range(nb_jours)]
+    core, _ = split_totals(ensure_schema(df))
+
+    # Planning jours -> [(pf, nom), ...]
+    planning = {j: [] for j in jours}
+    for _, row in core.iterrows():
+        d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
+        if not (isinstance(d1, date) and isinstance(d2, date)):
+            continue
+        pf  = str(row.get("plateforme") or "Autre")
+        nom = str(row.get("nom_client") or "")
+        for j in jours:
+            if d1 <= j < d2:
+                planning[j].append((pf, nom))
+
+    headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
+    monthcal = calendar.monthcalendar(annee, mois)
+
+    # CSS spécialement pensé pour thème sombre : bordures claires, fond adaptatif
+    css = """
+    <style>
+    .cal-wrap { width: 100%; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .cal-head { font-weight: 600; text-align: center; padding: 6px 0;
+                border-bottom: 1px solid rgba(200,200,200,0.25); }
+    .cell { min-height: 120px; border: 1px solid rgba(200,200,200,0.25);
+            border-radius: 8px; padding: 6px; display:flex; flex-direction:column; }
+    .cell.empty { background: transparent; border: 1px dashed rgba(200,200,200,0.15); }
+    .day { font-weight: 700; opacity: 0.95; margin-bottom: 4px; }
+    .lines { display:flex; flex-direction:column; gap:4px; }
+    .resline { padding: 4px 6px; border-radius: 6px; line-height: 1.15; font-size: 0.92rem; }
+    @media (max-width: 1100px) {
+        .cell { min-height: 100px; }
+        .resline { font-size: 0.85rem; }
+    }
+    </style>
+    """
+
+    # En-têtes
+    head_row = "".join([f'<div class="cal-head">{h}</div>' for h in headers])
+
+    # Lignes semaines
+    body_rows = []
+    for week in monthcal:
+        for day in week:
+            if day == 0:
+                body_rows.append(_html_calendar_cell(None, [], palette))
+            else:
+                d = date(annee, mois, day)
+                items = planning.get(d, [])
+                body_rows.append(_html_calendar_cell(day, items, palette))
+
+    body = "".join(body_rows)
+
+    html_table = f"""
+    {css}
+    <div class="cal-wrap">
+      <div class="cal-grid">
+        {head_row}
+        {body}
+      </div>
+    </div>
+    """
+    return html_table
 
 def vue_calendrier(df: pd.DataFrame):
     palette = get_palette()
-    st.title("📅 Calendrier mensuel (cases colorées par plateforme)")
+    st.title("📅 Calendrier mensuel")
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
@@ -761,86 +890,22 @@ def vue_calendrier(df: pd.DataFrame):
     annee = cols[1].selectbox("Année", annees, index=len(annees)-1)
 
     mois_index = list(calendar.month_name).index(mois_nom)
-    nb_jours = calendar.monthrange(annee, mois_index)[1]
-    jours = [date(annee, mois_index, j+1) for j in range(nb_jours)]
 
-    # Construire planning jour -> [(pf, nom), ...]
-    core, _ = split_totals(df)
-    planning = {j: [] for j in jours}
-    for _, row in core.iterrows():
-        d1 = row["date_arrivee"]; d2 = row["date_depart"]
-        if not (isinstance(d1, date) and isinstance(d2, date)):
-            continue
-        pf = str(row["plateforme"] or "Autre")
-        nom = str(row["nom_client"] or "")
-        for j in jours:
-            if d1 <= j < d2:
-                planning[j].append((pf, nom))
+    # Rendu HTML (chaque ligne colorée individuellement par plateforme)
+    cal_html = _render_month_calendar_html(df, annee, mois_index, palette)
+    st.markdown(cal_html, unsafe_allow_html=True)
 
-    headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
-    monthcal = calendar.monthcalendar(annee, mois_index)
-
-    # === Rendu HTML (robuste en thème sombre) ===
-    # Styles : bordures claires, fond neutre sombre pour les jours vides, et couleur de case pastel
-    base_css = """
-    <style>
-      .cal-wrap { width: 100%; overflow-x: auto; }
-      table.cal { width: 100%; border-collapse: separate; border-spacing: 6px; }
-      table.cal th { text-align:center; font-weight:600; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.2); }
-      table.cal td {
-        vertical-align: top;
-        min-width: 120px;
-        height: 110px;
-        padding: 8px 10px;
-        border: 1px solid rgba(255,255,255,0.18);
-        border-radius: 10px;
-        background: rgba(255,255,255,0.04); /* neutre lisible sur fond sombre */
-        color: inherit;
-        white-space: pre-wrap;
-        line-height: 1.25;
-        font-size: 0.92rem;
-      }
-      .cal .daynum { font-weight:700; opacity:0.9; margin-bottom:6px; display:block; }
-      .cal .item { display:block; }
-    </style>
-    """
-
-    # Construire le body du calendrier
-    rows_html = []
-    for semaine in monthcal:
-        tds = []
-        for jour in semaine:
-            if jour == 0:
-                tds.append('<td></td>')
-            else:
-                d = date(annee, mois_index, jour)
-                items = planning.get(d, [])
-                # couleur de fond selon 1ère résa (pastel)
-                if items:
-                    base = palette.get(items[0][0], "#999999")
-                    bg = lighten_color(base, 0.75)
-                    fg = ideal_text_color(bg)
-                    # contenu: noms clients (un par ligne)
-                    noms = "<br/>".join([f'<span class="item">{nom}</span>' for _, nom in items])
-                    cell = f'<td style="background:{bg}; color:{fg}; border-color: rgba(0,0,0,0.15);">' \
-                           f'<span class="daynum">{jour}</span>{noms}</td>'
-                else:
-                    cell = f'<td><span class="daynum">{jour}</span></td>'
-                tds.append(cell)
-        rows_html.append("<tr>" + "".join(tds) + "</tr>")
-
-    thead = "<thead><tr>" + "".join([f"<th>{h}</th>" for h in headers]) + "</tr></thead>"
-    tbody = "<tbody>" + "".join(rows_html) + "</tbody>"
-    cal_html = base_css + f'<div class="cal-wrap"><table class="cal">{thead}{tbody}</table></div>'
-
-    st.markdown("Légende :")
+    # Légende
+    st.caption("Légende :")
     leg = " • ".join([
-        f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{get_palette()[p]};margin-right:6px;border-radius:3px;"></span>{p}'
-        for p in sorted(get_palette().keys())
+        f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{palette[p]};margin-right:6px;border-radius:3px;"></span>{html.escape(p)}'
+        for p in sorted(palette.keys())
     ])
     st.markdown(leg, unsafe_allow_html=True)
 
-    st.markdown(cal_html, unsafe_allow_html=True)
+# =====================================================================================
+#                                       📊 RAPPORT
+# =====================================================================================
 
 def vue_rapport(df: pd.DataFrame):
     st.title("📊 Rapport (détaillé)")
@@ -923,6 +988,10 @@ def vue_rapport(df: pd.DataFrame):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+# =====================================================================================
+#                                      👥 CLIENTS
+# =====================================================================================
+
 def vue_clients(df: pd.DataFrame):
     st.title("👥 Liste des clients")
     df = ensure_schema(df)
@@ -963,6 +1032,10 @@ def vue_clients(df: pd.DataFrame):
         mime="text/csv"
     )
 
+# =====================================================================================
+#                                   📤 EXPORT ICS
+# =====================================================================================
+
 def vue_export_ics(df: pd.DataFrame):
     st.title("📤 Export ICS (Google Agenda – Import manuel)")
     df = ensure_schema(df)
@@ -998,6 +1071,10 @@ def vue_export_ics(df: pd.DataFrame):
     )
     st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
 
+# =====================================================================================
+#                                         ✉️ SMS
+# =====================================================================================
+
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
     df = ensure_schema(df)
@@ -1011,6 +1088,7 @@ def vue_sms(df: pd.DataFrame):
 
     colA, colB = st.columns(2)
 
+    # Arrivées demain
     with colA:
         st.subheader("📆 Arrivées demain")
         arrives = df[df["date_arrivee"] == demain].copy()
@@ -1032,6 +1110,7 @@ def vue_sms(df: pd.DataFrame):
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
+    # Relance +24h après départ
     with colB:
         st.subheader("🕒 Relance +24h après départ")
         dep_24h = df[df["date_depart"] == hier].copy()
@@ -1050,6 +1129,7 @@ def vue_sms(df: pd.DataFrame):
                 if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
+    # Composeur manuel
     st.subheader("✍️ Composer un SMS manuel")
     df_pick = df.copy()
     df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
@@ -1077,7 +1157,9 @@ def vue_sms(df: pd.DataFrame):
     else:
         st.info("Renseignez un téléphone et un message.")
 
-# ==============================  APP  ==============================
+# =====================================================================================
+#                                           🚀 APP
+# =====================================================================================
 
 def main():
     # Sidebar : Fichier & Palette & Maintenance
