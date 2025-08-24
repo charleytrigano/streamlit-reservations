@@ -1,4 +1,4 @@
-# io_utils.py — Excel I/O + maintenance (compatible app.py multi-fichiers)
+# io_utils.py — Excel I/O + helpers + maintenance (compatible vues)
 import os
 from io import BytesIO
 from datetime import date
@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
+# ============================== Constantes ==============================
 FICHIER = "reservations.xlsx"
 SHEET_RES = "Reservations"
 SHEET_PLAT = "Plateformes"
@@ -19,6 +20,10 @@ BASE_COLS = [
     "AAAA","MM","ical_uid"
 ]
 
+# ============================== Helpers de format ==============================
+def format_date_str(d):
+    return d.strftime("%Y/%m/%d") if isinstance(d, date) else ""
+
 def _to_date_only(x):
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return None
@@ -27,7 +32,7 @@ def _to_date_only(x):
     except Exception:
         return None
 
-def _normalize_tel(x):
+def normalize_tel(x):
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
     s = str(x).strip().replace(" ", "")
@@ -35,15 +40,18 @@ def _normalize_tel(x):
         s = s[:-2]
     return s
 
+# ============================== Schéma & calculs ==============================
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if df is None:
         df = pd.DataFrame()
     df = df.copy()
 
+    # Colonnes manquantes
     for c in BASE_COLS:
         if c not in df.columns:
             df[c] = np.nan
 
+    # Types/valeurs
     if "paye" in df.columns:
         df["paye"] = df["paye"].fillna(False).astype(bool)
     if "sms_envoye" in df.columns:
@@ -52,7 +60,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["date_arrivee", "date_depart"]:
         df[c] = df[c].apply(_to_date_only)
     if "telephone" in df.columns:
-        df["telephone"] = df["telephone"].apply(_normalize_tel)
+        df["telephone"] = df["telephone"].apply(normalize_tel)
 
     num_cols = ["prix_brut","commissions","frais_cb","prix_net",
                 "menage","taxes_sejour","base","charges","%","nuitees"]
@@ -60,23 +68,24 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    # Nuitéés & AAAA/MM
     if "date_arrivee" in df.columns and "date_depart" in df.columns:
         df["nuitees"] = [
             (d2 - d1).days if (isinstance(d1, date) and isinstance(d2, date)) else np.nan
             for d1, d2 in zip(df["date_arrivee"], df["date_depart"])
         ]
-
     if "date_arrivee" in df.columns:
         df["AAAA"] = df["date_arrivee"].apply(lambda d: d.year if isinstance(d, date) else np.nan).astype("Int64")
         df["MM"]   = df["date_arrivee"].apply(lambda d: d.month if isinstance(d, date) else np.nan).astype("Int64")
 
+    # Défauts
     df["nom_client"] = df["nom_client"].fillna("")
     df["plateforme"] = df["plateforme"].fillna("Autre")
     df["ical_uid"]   = df["ical_uid"].fillna("")
-
     for c in ["prix_brut","commissions","frais_cb","menage","taxes_sejour"]:
         df[c] = df[c].fillna(0.0)
 
+    # Calculs
     df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).clip(lower=0)
     df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).clip(lower=0)
     df["charges"]  = (df["prix_brut"] - df["prix_net"]).clip(lower=0)
@@ -90,8 +99,29 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     rest = [c for c in df.columns if c not in ordered]
     return df[ordered + rest]
 
-# ---------------------- Lecture / écriture Excel ----------------------
+# ============================== Totaux & tri ==============================
+def _is_total_row(row: pd.Series) -> bool:
+    name_is_total = str(row.get("nom_client","")).strip().lower() == "total"
+    pf_is_total   = str(row.get("plateforme","")).strip().lower() == "total"
+    d1 = row.get("date_arrivee"); d2 = row.get("date_depart")
+    no_dates = not isinstance(d1, date) and not isinstance(d2, date)
+    has_money = any(pd.notna(row.get(c)) and float(row.get(c) or 0) != 0
+                    for c in ["prix_brut","prix_net","base","charges"])
+    return name_is_total or pf_is_total or (no_dates and has_money)
 
+def split_totals(df: pd.DataFrame):
+    if df is None or df.empty:
+        return df, df
+    mask = df.apply(_is_total_row, axis=1)
+    return df[~mask].copy(), df[mask].copy()
+
+def sort_core(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    by = [c for c in ["date_arrivee","nom_client"] if c in df.columns]
+    return df.sort_values(by=by, na_position="last").reset_index(drop=True)
+
+# ============================== Lecture / écriture Excel ==============================
 @st.cache_data(show_spinner=False)
 def _read_excel_cached(path: str, mtime: float) -> dict:
     # force engine openpyxl
@@ -99,17 +129,17 @@ def _read_excel_cached(path: str, mtime: float) -> dict:
     out = {}
     if SHEET_RES in xl.sheet_names:
         out[SHEET_RES] = pd.read_excel(xl, sheet_name=SHEET_RES, engine="openpyxl",
-                                       converters={"telephone": _normalize_tel})
+                                       converters={"telephone": normalize_tel})
     else:
         out[SHEET_RES] = pd.DataFrame()
     if SHEET_PLAT in xl.sheet_names:
-        out[SHEET_PLAT] = pd.read_excel(xl, sheet_name=SHEET_PLAT, engine="openpyxl")
+        pf = pd.read_excel(xl, sheet_name=SHEET_PLAT, engine="openpyxl")
+        out[SHEET_PLAT] = pf.rename(columns=str)
     else:
         out[SHEET_PLAT] = pd.DataFrame(columns=["plateforme","couleur"])
     return out
 
 def charger_donnees() -> pd.DataFrame:
-    """Retourne la feuille Reservations avec schéma normalisé."""
     if not os.path.exists(FICHIER):
         return ensure_schema(pd.DataFrame())
     try:
@@ -122,7 +152,6 @@ def charger_donnees() -> pd.DataFrame:
         return ensure_schema(pd.DataFrame())
 
 def charger_plateformes() -> pd.DataFrame:
-    """Retourne la feuille Plateformes (plateforme, couleur)."""
     if not os.path.exists(FICHIER):
         return pd.DataFrame(columns=["plateforme","couleur"])
     try:
@@ -138,11 +167,9 @@ def charger_plateformes() -> pd.DataFrame:
         return pd.DataFrame(columns=["plateforme","couleur"])
 
 def sauvegarder_donnees(df_res: pd.DataFrame, df_pf: pd.DataFrame | None = None):
-    """Sauvegarde Reservations (+ éventuellement Plateformes)."""
     df_res = ensure_schema(df_res)
     if df_pf is None:
         df_pf = charger_plateformes()
-
     try:
         with pd.ExcelWriter(FICHIER, engine="openpyxl") as w:
             df_res.to_excel(w, index=False, sheet_name=SHEET_RES)
@@ -152,10 +179,9 @@ def sauvegarder_donnees(df_res: pd.DataFrame, df_pf: pd.DataFrame | None = None)
     except Exception as e:
         st.error(f"Échec de sauvegarde Excel : {e}")
 
-# ---------------------- UI : télécharger / restaurer / cache -------------
-
+# ============================== UI : télécharger / restaurer / cache ==============================
 def bouton_telecharger(df: pd.DataFrame):
-    """Téléchargement d’un XLSX exporté à la volée (feuille Reservations seule)."""
+    """Télécharge une copie de la feuille Reservations uniquement."""
     try:
         buf = BytesIO()
         df.to_excel(buf, index=False, engine="openpyxl", sheet_name=SHEET_RES)
