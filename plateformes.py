@@ -14,11 +14,10 @@ def _ensure_palette_df(dfpf: pd.DataFrame) -> pd.DataFrame:
     dfpf = dfpf.copy()
     if "plateforme" not in dfpf.columns: dfpf["plateforme"] = ""
     if "couleur" not in dfpf.columns:    dfpf["couleur"] = ""
-    # nettoyage simple
     dfpf["plateforme"] = dfpf["plateforme"].astype(str).str.strip()
     dfpf["couleur"] = dfpf["couleur"].astype(str).str.strip()
     dfpf = dfpf[dfpf["plateforme"] != ""].drop_duplicates(subset=["plateforme"], keep="last")
-    # couleurs par défaut si vide / invalide
+    # couleur hex valide, sinon gris
     dfpf.loc[~dfpf["couleur"].str.match(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"), "couleur"] = "#999999"
     return dfpf.reset_index(drop=True)
 
@@ -28,7 +27,6 @@ def charger_plateformes(path: str) -> pd.DataFrame:
     try:
         if not os.path.exists(path):
             return _ensure_palette_df(None)
-        # tente lecture de la feuille Plateformes
         xls = pd.ExcelFile(path, engine="openpyxl")
         if "Plateformes" in xls.sheet_names:
             dfpf = pd.read_excel(path, engine="openpyxl", sheet_name="Plateformes")
@@ -40,15 +38,15 @@ def charger_plateformes(path: str) -> pd.DataFrame:
         return _ensure_palette_df(None)
 
 def sauvegarder_plateformes(path: str, dfpf: pd.DataFrame):
-    """Écrit/Remplace uniquement la feuille Plateformes (préserve le reste)."""
+    """Écrit/Remplace uniquement la feuille Plateformes (préserve les autres feuilles)."""
     dfpf = _ensure_palette_df(dfpf)
     try:
-        # Si le fichier n’existe pas encore, on crée un classeur avec Plateformes
+        # Créer le fichier si besoin
         if not os.path.exists(path):
             with pd.ExcelWriter(path, engine="openpyxl") as w:
                 dfpf.to_excel(w, index=False, sheet_name="Plateformes")
         else:
-            # Remplacer la feuille Plateformes sans toucher aux autres
+            # Remplacer la feuille Plateformes sans toucher au reste
             with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
                 dfpf.to_excel(w, index=False, sheet_name="Plateformes")
         st.cache_data.clear()
@@ -57,7 +55,7 @@ def sauvegarder_plateformes(path: str, dfpf: pd.DataFrame):
         st.error(f"Échec sauvegarde Plateformes : {e}")
 
 def get_palette() -> dict:
-    """Palette prioritaire depuis Excel; sinon session ; sinon défaut."""
+    """Palette prioritaire depuis Excel ; sinon session ; sinon défaut."""
     try:
         dfpf = charger_plateformes(FICHIER)
         pal_xlsx = dict(zip(dfpf["plateforme"], dfpf["couleur"]))
@@ -68,7 +66,6 @@ def get_palette() -> dict:
     # fallback session / défaut
     if "palette" not in st.session_state:
         st.session_state["palette"] = DEFAULT_PALETTE.copy()
-    # nettoyage minimal
     out = {}
     for k, v in st.session_state["palette"].items():
         if isinstance(k, str) and isinstance(v, str) and v.startswith("#") and len(v) in (4,7):
@@ -104,11 +101,11 @@ def vue_plateformes():
     c1, c2, c3 = st.columns([1,1,2])
     if c1.button("➕ Ajouter une ligne"):
         edited = pd.concat([edited, pd.DataFrame([{"plateforme": "", "couleur": "#999999"}])], ignore_index=True)
-        st.experimental_rerun()
+        st.rerun()
 
     if c2.button("🗑 Supprimer les lignes vides"):
         edited = edited[edited["plateforme"].astype(str).str.strip() != ""].reset_index(drop=True)
-        st.experimental_rerun()
+        st.rerun()
 
     if st.button("💾 Enregistrer dans Excel"):
         sauvegarder_plateformes(FICHIER, edited)
