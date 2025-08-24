@@ -1,61 +1,53 @@
-# plateformes_view.py — Onglet complet pour gérer les plateformes (CRUD)
+# plateformes_view.py — CRUD Plateformes (onglet dédié)
 
 import streamlit as st
 import pandas as pd
-from palette_utils import (
-    get_palette, set_palette,
-    load_palette_from_excel, save_palette_to_excel,
-    SHEET_PLAT, COL_NAME, COL_COLOR
-)
+from io_utils import read_palette_from_excel, write_palette_to_excel, charger_donnees
+from palette_utils import platform_badge
 
 def vue_plateformes():
-    st.title("🎛️ Plateformes (couleurs & gestion)")
-    st.caption("Ici vous pouvez **ajouter, renommer, supprimer** des plateformes et définir leur **couleur**. Les changements sont enregistrés dans la feuille Excel « Plateformes ».")
+    st.title("🎛️ Plateformes")
+    pal = read_palette_from_excel().copy()
+    if pal.empty:
+        pal = pd.DataFrame({"plateforme":["Booking","Airbnb","Autre"],
+                            "couleur":["#1e90ff","#e74c3c","#f59e0b"]})
+    pal["plateforme"] = pal["plateforme"].astype(str)
 
-    pal = load_palette_from_excel()
-    st.session_state.palette = pal  # sync
-
-    # Tableau éditable
-    rows = [{"nom": k, "couleur": v} for k, v in pal.items()]
-    df = pd.DataFrame(rows, columns=[COL_NAME, COL_COLOR])
-
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            COL_NAME:  st.column_config.TextColumn("Nom de la plateforme"),
-            COL_COLOR: st.column_config.ColorPickerColumn("Couleur"),
-        },
-        num_rows="dynamic",
-    )
-
-    c1, c2, c3 = st.columns([1,1,2])
-    if c1.button("💾 Enregistrer"):
-        # Validation basique
-        new_pal = {}
-        for _, r in edited.iterrows():
-            name  = str(r.get(COL_NAME, "")).strip()
-            color = str(r.get(COL_COLOR, "")).strip()
-            if name and color.startswith("#"):
-                new_pal[name] = color
-        if not new_pal:
-            st.error("Aucune plateforme valide (nom + couleur).")
-            return
-        set_palette(new_pal)
-        save_palette_to_excel(new_pal)
-        st.success("✅ Plateformes enregistrées dans Excel.")
-        st.experimental_rerun()
-
-    if c2.button("➕ Ajouter une ligne"):
-        edited.loc[len(edited)] = {COL_NAME: "", COL_COLOR: "#9b59b6"}
-        st.experimental_rerun()
+    st.markdown("**Aperçu**")
+    badges = " &nbsp;&nbsp;".join([platform_badge(n, dict(zip(pal["plateforme"], pal["couleur"]))) for n in pal["plateforme"]])
+    st.markdown(badges, unsafe_allow_html=True)
 
     st.markdown("---")
-    if pal:
-        st.subheader("Aperçu")
-        badges = " &nbsp;&nbsp;".join([
-            f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{pal[n]};border-radius:3px;margin-right:6px;"></span>{n}'
-            for n in sorted(pal.keys())
-        ])
-        st.markdown(badges, unsafe_allow_html=True)
+    st.subheader("Ajouter / Modifier")
+    c1, c2, c3 = st.columns([2,1,1])
+    with c1:
+        name = st.text_input("Nom plateforme", "")
+    with c2:
+        col = st.color_picker("Couleur", "#9b59b6")
+    with c3:
+        st.write("")
+        if st.button("Ajouter / Mettre à jour"):
+            name2 = (name or "").strip()
+            if not name2:
+                st.warning("Nom requis.")
+            else:
+                if name2 in pal["plateforme"].values:
+                    pal.loc[pal["plateforme"]==name2, "couleur"] = col
+                else:
+                    pal = pd.concat([pal, pd.DataFrame([{"plateforme":name2,"couleur":col}])], ignore_index=True)
+                write_palette_to_excel(pal, df_resa=charger_donnees())
+                st.success("Enregistré.")
+                st.rerun()
+
+    st.subheader("Liste")
+    st.dataframe(pal, use_container_width=True, hide_index=True)
+
+    # suppression
+    st.markdown("### Supprimer")
+    if len(pal) > 0:
+        choix = st.selectbox("Sélection", pal["plateforme"])
+        if st.button("🗑 Supprimer la plateforme"):
+            pal = pal[pal["plateforme"] != choix].reset_index(drop=True)
+            write_palette_to_excel(pal, df_resa=charger_donnees())
+            st.warning(f"Supprimé : {choix}")
+            st.rerun()
