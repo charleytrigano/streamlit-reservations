@@ -1,24 +1,22 @@
-# app.py — point d'entrée (navigation + barre latérale + intégration des vues)
+# app.py — point d'entrée
 
 import streamlit as st
-from io_utils import (
-    charger_donnees, charger_plateformes,
-    bouton_telecharger, bouton_restaurer,
-    render_cache_section_sidebar,
-)
 
-# ---------- Vues ----------
-from reservations_view import (
-    vue_reservations,
-    vue_ajouter,
-    vue_modifier,
-)
+# Vues importées (assure-toi que ces fichiers existent à la racine)
+from reservations_view import vue_reservations, vue_ajouter, vue_modifier
 from plateformes_view import vue_plateformes
 from calendrier_view import vue_calendrier
 from rapport_view import vue_rapport
 from clients_view import vue_clients
 from sms_view import vue_sms
 from ics_utils import vue_export_ics
+
+# Outils I/O centralisés
+from io_utils import (
+    charger_donnees, charger_plateformes,
+    bouton_telecharger, bouton_restaurer,
+    render_cache_section_sidebar,
+)
 
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
@@ -60,8 +58,7 @@ def main():
     elif onglet == "✏️ Modifier / Supprimer":
         vue_modifier(df)
     elif onglet == "🎨 Plateformes":
-        df_pf = charger_plateformes()
-        vue_plateformes(df, df_pf)
+        vue_plateformes(df, charger_plateformes())
     elif onglet == "📅 Calendrier":
         vue_calendrier(df)
     elif onglet == "📊 Rapport":
