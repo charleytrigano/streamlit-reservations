@@ -1,19 +1,16 @@
-# calendar_view.py — Calendrier mensuel avec cases colorées par plateforme + noms clients
+# calendar_view.py — Calendrier mensuel (cases colorées + noms clients)
 
 import streamlit as st
 import pandas as pd
 import calendar
 from datetime import date
 import colorsys
-
-from palette_utils import get_palette
-from io_utils import ensure_schema, split_totals  # split_totals doit exister dans io_utils.py
+from io_utils import ensure_schema, split_totals, format_date_str
+from palette_utils import get_palette_dict
 
 def _lighten(hex_color: str, factor: float = 0.75) -> str:
     hex_color = hex_color.lstrip("#")
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
+    r = int(hex_color[0:2], 16); g = int(hex_color[2:4], 16); b = int(hex_color[4:6], 16)
     h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
     l = min(1.0, l + (1.0 - l) * factor)
     r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
@@ -21,107 +18,67 @@ def _lighten(hex_color: str, factor: float = 0.75) -> str:
 
 def _ideal_text(bg_hex: str) -> str:
     bg_hex = bg_hex.lstrip("#")
-    r = int(bg_hex[0:2], 16)
-    g = int(bg_hex[2:4], 16)
-    b = int(bg_hex[4:6], 16)
-    lum = (0.299*r + 0.587*g + 0.114*b)/255
-    return "#000000" if lum > 0.6 else "#ffffff"
+    r = int(bg_hex[0:2], 16); g = int(bg_hex[2:4], 16); b = int(bg_hex[4:6], 16)
+    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
+    return "#000000" if luminance > 0.6 else "#ffffff"
 
 def vue_calendrier(df: pd.DataFrame):
-    pal = get_palette()
-    st.title("📅 Calendrier (par plateforme)")
+    pal = get_palette_dict()
+    st.title("📅 Calendrier")
     df = ensure_schema(df)
     if df.empty:
-        st.info("Aucune réservation.")
+        st.info("Aucune donnée.")
         return
 
-    c1, c2 = st.columns(2)
-    mois_nom = c1.selectbox("Mois", list(calendar.month_name)[1:], index=max(0, date.today().month-1))
+    cols = st.columns(2)
+    mois_nom = cols[0].selectbox("Mois", list(calendar.month_name)[1:], index=max(0, date.today().month-1))
     annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
     if not annees:
-        st.warning("Aucune année trouvée.")
+        st.warning("Aucune année disponible.")
         return
-    annee = c2.selectbox("Année", annees, index=len(annees)-1)
+    annee = cols[1].selectbox("Année", annees, index=len(annees)-1)
 
-    m = list(calendar.month_name).index(mois_nom)
-    monthcal = calendar.monthcalendar(annee, m)
+    mois_index = list(calendar.month_name).index(mois_nom)
+    headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
+    monthcal = calendar.monthcalendar(annee, mois_index)
 
-    # Construire mapping jour -> [(pf, client), ...]
-    jours_du_mois = {
-        date(annee, m, j): []
-        for j in range(1, calendar.monthrange(annee, m)[1] + 1)
-    }
+    # planning jour -> [(pf, nom)]
     core, _ = split_totals(df)
+    day_map = {}
     for _, r in core.iterrows():
-        d1, d2 = r.get("date_arrivee"), r.get("date_depart")
+        d1, d2 = r["date_arrivee"], r["date_depart"]
         if not (isinstance(d1, date) and isinstance(d2, date)):
             continue
-        pf = str(r.get("plateforme") or "Autre")
-        nom = str(r.get("nom_client") or "")
-        cur = d1
-        while cur < d2:
-            if cur.month == m and cur.year == annee:
-                jours_du_mois[cur].append((pf, nom))
-            cur = cur.replace(day=cur.day)  # no-op; just clarity
-            # avance d'un jour:
-            try:
-                from datetime import timedelta
-                cur = cur + timedelta(days=1)
-            except Exception:
-                break
+        j = d1
+        while j < d2:
+            if j.month == mois_index and j.year == annee:
+                day_map.setdefault(j, []).append((str(r["plateforme"]), str(r["nom_client"])))
+            j = j + pd.Timedelta(days=1)
 
-    # Construire table + styles
-    headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
     table, bg_table, fg_table = [], [], []
-
-    for sem in monthcal:
-        row_txt, row_bg, row_fg = [], [], []
-        for jour in sem:
-            if jour == 0:
-                row_txt.append("")
-                row_bg.append("transparent")
-                row_fg.append("inherit")
+    for semaine in monthcal:
+        row_text, row_bg, row_fg = [], [], []
+        for j in semaine:
+            if j == 0:
+                row_text.append(""); row_bg.append("transparent"); row_fg.append(None)
             else:
-                d = date(annee, m, jour)
-                items = jours_du_mois.get(d, [])
-                # texte: num du jour + noms (max 5)
-                noms = [nm for _, nm in items]
-                if len(noms) > 5:
-                    content = [str(jour)] + noms[:5] + [f"... (+{len(noms)-5})"]
-                else:
-                    content = [str(jour)] + noms
-                row_txt.append("\n".join(content))
-
+                d = date(annee, mois_index, j)
+                items = day_map.get(d, [])
+                lines = [str(j)] + [nm for _, nm in items[:5]] + ([f"... (+{len(items)-5})"] if len(items)>5 else [])
+                row_text.append("\n".join(lines))
                 if items:
-                    base = pal.get(items[0][0], "#999999")
-                    bg = _lighten(base, 0.75)
+                    base = pal.get(items[0][0], "#888888")
+                    bg = _lighten(base, 0.72)
                     fg = _ideal_text(bg)
                 else:
-                    bg, fg = "transparent", "inherit"
+                    bg = "transparent"; fg = None
                 row_bg.append(bg); row_fg.append(fg)
-        table.append(row_txt); bg_table.append(row_bg); fg_table.append(row_fg)
+        table.append(row_text); bg_table.append(row_bg); fg_table.append(row_fg)
 
-    df_tbl = pd.DataFrame(table, columns=headers)
+    df_table = pd.DataFrame(table, columns=headers)
 
-    def _style_row(vals, ridx):
-        css = []
-        for cidx, _ in enumerate(vals):
-            bg = bg_table[ridx][cidx]; fg = fg_table[ridx][cidx]
-            css.append(
-                f"background-color:{bg};color:{fg};white-space:pre-wrap;"
-                f"border:1px solid rgba(127,127,127,0.25);"
-            )
-        return css
-
-    styler = df_tbl.style
-    for r in range(df_tbl.shape[0]):
-        styler = styler.apply(lambda v, r=r: _style_row(v, r), axis=1)
-
-    st.caption("Légende :")
-    leg = " • ".join([
-        f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{pal[p]};border-radius:3px;margin-right:6px;"></span>{p}'
-        for p in sorted(pal.keys())
-    ])
-    st.markdown(leg, unsafe_allow_html=True)
-
-    st.dataframe(styler, use_container_width=True, height=500)
+    def style_row(vals, i):
+        css=[]
+        for k,_ in enumerate(vals):
+            bg = bg_table[i][k]; fg = fg_table[i][k] or "inherit"
+            css.append(f"background-color:{bg};color:{fg};white-space:pre-wrap;border:1px solid rgba(127,127,127,0.25
