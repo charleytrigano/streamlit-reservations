@@ -1,84 +1,82 @@
-# calendar_view.py — Calendrier mensuel (cases colorées + noms clients)
-
-import streamlit as st
-import pandas as pd
-import calendar
-from datetime import date
-import colorsys
-from io_utils import ensure_schema, split_totals, format_date_str
-from palette_utils import get_palette_dict
-
-def _lighten(hex_color: str, factor: float = 0.75) -> str:
-    hex_color = hex_color.lstrip("#")
-    r = int(hex_color[0:2], 16); g = int(hex_color[2:4], 16); b = int(hex_color[4:6], 16)
-    h, l, s = colorsys.rgb_to_hls(r/255, g/255, b/255)
-    l = min(1.0, l + (1.0 - l) * factor)
-    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
-    return f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
-
-def _ideal_text(bg_hex: str) -> str:
-    bg_hex = bg_hex.lstrip("#")
-    r = int(bg_hex[0:2], 16); g = int(bg_hex[2:4], 16); b = int(bg_hex[4:6], 16)
-    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
-    return "#000000" if luminance > 0.6 else "#ffffff"
-
 def vue_calendrier(df: pd.DataFrame):
-    pal = get_palette_dict()
     st.title("📅 Calendrier")
+    palette = get_palette()
     df = ensure_schema(df)
-    if df.empty:
-        st.info("Aucune donnée.")
+
+    # Si pas de données, on affiche un message plutôt que planter
+    if df is None or df.empty:
+        st.info("Aucune réservation à afficher.")
         return
 
-    cols = st.columns(2)
-    mois_nom = cols[0].selectbox("Mois", list(calendar.month_name)[1:], index=max(0, date.today().month-1))
-    annees = sorted([int(x) for x in df["AAAA"].dropna().unique()])
-    if not annees:
-        st.warning("Aucune année disponible.")
+    # Sélection année/mois – protection si aucune année dispo
+    annees_series = df["AAAA"].dropna() if "AAAA" in df.columns else pd.Series(dtype="Int64")
+    if annees_series.empty:
+        st.info("Aucune année disponible (colonne AAAA vide). Ajoute au moins une réservation avec une date d’arrivée.")
         return
-    annee = cols[1].selectbox("Année", annees, index=len(annees)-1)
 
-    mois_index = list(calendar.month_name).index(mois_nom)
-    headers = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"]
-    monthcal = calendar.monthcalendar(annee, mois_index)
+    annees = sorted(int(a) for a in annees_series.unique() if pd.notna(a))
+    today = date.today()
+    annee = st.selectbox("Année", annees, index=max(0, len(annees)-1))
+    mois = st.selectbox("Mois", list(range(1, 13)), index=today.month - 1)
 
-    # planning jour -> [(pf, nom)]
+    cal = calendar.Calendar(firstweekday=0)  # 0 = lundi
+    days = list(cal.itermonthdates(int(annee), int(mois)))
+
+    # Prépare les réservations par jour
+    rows = []
     core, _ = split_totals(df)
-    day_map = {}
-    for _, r in core.iterrows():
-        d1, d2 = r["date_arrivee"], r["date_depart"]
-        if not (isinstance(d1, date) and isinstance(d2, date)):
-            continue
-        j = d1
-        while j < d2:
-            if j.month == mois_index and j.year == annee:
-                day_map.setdefault(j, []).append((str(r["plateforme"]), str(r["nom_client"])))
-            j = j + pd.Timedelta(days=1)
+    for week in range(0, len(days), 7):
+        tds = []
+        for d in days[week:week+7]:
+            # Jour hors mois = case grisée
+            if d.month != mois:
+                tds.append(
+                    "<td style='vertical-align:top;width:14%;height:88px;border:1px solid #333;"
+                    "background:rgba(127,127,127,0.08);color:rgba(255,255,255,0.5);padding:6px;'>"
+                    f"{d.day}</td>"
+                )
+                continue
 
-    table, bg_table, fg_table = [], [], []
-    for semaine in monthcal:
-        row_text, row_bg, row_fg = [], [], []
-        for j in semaine:
-            if j == 0:
-                row_text.append(""); row_bg.append("transparent"); row_fg.append(None)
-            else:
-                d = date(annee, mois_index, j)
-                items = day_map.get(d, [])
-                lines = [str(j)] + [nm for _, nm in items[:5]] + ([f"... (+{len(items)-5})"] if len(items)>5 else [])
-                row_text.append("\n".join(lines))
-                if items:
-                    base = pal.get(items[0][0], "#888888")
-                    bg = _lighten(base, 0.72)
-                    fg = _ideal_text(bg)
-                else:
-                    bg = "transparent"; fg = None
-                row_bg.append(bg); row_fg.append(fg)
-        table.append(row_text); bg_table.append(row_bg); fg_table.append(row_fg)
+            # Trouve les séjours couvrant ce jour
+            resa = core[(core["date_arrivee"] <= d) & (core["date_depart"] > d)]
+            chips = []
+            for _, r in resa.iterrows():
+                pf = str(r.get("plateforme") or "Autre")
+                nom = str(r.get("nom_client") or "")
+                color = palette.get(pf, "#666666")
+                chips.append(
+                    f"<div style='margin-top:4px;padding:2px 6px;border-radius:4px;"
+                    f"background:{color};color:white;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;'>"
+                    f"{nom}</div>"
+                )
+            cell_html = "".join(chips)
+            tds.append(
+                "<td style='vertical-align:top;width:14%;height:88px;border:1px solid #333;"
+                "background:transparent;color:inherit;padding:6px;'>"
+                f"<div style='font-weight:600;opacity:0.9'>{d.day}</div>{cell_html}</td>"
+            )
+        rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    df_table = pd.DataFrame(table, columns=headers)
+    # Titre semaine
+    head = "".join([f"<th style='padding:6px;border:1px solid #333'>{j}</th>"
+                    for j in ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim']])
 
-    def style_row(vals, i):
-        css=[]
-        for k,_ in enumerate(vals):
-            bg = bg_table[i][k]; fg = fg_table[i][k] or "inherit"
-            css.append(f"background-color:{bg};color:{fg};white-space:pre-wrap;border:1px solid rgba(127,127,127,0.25
+    html = (
+        "<div style='overflow-x:auto'>"
+        "<table style='border-collapse:collapse;width:100%;font-size:0.95rem;'>"
+        f"<tr>{head}</tr>"
+        f"{''.join(rows)}"
+        "</table>"
+        "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+    # Légende
+    if palette:
+        leg = " • ".join(
+            f"<span style='display:inline-block;width:0.9em;height:0.9em;background:{palette[p]};"
+            f"margin-right:6px;border-radius:3px;vertical-align:-0.1em;'></span>{p}"
+            for p in sorted(palette.keys())
+        )
+        st.caption("Légende :")
+        st.markdown(leg, unsafe_allow_html=True)
