@@ -1,4 +1,13 @@
 # app.py — Villa Tobias (projet découpé par onglet)
+import sys, os
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+
+
+
+
 
 import streamlit as st
 from io_utils import (
