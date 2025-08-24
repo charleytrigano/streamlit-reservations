@@ -36,7 +36,8 @@ def main():
     elif page == "👥 Clients":
         vue_clients(df)
     elif page == "🎨 Plateformes":
-        st.sidebar.success("Gérez vos plateformes dans cette section.")
+        st.title("🎨 Gestion des plateformes")
+        st.info("Ajoutez, modifiez ou supprimez vos plateformes dans la barre latérale.")
 
 if __name__ == "__main__":
     main()
