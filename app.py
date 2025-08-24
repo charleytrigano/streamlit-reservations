@@ -325,4 +325,8 @@ def main():
         vue_sms(df)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error("Une erreur est survenue dans l’application :")
+        st.exception(e)
