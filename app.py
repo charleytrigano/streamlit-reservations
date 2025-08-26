@@ -17,6 +17,7 @@ import hashlib
 import os
 from urllib.parse import quote
 import colorsys
+import traceback
 
 FICHIER = "reservations.xlsx"
 PALETTE_SHEET = "Plateformes"   # feuille Excel palette
@@ -1182,6 +1183,7 @@ def main():
         vue_sms(df)
     elif onglet == "🎨 Plateformes":
         vue_plateformes()
+
 
 if __name__ == "__main__":
     main()
