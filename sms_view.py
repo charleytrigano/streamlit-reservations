@@ -21,13 +21,7 @@ def _sms_message_arrivee(row: pd.Series) -> str:
         f"Date d'arrivee : {d1s}  Date depart : {d2s}  Nombre de nuitees : {nuitees}\n\n"
         f"Bonjour {nom}\n"
         f"Telephone : {tel_aff}\n\n"
-        "Bienvenue chez nous !\n\n"
-        "Nous sommes ravis de vous accueillir bientot à Nice. "
-        "Pour organiser au mieux votre reception, merci de nous indiquer votre heure d'arrivee.\n\n"
-        "Sachez egalement qu'une place de parking vous est allouee.\n\n"
-        "Check-in à partir de 14h, check-out au plus tard 11h.\n\n"
-        "Consignes à bagages disponibles si besoin.\n\n"
-        "Annick & Charley"
+        
     )
 
 def _sms_message_depart(row: pd.Series) -> str:
