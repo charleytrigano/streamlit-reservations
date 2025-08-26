@@ -416,7 +416,6 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Vous trouverez des consignes a bagages dans chaque quartier de Nice.\n\n"
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n"
         "Annick & Charley"
-
         "Welcome to our home !\n\n"
         "We are delighted to welcome you to Nice. \n\n"
         "In order to organize your reception as best as possible, please let us know your arrival time.\n\n"
