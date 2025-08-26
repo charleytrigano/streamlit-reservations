@@ -1,4 +1,5 @@
 # app.py — Villa Tobias (COMPLET)
+
 # - Réservations / Ajouter / Modifier-Supprimer
 # - Plateformes (palette couleurs) avec sauvegarde dans Excel (feuille "Plateformes")
 # - Calendrier mensuel "barres style agenda" (lisible en thème sombre)
