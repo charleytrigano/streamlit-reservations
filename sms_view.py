@@ -31,14 +31,14 @@ def _sms_message_arrivee(row: pd.Series) -> str:
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n"
         "Annick & Charley"
 
-        “Welcome to our home. \n\n”
-        “We are delighted to welcome you to Nice. \n\n”
-        “In order to organize your reception as best as possible, please let us know your arrival time.\n\n”
-        “A parking space is available if needed. \n\n”
-        “Check-in is from 2:00 p.m. and check-out is by 11:00 a.m. at the latest.\n\n”
-        “You will find luggage storage facilities in every district of Nice.\n\n”
+        "Welcome to our home. \n\n"
+        "We are delighted to welcome you to Nice. \n\n"
+        "In order to organize your reception as best as possible, please let us know your arrival time.\n\n"
+       "A parking space is available if needed. \n\n"
+       "Check-in is from 2:00 p.m. and check-out is by 11:00 a.m. at the latest.\n\n"
+        "You will find luggage storage facilities in every district of Nice.\n\n"
         "We wish you a wonderful trip and look forward to meeting you very soon. \n\n"
-        “Annick & Charley”
+        "Annick & Charley"
     )
 
 def _sms_message_depart(row: pd.Series) -> str:
