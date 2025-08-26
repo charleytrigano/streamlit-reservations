@@ -409,7 +409,7 @@ def sms_message_arrivee(row: pd.Series) -> str:
         f"Bonjour {nom}\n"
         f"Téléphone : {tel_aff}\n\n"
         "Bienvenue chez nous !\n\n"
-        "Nous sommes ravis de vous accueillir à Nice. \n\n"
+        "Nous sommes ravis de vous accueillir a Nice. \n\n"
         "Afin d'organiser au mieux votre reception, merci de nous indiquervotre heure d'arrivée.\n\n"
         "Une Place de parking vous est allouée en cas de besoin. \n\n"
         "Le check-in se fait à partir de 14:00 h et le check-out au plus tard à 11;00 h.\n\n"
@@ -417,7 +417,7 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot.\n\n"
         "Annick & Charley"
         
-        "Welcome to our home !\n\n"
+        "Welcome to our home. \n\n"
         "We are delighted to welcome you to Nice. \n\n"
         "In order to organize your reception as best as possible, please let us know your arrival time.\n\n"
         "A parking space is available if needed. \n\n"
