@@ -1136,9 +1136,10 @@ def vue_plateformes():
     badges = " &nbsp;&nbsp;".join([platform_badge(pf, pal) for pf in sorted(pal.keys())])
     st.markdown(badges, unsafe_allow_html=True)
 
-# ==============================  APP  ==============================
-def main():
-    # Sidebar : Fichier & Maintenance
+# ==============================  APP  ==============================. 
+
+
+   # Sidebar : Fichier & Maintenance
     st.sidebar.title("📁 Fichier")
     df_tmp, pal_tmp = charger_donnees()
     bouton_telecharger(df_tmp)
@@ -1188,3 +1189,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+ 
