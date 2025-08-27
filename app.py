@@ -754,7 +754,7 @@ def _ideal_text_color(bg_hex: str) -> str:
     return "#000000" if luminance > 0.6 else "#ffffff"
 
 def vue_calendrier(df: pd.DataFrame):
-    st.title("📅 Calendrier (barres style agenda)")
+    st.title("📅 Calendrier - VILLA TOBIAS")
 
     palette = get_palette()
     df = ensure_schema(df)
@@ -839,7 +839,7 @@ def vue_calendrier(df: pd.DataFrame):
     st.markdown(leg, unsafe_allow_html=True)
 
 def vue_rapport(df: pd.DataFrame):
-    st.title("📊 Rapport (détaillé)")
+    st.title("📊 Rapport-VILLA TOBIAS")
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
