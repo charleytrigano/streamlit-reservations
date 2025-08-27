@@ -369,7 +369,7 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
         nuitees = int(row.get("nuitees") or ((d2 - d1).days))
         summary = " - ".join([x for x in [plateforme, nom_client, tel] if x])
         desc = (
-            f"Plateforme: {plateforme}\\n"
+            f"Plateforme: {plateforme}\n\n"
             f"Client: {nom_client}\\n"
             f"Téléphone: {tel}\\n"
             f"Arrivee: {d1.strftime('%Y/%m/%d')}\\n"
