@@ -409,9 +409,20 @@ def sms_message_arrivee(row: pd.Series) -> str:
         f"Bonjour {nom}\n"
         f"Téléphone : {tel_aff}\n\n"
         "Bienvenue chez nous !\n\n"
-        "Check-in à partir de 14h, check-out au plus tard 11h.\n"
-        "Merci de nous communiquer votre heure d'arrivée.\n\n"
-        "Annick & Charley"
+        "Nous sommes ravis de vous acceuillir bientot a Nice. Aussi afin d'organiser au mieux votre reception"
+        "merci de nous indiquer votre heure d'arrivee. \n\n"
+        "Sachez qu'une place de parking vous est allouee en cas de besoin. \n\n"
+        "Le check-in se fait a partir de 14:00 h et le check-out avant 11:00 h. \n\n"
+        "Vous trouverez des consignes a bagages dans chaque quartier a Nice. \n\n"
+        "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot. \n\n"
+        "Welcome to our home ! \n\n"
+        "We are delighted to welcome you soon to Nice. In order to organize your reception as best as possible"
+        "please let us know your arrival time. \n\n"
+        "Please note that a parking space is available if needed. \n\n"
+        "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. \n\n"
+        "You will find luggage storage facilities in every neighborhood in Nice. \n\n"
+        "We wish you a wonderful trip and look forward to meeting you very soon. \n\n"
+         "Annick & Charley"
     )
 
 def sms_message_depart(row: pd.Series) -> str:
