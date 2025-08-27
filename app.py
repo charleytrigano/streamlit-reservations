@@ -370,12 +370,12 @@ def df_to_ics(df: pd.DataFrame, cal_name: str = "Villa Tobias – Réservations"
         summary = " - ".join([x for x in [plateforme, nom_client, tel] if x])
         desc = (
             f"Plateforme: {plateforme}\n\n"
-            f"Client: {nom_client}\\n"
-            f"Téléphone: {tel}\\n"
-            f"Arrivee: {d1.strftime('%Y/%m/%d')}\\n"
-            f"Depart: {d2.strftime('%Y/%m/%d')}\\n"
-            f"Nuitees: {nuitees}\\n"
-            f"Brut: {brut:.2f} €\\nNet: {net:.2f} €"
+            f"Client: {nom_client}\n\n"
+            f"Téléphone: {tel}\n\n"
+            f"Arrivee: {d1.strftime('%Y/%m/%d')}\n\n"
+            f"Depart: {d2.strftime('%Y/%m/%d')}\n\n"
+            f"Nuitees: {nuitees}\n\n"
+            f"Brut: {brut:.2f} €\n\nNet: {net:.2f} €"
         )
         uid_existing = str(row.get("ical_uid") or "").strip()
         uid = uid_existing if uid_existing else _stable_uid(nom_client, plateforme, d1, d2, tel, salt="v1")
