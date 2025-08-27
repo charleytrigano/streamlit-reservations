@@ -1,5 +1,4 @@
 # app.py — Villa Tobias (COMPLET)
-
 # - Réservations / Ajouter / Modifier-Supprimer
 # - Plateformes (palette couleurs) avec sauvegarde dans Excel (feuille "Plateformes")
 # - Calendrier mensuel "barres style agenda" (lisible en thème sombre)
@@ -18,7 +17,6 @@ import hashlib
 import os
 from urllib.parse import quote
 import colorsys
-import traceback
 
 FICHIER = "reservations.xlsx"
 PALETTE_SHEET = "Plateformes"   # feuille Excel palette
@@ -411,20 +409,8 @@ def sms_message_arrivee(row: pd.Series) -> str:
         f"Bonjour {nom}\n"
         f"Téléphone : {tel_aff}\n\n"
         "Bienvenue chez nous !\n\n"
-        "Nous sommes ravis de vous accueillir a Nice.\n\n"
-        "Afin d'organiser au mieux votre reception, merci de nous indiquer votre heure d'arrivée.\n\n"
-        "Une place de parking vous est allouée en cas de besoin.\n\n"
-        "Le check-in se fait à partir de 14:00 et le check-out au plus tard à 11:00.\n\n"
-        "Vous trouverez des consignes à bagages dans chaque quartier de Nice.\n\n"
-        "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt.\n\n"
-        "Annick & Charley\n\n"
-        "Welcome to our home.\n\n"
-        "We are delighted to welcome you to Nice.\n\n"
-        "In order to organize your reception as best as possible, please let us know your arrival time.\n\n"
-        "A parking space is available if needed.\n\n"
-        "Check-in is from 2:00 p.m. and check-out is by 11:00 a.m. at the latest.\n\n"
-        "You will find luggage storage facilities in every district of Nice.\n\n"
-        "We wish you a wonderful trip and look forward to meeting you very soon.\n\n"
+        "Check-in à partir de 14h, check-out au plus tard 11h.\n"
+        "Merci de nous communiquer votre heure d'arrivée.\n\n"
         "Annick & Charley"
     )
 
@@ -587,10 +573,8 @@ def vue_ajouter(df: pd.DataFrame):
 
     def inline_input(label, widget_fn, key=None, **widget_kwargs):
         col1, col2 = st.columns([1,2])
-        with col1:
-            st.markdown(f"**{label}**")
-        with col2:
-            return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
+        with col1: st.markdown(f"**{label}**")
+        with col2: return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
 
     paye = inline_input("Payé", st.checkbox, key="add_paye", value=False)
     nom = inline_input("Nom", st.text_input, key="add_nom", value="")
@@ -724,9 +708,6 @@ def vue_modifier(df: pd.DataFrame):
         df.at[i,"date_depart"]  = depart
         df.at[i,"prix_brut"] = float(brut)
         df.at[i,"commissions"] = float(commissions)
-       
-
-        df.at[i,"commissions"] = float(commissions)
         df.at[i,"frais_cb"] = float(frais_cb)
         df.at[i,"prix_net"]  = round(net_calc, 2)
         df.at[i,"menage"] = float(menage)
@@ -749,7 +730,6 @@ def vue_modifier(df: pd.DataFrame):
         st.warning("Supprimé.")
         st.rerun()
 
-
 # ---- helpers calendrier ----
 def _ideal_text_color(bg_hex: str) -> str:
     bg_hex = bg_hex.lstrip("#")
@@ -758,8 +738,8 @@ def _ideal_text_color(bg_hex: str) -> str:
     r = int(bg_hex[0:2], 16)
     g = int(bg_hex[2:4], 16)
     b = int(bg_hex[4:6], 16)
-    # luminance perçue
-    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    # luminance "perçue"
+    luminance = (0.299*r + 0.587*g + 0.114*b) / 255
     return "#000000" if luminance > 0.6 else "#ffffff"
 
 def vue_calendrier(df: pd.DataFrame):
@@ -782,7 +762,7 @@ def vue_calendrier(df: pd.DataFrame):
     m = list(calendar.month_name).index(mois_nom)
     monthcal = calendar.monthcalendar(annee, m)
 
-    # Construire mapping jour -> [(pf, nom) ...]
+    # Construire mapping jour -> [ (pf, nom) ... ]
     core, _ = split_totals(df)
     planning = {}
     nb_jours = calendar.monthrange(annee, m)[1]
@@ -802,7 +782,7 @@ def vue_calendrier(df: pd.DataFrame):
                 planning[cursor].append((pf, nom))
             cursor += timedelta(days=1)
 
-    # CSS table
+    # CSS table sombre-friendly
     st.markdown("""
     <style>
     .cal-wrap { overflow-x:auto; }
@@ -842,8 +822,8 @@ def vue_calendrier(df: pd.DataFrame):
     # Légende
     st.caption("Légende plateformes :")
     leg = " • ".join([
-        f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{get_palette()[p]};border-radius:3px;margin-right:6px;"></span>{p}'
-        for p in sorted(get_palette().keys())
+        f'<span style="display:inline-block;width:0.9em;height:0.9em;background:{palette[p]};border-radius:3px;margin-right:6px;"></span>{p}'
+        for p in sorted(palette.keys())
     ])
     st.markdown(leg, unsafe_allow_html=True)
 
@@ -1001,7 +981,7 @@ def vue_export_ics(df: pd.DataFrame):
         file_name="reservations.ics",
         mime="text/calendar"
     )
-    st.caption("Dans Google Agenda : Paramètres -> Importer & exporter -> Importer -> sélectionnez ce fichier .ics.")
+    st.caption("Dans Google Agenda : Paramètres → Importer & exporter → Importer → sélectionnez ce fichier .ics.")
 
 def vue_sms(df: pd.DataFrame):
     st.title("✉️ SMS (envoi manuel)")
@@ -1022,8 +1002,7 @@ def vue_sms(df: pd.DataFrame):
         if arrives.empty:
             st.info("Aucune arrivée demain.")
         else:
-          
-for _, r in arrives.reset_index(drop=True).iterrows():
+            for _, r in arrives.reset_index(drop=True).iterrows():
                 body = sms_message_arrivee(r)
                 tel = normalize_tel(r.get("telephone"))
                 tel_link = f"tel:{tel}" if tel else ""
@@ -1031,10 +1010,8 @@ for _, r in arrives.reset_index(drop=True).iterrows():
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
                 c1, c2 = st.columns(2)
-                if tel_link: 
-                    c1.link_button(f"📞 Appeler {tel}", tel_link)
-                if sms_link: 
-                    c2.link_button("📩 Envoyer SMS", sms_link)
+                if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
+                if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
     with colB:
@@ -1051,28 +1028,20 @@ for _, r in arrives.reset_index(drop=True).iterrows():
                 st.markdown(f"**{r.get('nom_client','')}** — {r.get('plateforme','')}")
                 st.code(body)
                 c1, c2 = st.columns(2)
-                if tel_link: 
-                    c1.link_button(f"📞 Appeler {tel}", tel_link)
-                if sms_link: 
-                    c2.link_button("📩 Envoyer SMS", sms_link)
+                if tel_link: c1.link_button(f"📞 Appeler {tel}", tel_link)
+                if sms_link: c2.link_button("📩 Envoyer SMS", sms_link)
                 st.divider()
 
     st.subheader("✍️ Composer un SMS manuel")
     df_pick = df.copy()
-    df_pick["id_aff"] = (
-        df_pick["nom_client"].astype(str)
-        + " | " + df_pick["plateforme"].astype(str)
-        + " | " + df_pick["date_arrivee"].apply(format_date_str)
-    )
+    df_pick["id_aff"] = df_pick["nom_client"].astype(str) + " | " + df_pick["plateforme"].astype(str) + " | " + df_pick["date_arrivee"].apply(format_date_str)
     choix = st.selectbox("Choisir une réservation", df_pick["id_aff"])
     r = df_pick.loc[df_pick["id_aff"] == choix].iloc[0]
     tel = normalize_tel(r.get("telephone"))
 
-    choix_type = st.radio(
-        "Modèle de message",
-        ["Arrivée (demande d’heure)", "Relance après départ", "Message libre"],
-        horizontal=True
-    )
+    choix_type = st.radio("Modèle de message",
+                          ["Arrivée (demande d’heure)","Relance après départ","Message libre"],
+                          horizontal=True)
     if choix_type == "Arrivée (demande d’heure)":
         body = sms_message_arrivee(r)
     elif choix_type == "Relance après départ":
@@ -1094,7 +1063,10 @@ def vue_plateformes():
 
     st.caption("Ajoutez, modifiez, supprimez des plateformes. Cliquez ensuite sur **Enregistrer la palette** pour les stocker définitivement dans le fichier Excel (feuille «Plateformes»).")
 
-    pf_df = pd.DataFrame([{"plateforme": k, "couleur": v} for k, v in sorted(pal.items())])
+    # Tableau éditable
+    pf_df = pd.DataFrame(
+        [{"plateforme": k, "couleur": v} for k, v in sorted(pal.items())]
+    )
     pf_df = st.data_editor(
         pf_df,
         hide_index=True,
@@ -1108,6 +1080,7 @@ def vue_plateformes():
 
     c1, c2, c3 = st.columns(3)
     if c1.button("💾 Enregistrer la palette"):
+        # reconstruire palette propre
         new_p = {}
         for _, r in pf_df.iterrows():
             name = str(r.get("plateforme","")).strip()
@@ -1115,6 +1088,7 @@ def vue_plateformes():
             if name:
                 new_p[name] = col
         set_palette(new_p)
+        # Sauvegarder (sans toucher aux réservations, on relit d’abord les données)
         df_current, _ = charger_donnees()
         sauvegarder_donnees(df_current, new_p)
         st.success("✅ Palette enregistrée dans Excel.")
@@ -1127,6 +1101,7 @@ def vue_plateformes():
         st.rerun()
 
     if c3.button("🔄 Recharger depuis Excel"):
+        # recharge fichier pour écraser la session
         _, pal_file = charger_donnees()
         set_palette(pal_file)
         st.success("✅ Palette rechargée depuis Excel.")
@@ -1136,22 +1111,26 @@ def vue_plateformes():
     badges = " &nbsp;&nbsp;".join([platform_badge(pf, pal) for pf in sorted(pal.keys())])
     st.markdown(badges, unsafe_allow_html=True)
 
-# ==============================  APP  ==============================. 
-
-
-   # Sidebar : Fichier & Maintenance
+# ==============================  APP  ==============================
+def main():
+    # Sidebar : Fichier & Maintenance
     st.sidebar.title("📁 Fichier")
     df_tmp, pal_tmp = charger_donnees()
     bouton_telecharger(df_tmp)
     bouton_restaurer()
 
+    # Maintenance
     st.sidebar.markdown("---")
     st.sidebar.markdown("## 🧰 Maintenance")
     if st.sidebar.button("♻️ Vider le cache"):
-        try: st.cache_data.clear()
-        except Exception: pass
-        try: st.cache_resource.clear()
-        except Exception: pass
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        try:
+            st.cache_resource.clear()
+        except Exception:
+            pass
         st.session_state.did_clear_cache = True
         st.sidebar.success("Cache vidé.")
     if st.session_state.did_clear_cache:
@@ -1165,6 +1144,7 @@ def vue_plateformes():
          "📅 Calendrier","📊 Rapport","👥 Liste clients","📤 Export ICS","✉️ SMS","🎨 Plateformes"]
     )
 
+    # Données
     df, _ = charger_donnees()
 
     if onglet == "📋 Réservations":
@@ -1186,8 +1166,5 @@ def vue_plateformes():
     elif onglet == "🎨 Plateformes":
         vue_plateformes()
 
-
 if __name__ == "__main__":
     main()
-
- 
