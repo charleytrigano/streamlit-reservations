@@ -839,7 +839,7 @@ def vue_calendrier(df: pd.DataFrame):
     st.markdown(leg, unsafe_allow_html=True)
 
 def vue_rapport(df: pd.DataFrame):
-    st.title("📊 Rapport-VILLA TOBIAS")
+    st.title("📊 Rapport - VILLA TOBIAS")
     df = ensure_schema(df)
     if df.empty:
         st.info("Aucune donnée.")
