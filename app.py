@@ -422,7 +422,8 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. \n\n"
         "You will find luggage storage facilities in every neighborhood in Nice. \n\n"
         "We wish you a wonderful trip and look forward to meeting you very soon. \n\n"
-         "Annick & Charley"
+         "Annick & Charley \n\n"
+        f"\nMerci de remplir la fiche d'arrivee : https://urlr.me/Xu7Sq3\n"
     )
 
 def sms_message_depart(row: pd.Series) -> str:
