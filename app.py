@@ -423,7 +423,7 @@ def sms_message_arrivee(row: pd.Series) -> str:
         "You will find luggage storage facilities in every neighborhood in Nice. \n\n"
         "We wish you a wonderful trip and look forward to meeting you very soon. \n\n"
         "Annick & Charley \n\n"
-        "Merci de remplir la fiche d'arrivee : https://urlr.me/Xu7Sq3"
+        "Merci de remplir la fiche d'arrivee / Please fill out the arrival form : https://urlr.me/Xu7Sq3"
     )
 
 def sms_message_depart(row: pd.Series) -> str:
