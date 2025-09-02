@@ -545,6 +545,282 @@ def vue_reservations(df: pd.DataFrame):
         cols_tot = [c for c in cols_order[:-1] if c in show_totals.columns]  # Exclude __rowid
         st.dataframe(show_totals[cols_tot], use_container_width=True)
 
+# ==============================  ADDITIONAL VIEWS  ==============================
+def vue_ajouter(df: pd.DataFrame):
+    """Add new reservation view"""
+    st.title("➕ Ajouter une réservation")
+    st.caption("Saisie compacte")
+    
+    palette = PaletteManager.get_palette()
+
+    def inline_input(label, widget_fn, key=None, **widget_kwargs):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.markdown(f"**{label}**")
+        with col2:
+            return widget_fn(label, key=key, label_visibility="collapsed", **widget_kwargs)
+
+    # Form inputs
+    paye = inline_input("Payé", st.checkbox, key="add_paye", value=False)
+    nom = inline_input("Nom", st.text_input, key="add_nom", value="", placeholder="Nom du client")
+    sms_envoye = inline_input("SMS envoyé", st.checkbox, key="add_sms", value=False)
+
+    tel = inline_input("Téléphone", st.text_input, key="add_tel", value="", placeholder="+33...")
+    
+    pf_options = sorted(palette.keys())
+    pf_index = pf_options.index("Booking") if "Booking" in pf_options else 0
+    plateforme = inline_input("Plateforme", st.selectbox, key="add_pf", 
+                             options=pf_options, index=pf_index)
+
+    arrivee = inline_input("Arrivée", st.date_input, key="add_arrivee", value=date.today())
+    min_dep = arrivee + timedelta(days=1)
+    depart = inline_input("Départ", st.date_input, key="add_depart", 
+                         value=min_dep, min_value=min_dep)
+
+    brut = inline_input("Prix brut (€)", st.number_input, key="add_brut",
+                       min_value=0.0, step=1.0, format="%.2f", value=0.0)
+    commissions = inline_input("Commissions (€)", st.number_input, key="add_comm",
+                              min_value=0.0, step=1.0, format="%.2f", value=0.0)
+    frais_cb = inline_input("Frais CB (€)", st.number_input, key="add_cb",
+                           min_value=0.0, step=1.0, format="%.2f", value=0.0)
+
+    net_calc = max(float(brut) - float(commissions) - float(frais_cb), 0.0)
+    inline_input("Prix net (calculé)", st.number_input, key="add_net",
+                value=round(net_calc, 2), step=0.01, format="%.2f", disabled=True)
+
+    menage = inline_input("Ménage (€)", st.number_input, key="add_menage",
+                         min_value=0.0, step=1.0, format="%.2f", value=0.0)
+    taxes = inline_input("Taxes séjour (€)", st.number_input, key="add_taxes",
+                        min_value=0.0, step=1.0, format="%.2f", value=0.0)
+
+    base_calc = max(net_calc - float(menage) - float(taxes), 0.0)
+    charges_calc = max(float(brut) - net_calc, 0.0)
+    pct_calc = (charges_calc / float(brut) * 100) if float(brut) > 0 else 0.0
+
+    inline_input("Base (calculée)", st.number_input, key="add_base",
+                value=round(base_calc, 2), step=0.01, format="%.2f", disabled=True)
+    inline_input("Commission (%)", st.number_input, key="add_pct",
+                value=round(pct_calc, 2), step=0.01, format="%.2f", disabled=True)
+
+    if st.button("Enregistrer", type="primary"):
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l'arrivée.")
+            return
+
+        if not nom.strip():
+            st.error("Le nom du client est obligatoire.")
+            return
+
+        ligne = {
+            "paye": bool(paye),
+            "nom_client": nom.strip(),
+            "sms_envoye": bool(sms_envoye),
+            "plateforme": plateforme,
+            "telephone": DataUtils.normalize_tel(tel),
+            "date_arrivee": arrivee,
+            "date_depart": depart,
+            "prix_brut": float(brut),
+            "commissions": float(commissions),
+            "frais_cb": float(frais_cb),
+            "prix_net": round(net_calc, 2),
+            "menage": float(menage),
+            "taxes_sejour": float(taxes),
+            "base": round(base_calc, 2),
+            "charges": round(charges_calc, 2),
+            "%": round(pct_calc, 2),
+            "nuitees": (depart - arrivee).days,
+            "AAAA": arrivee.year,
+            "MM": arrivee.month,
+            "ical_uid": ""
+        }
+        
+        df2 = pd.concat([df, pd.DataFrame([ligne])], ignore_index=True)
+        FileManager.save_data(df2, PaletteManager.get_palette())
+        st.success("✅ Réservation enregistrée")
+        st.rerun()
+
+def vue_modifier(df: pd.DataFrame):
+    """Modify/Delete reservation view"""
+    st.title("✏️ Modifier / Supprimer")
+    
+    df = DataProcessor.ensure_schema(df)
+    if df.empty:
+        st.info("Aucune réservation.")
+        return
+
+    # Create identifiers for selection
+    df["identifiant"] = (
+        df["nom_client"].astype(str) + " | " + 
+        df["plateforme"].astype(str) + " | " +
+        df["date_arrivee"].apply(DataUtils.format_date_str)
+    )
+    
+    choix = st.selectbox("Choisir une réservation", df["identifiant"])
+    idx = df.index[df["identifiant"] == choix]
+    
+    if len(idx) == 0:
+        st.warning("Sélection invalide.")
+        return
+    
+    i = idx[0]
+    current_row = df.iloc[i]
+
+    # Form for editing
+    col1, col2, col3 = st.columns(3)
+    paye = col1.checkbox("Payé", value=bool(current_row["paye"]))
+    nom = col2.text_input("Nom", current_row["nom_client"])
+    sms_envoye = col3.checkbox("SMS envoyé", value=bool(current_row["sms_envoye"]))
+
+    col1, col2 = st.columns(2)
+    tel = col1.text_input("Téléphone", DataUtils.normalize_tel(current_row["telephone"]))
+    
+    palette = PaletteManager.get_palette()
+    options_pf = sorted(palette.keys())
+    cur_pf = current_row["plateforme"]
+    pf_index = options_pf.index(cur_pf) if cur_pf in options_pf else 0
+    plateforme = col2.selectbox("Plateforme", options_pf, index=pf_index)
+
+    arrivee = st.date_input("Arrivée", 
+        current_row["date_arrivee"] if isinstance(current_row["date_arrivee"], date) else date.today())
+    depart = st.date_input("Départ", 
+        current_row["date_depart"] if isinstance(current_row["date_depart"], date) else arrivee + timedelta(days=1),
+        min_value=arrivee + timedelta(days=1))
+
+    col1, col2, col3 = st.columns(3)
+    brut = col1.number_input("Prix brut (€)", min_value=0.0, 
+        value=float(current_row["prix_brut"]) if pd.notna(current_row["prix_brut"]) else 0.0,
+        step=1.0, format="%.2f")
+    commissions = col2.number_input("Commissions (€)", min_value=0.0,
+        value=float(current_row["commissions"]) if pd.notna(current_row["commissions"]) else 0.0,
+        step=1.0, format="%.2f")
+    frais_cb = col3.number_input("Frais CB (€)", min_value=0.0,
+        value=float(current_row["frais_cb"]) if pd.notna(current_row["frais_cb"]) else 0.0,
+        step=1.0, format="%.2f")
+
+    net_calc = max(brut - commissions - frais_cb, 0.0)
+
+    col1, col2, col3 = st.columns(3)
+    menage = col1.number_input("Ménage (€)", min_value=0.0,
+        value=float(current_row["menage"]) if pd.notna(current_row["menage"]) else 0.0,
+        step=1.0, format="%.2f")
+    taxes = col2.number_input("Taxes séjour (€)", min_value=0.0,
+        value=float(current_row["taxes_sejour"]) if pd.notna(current_row["taxes_sejour"]) else 0.0,
+        step=1.0, format="%.2f")
+    
+    base_calc = max(net_calc - menage - taxes, 0.0)
+    charges_calc = max(brut - net_calc, 0.0)
+    pct_calc = (charges_calc / brut * 100) if brut > 0 else 0.0
+    
+    col3.markdown(f"""
+    **Prix net (calculé)**: {net_calc:.2f} €  
+    **Base (calculée)**: {base_calc:.2f} €  
+    **%**: {pct_calc:.2f}
+    """)
+
+    # Action buttons
+    col_save, col_del = st.columns(2)
+    if col_save.button("💾 Enregistrer", type="primary"):
+        if depart < arrivee + timedelta(days=1):
+            st.error("La date de départ doit être au moins le lendemain de l'arrivée.")
+            return
+            
+        # Update the row
+        df.at[i, "paye"] = bool(paye)
+        df.at[i, "nom_client"] = nom.strip()
+        df.at[i, "sms_envoye"] = bool(sms_envoye)
+        df.at[i, "plateforme"] = plateforme
+        df.at[i, "telephone"] = DataUtils.normalize_tel(tel)
+        df.at[i, "date_arrivee"] = arrivee
+        df.at[i, "date_depart"] = depart
+        df.at[i, "prix_brut"] = float(brut)
+        df.at[i, "commissions"] = float(commissions)
+        df.at[i, "frais_cb"] = float(frais_cb)
+        df.at[i, "prix_net"] = round(net_calc, 2)
+        df.at[i, "menage"] = float(menage)
+        df.at[i, "taxes_sejour"] = float(taxes)
+        df.at[i, "base"] = round(base_calc, 2)
+        df.at[i, "charges"] = round(charges_calc, 2)
+        df.at[i, "%"] = round(pct_calc, 2)
+        df.at[i, "nuitees"] = (depart - arrivee).days
+        df.at[i, "AAAA"] = arrivee.year
+        df.at[i, "MM"] = arrivee.month
+        
+        df.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        FileManager.save_data(df, PaletteManager.get_palette())
+        st.success("✅ Modifié")
+        st.rerun()
+
+    if col_del.button("🗑 Supprimer", type="secondary"):
+        df2 = df.drop(index=i)
+        df2.drop(columns=["identifiant"], inplace=True, errors="ignore")
+        FileManager.save_data(df2, PaletteManager.get_palette())
+        st.warning("Supprimé.")
+        st.rerun()
+
+def vue_plateformes():
+    """Platform color palette management view"""
+    st.title("🎨 Plateformes (palette couleurs)")
+    
+    palette = PaletteManager.get_palette()
+    
+    st.caption("Ajoutez, modifiez, supprimez des plateformes. Cliquez ensuite sur **Enregistrer la palette** pour les stocker définitivement dans le fichier Excel.")
+
+    # Editable table for platforms
+    palette_df = pd.DataFrame([
+        {"plateforme": k, "couleur": v} 
+        for k, v in sorted(palette.items())
+    ])
+    
+    edited_palette = st.data_editor(
+        palette_df,
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "plateforme": st.column_config.TextColumn("Plateforme"),
+            "couleur": st.column_config.TextColumn("Couleur (hex)"),
+        }
+    )
+
+    # Action buttons
+    col1, col2, col3 = st.columns(3)
+    
+    if col1.button("💾 Enregistrer la palette", type="primary"):
+        # Rebuild clean palette
+        new_palette = {}
+        for _, row in edited_palette.iterrows():
+            name = str(row.get("plateforme", "")).strip()
+            color = DataUtils.clean_hex(str(row.get("couleur", "#999999")))
+            if name:
+                new_palette[name] = color
+        
+        PaletteManager.set_palette(new_palette)
+        df_current, _ = FileManager.load_data()
+        FileManager.save_data(df_current, new_palette)
+        st.success("✅ Palette enregistrée dans Excel.")
+
+    if col2.button("♻️ Réinitialiser palette par défaut"):
+        PaletteManager.set_palette(config.DEFAULT_PALETTE.copy())
+        df_current, _ = FileManager.load_data()
+        FileManager.save_data(df_current, PaletteManager.get_palette())
+        st.success("✅ Palette réinitialisée.")
+        st.rerun()
+
+    if col3.button("🔄 Recharger depuis Excel"):
+        _, palette_file = FileManager.load_data()
+        PaletteManager.set_palette(palette_file)
+        st.success("✅ Palette rechargée depuis Excel.")
+        st.rerun()
+
+    # Preview
+    st.markdown("### Aperçu")
+    if palette:
+        badges = " &nbsp;&nbsp;".join([
+            PaletteManager.platform_badge(pf, palette) 
+            for pf in sorted(palette.keys())
+        ])
+        st.markdown(badges, unsafe_allow_html=True)
+
 def main():
     """Main application function"""
     try:
@@ -573,6 +849,64 @@ def main():
             logger.error(f"Download preparation failed: {e}")
             st.sidebar.error("Export XLSX indisponible")
 
+        # File restore functionality
+        st.sidebar.markdown("### 📤 Restauration")
+        uploaded_file = st.sidebar.file_uploader(
+            "Restauration xlsx", 
+            type=["xlsx"],
+            key=f"restore_{st.session_state.uploader_key_restore}",
+            help="Charge un fichier et remplace le fichier actuel"
+        )
+        
+        if uploaded_file is not None and st.sidebar.button("Restaurer maintenant"):
+            try:
+                raw_data = uploaded_file.read()
+                if not raw_data:
+                    raise ValueError("Fichier vide.")
+                
+                bio = BytesIO(raw_data)
+                with pd.ExcelFile(bio, engine="openpyxl") as xf:
+                    # Read reservations
+                    sheet_name = config.DATA_SHEET if config.DATA_SHEET in xf.sheet_names else xf.sheet_names[0]
+                    df_new = pd.read_excel(
+                        xf, sheet_name=sheet_name, engine="openpyxl",
+                        converters={"telephone": DataUtils.normalize_tel}
+                    )
+                    df_new = DataProcessor.ensure_schema(df_new)
+
+                    # Read palette
+                    palette_new = config.DEFAULT_PALETTE.copy()
+                    if config.PALETTE_SHEET in xf.sheet_names:
+                        pal_df = pd.read_excel(xf, sheet_name=config.PALETTE_SHEET, engine="openpyxl")
+                        if {"plateforme", "couleur"}.issubset(set(pal_df.columns)):
+                            for _, row in pal_df.iterrows():
+                                name = str(row["plateforme"]).strip()
+                                color = DataUtils.clean_hex(str(row["couleur"]))
+                                if name:
+                                    palette_new[name] = color
+
+                # Save official file
+                FileManager.save_data(df_new, palette_new)
+                PaletteManager.set_palette(palette_new)
+                st.sidebar.success("✅ Fichier restauré.")
+                st.session_state.uploader_key_restore += 1
+                st.rerun()
+                
+            except Exception as e:
+                st.sidebar.error(f"Erreur import: {e}")
+
+        # Maintenance section
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("## 🛠 Maintenance")
+        if st.sidebar.button("♻️ Vider le cache"):
+            try:
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.session_state.did_clear_cache = True
+                st.sidebar.success("Cache vidé.")
+            except Exception:
+                pass
+
         # Navigation
         st.sidebar.title("🧭 Navigation")
         onglet = st.sidebar.radio(
@@ -587,8 +921,22 @@ def main():
         
         if onglet == "📋 Réservations":
             vue_reservations(df)
+        elif onglet == "➕ Ajouter":
+            vue_ajouter(df)
+        elif onglet == "✏️ Modifier / Supprimer":
+            vue_modifier(df)
+        elif onglet == "🎨 Plateformes":
+            vue_plateformes()
         else:
             st.info(f"Vue '{onglet}' en cours de développement dans cette version optimisée.")
+            st.markdown(f"""
+            **Fonctionnalités à implémenter pour '{onglet}' :**
+            - Vue calendrier mensuel avec barres colorées
+            - Rapports détaillés avec graphiques
+            - Liste clients avec filtres avancés
+            - Export ICS pour Google Calendar
+            - Interface SMS avec templates
+            """)
             
     except Exception as e:
         logger.error(f"Application error: {e}")
