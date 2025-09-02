@@ -430,8 +430,17 @@ def sms_message_depart(row: pd.Series) -> str:
     nom = str(row.get("nom_client") or "")
     return (
         f"Bonjour {nom},\n\n"
-        "Merci d’avoir choisi notre appartement pour votre séjour ! "
+        "Un grand merci d'avoir choisi notre appartement pour votre sejour. \n\n "
+        "Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. \n\n"
+        "Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. \n\n"
         "Au plaisir de vous accueillir à nouveau.\n\n"
+        "Annick & Charley"
+
+        "Hello {name},\n\n"
+        "Thank you very much for choosing our apartment for your stay. \n\n"
+        "We hope you had as enjoyable a time as we did hosting you. \n\n"
+        "If you feel like coming back to explore our city a little more, know that our door will always be open to you. \n\n "
+        "We look forward to welcoming you back.\n\n "
         "Annick & Charley"
     )
 
