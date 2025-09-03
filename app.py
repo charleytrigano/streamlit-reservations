@@ -13,11 +13,9 @@ from io import BytesIO
 import hashlib
 import os
 from urllib.parse import quote
-import colorsys
-import sqlite3 # Nouvelle importation !
+import sqlite3
 
-DB_FILE = "reservations.db" # Remplacement de FICHIER = "reservations.xlsx"
-# Les noms de feuilles ne sont plus nécessaires
+DB_FILE = "reservations.db"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -81,24 +79,23 @@ def charger_donnees():
         return pd.DataFrame(), DEFAULT_PALETTE
 
     with sqlite3.connect(DB_FILE) as con:
-    # La ligne doit être à l'intérieur du bloc 'with' pour que 'con' soit accessible
-    df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
-    # ... le reste du code qui utilise la base de données ...
-        
-       # Charger la palette
+        # Charger les réservations et les plateformes
+        df = pd.read_sql_query("SELECT * FROM reservations", con)
         df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
 
-# S'assurer que la colonne 'nom' existe (gestion de l'ancien format)
-if 'nom' not in df_palette.columns and 'plateforme' in df_palette.columns:
-    df_palette.rename(columns={'plateforme': 'nom'}, inplace=True)
+    # ---- Traitement de la palette ----
+    # S'assurer que la colonne 'nom' existe (gestion de l'ancien format)
+    if 'nom' not in df_palette.columns and 'plateforme' in df_palette.columns:
+        df_palette.rename(columns={'plateforme': 'nom'}, inplace=True)
 
-# Vérifier que les colonnes requises existent avant de créer le dictionnaire
-if 'nom' in df_palette.columns and 'couleur' in df_palette.columns:
-    palette = dict(zip(df_palette['nom'], df_palette['couleur']))
-else:
-    # Utiliser la palette par défaut si la table est vide ou mal formée
-    palette = DEFAULT_PALETTE.copy()
+    # Vérifier que les colonnes requises existent avant de créer le dictionnaire
+    if 'nom' in df_palette.columns and 'couleur' in df_palette.columns:
+        palette = dict(zip(df_palette['nom'], df_palette['couleur']))
+    else:
+        # Utiliser la palette par défaut si la table est vide ou mal formée
+        palette = DEFAULT_PALETTE.copy()
 
+    # ---- Traitement des réservations ----
     # Conversion des types de données
     for col in ["date_reservation", "date_arrivee", "date_depart"]:
         if col in df.columns:
@@ -106,33 +103,28 @@ else:
     if 'paye' in df.columns:
         df['paye'] = df['paye'].astype(bool)
 
-        df = ensure_schema(df)
-        return df, palette
+    df = ensure_schema(df)
+    return df, palette
 
 def sauvegarder_donnees(df_reservations, palette_dict):
     """Sauvegarde le DataFrame des réservations et la palette dans la BDD SQLite."""
     with sqlite3.connect(DB_FILE) as con:
-        # Sauvegarder les réservations en remplaçant la table existante
-        # C'est la méthode la plus simple pour garantir la cohérence
+        # Sauvegarder les réservations
         df_reservations_db = df_reservations.copy()
-        # Convertir les booléens en 0/1 pour SQLite
         if 'paye' in df_reservations_db.columns:
             df_reservations_db['paye'] = df_reservations_db['paye'].astype(int)
         
-        # Supprimer la colonne 'id' si elle existe pour éviter les conflits
         if 'id' in df_reservations_db.columns:
-             df_reservations_db = df_reservations_db.drop(columns=['id'])
+            df_reservations_db = df_reservations_db.drop(columns=['id'])
 
-        df_reservations_db.to_sql('reservations', con, if_exists='replace', index=False, index_label='id')
+        df_reservations_db.to_sql('reservations', con, if_exists='replace', index=False)
 
-        # Sauvegarder la palette avec une logique d'UPSERT (INSERT OR REPLACE)
+        # Sauvegarder la palette
         cur = con.cursor()
-        cur.executemany("INSERT OR REPLACE INTO plateformes (nom, couleur) VALUES (?, ?)", palette_dict.items())
+        cur.execute("DELETE FROM plateformes") # Vider la table avant de la remplir
+        if palette_dict:
+            cur.executemany("INSERT INTO plateformes (nom, couleur) VALUES (?, ?)", palette_dict.items())
         con.commit()
-
-
-# Le reste du code est quasi identique, seules les fonctions ci-dessus changent drastiquement
-# ... (toutes les fonctions `ensure_schema`, `get_palette`, `vue_...`, etc., restent les mêmes)
 
 
 # ==============================  SCHEMA & DATA VALIDATION  ==============================
@@ -146,7 +138,7 @@ def ensure_schema(df):
             if "date" in col:
                 df_res[col] = pd.NaT
             elif col in ["prix_brut", "charges", "prix_net", "nb_nuits", "nb_adultes", "nb_enfants"]:
-                df_res[col] = 0
+                df_res[col] = 0.0
             elif col == "paye":
                 df_res[col] = False
             else:
@@ -155,22 +147,33 @@ def ensure_schema(df):
     # Conversion des types
     for col in ["date_reservation", "date_arrivee", "date_depart"]:
         df_res[col] = pd.to_datetime(df_res[col], errors='coerce').dt.date
-    df_res["paye"] = df_res["paye"].astype(bool)
+    if 'paye' in df_res.columns:
+        df_res["paye"] = df_res["paye"].astype(bool)
     
-    # Calculs dérivés
-    df_res["nb_nuits"] = (pd.to_datetime(df_res["date_depart"]) - pd.to_datetime(df_res["date_arrivee"])).dt.days
+    # Calculs dérivés (avec gestion des erreurs pour dates manquantes)
+    mask_dates_valides = pd.notna(df_res["date_depart"]) & pd.notna(df_res["date_arrivee"])
+    df_res.loc[mask_dates_valides, "nb_nuits"] = (df_res.loc[mask_dates_valides, "date_depart"] - df_res.loc[mask_dates_valides, "date_arrivee"]).dt.days
+
+    df_res["prix_brut"] = pd.to_numeric(df_res["prix_brut"], errors='coerce').fillna(0.0)
+    df_res["charges"] = pd.to_numeric(df_res["charges"], errors='coerce').fillna(0.0)
     df_res["prix_net"] = df_res["prix_brut"] - df_res["charges"]
+    
     with np.errstate(divide='ignore', invalid='ignore'):
         df_res["%"] = np.where(df_res["prix_brut"] != 0, (df_res["charges"] / df_res["prix_brut"] * 100), 0)
     
-    # Nettoyage
+    # Nettoyage final des valeurs nulles
     df_res = df_res.fillna({
-        'prix_brut': 0, 'charges': 0, 'prix_net': 0, '%': 0,
+        'prix_brut': 0.0, 'charges': 0.0, 'prix_net': 0.0, '%': 0.0,
         'nb_adultes': 0, 'nb_enfants': 0, 'nb_nuits': 0,
         'nom_client': '', 'tel_client': '', 'plateforme': 'Autre', 'notes': ''
     })
     
-    return df_res[BASE_COLS + ["%"]]
+    # S'assurer que toutes les colonnes de base et '%' sont présentes à la fin
+    final_cols = [col for col in BASE_COLS if col in df_res.columns]
+    if '%' not in final_cols:
+        final_cols.append('%')
+    
+    return df_res[final_cols]
 
 
 # ==============================  PALETTE HELPERS ==============================
@@ -186,26 +189,29 @@ def hex_to_rgb(h):
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
 def is_dark_color(hex_color):
+    if not isinstance(hex_color, str) or len(hex_color) != 7:
+        return False
     rgb = hex_to_rgb(hex_color)
-    # Formule de luminosité (YIQ)
     luminance = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
     return luminance < 128
 
 # ==============================  UTILITIES  ==============================
 def to_date_only(dt):
-    if isinstance(dt, datetime):
+    if isinstance(dt, (datetime, pd.Timestamp)):
         return dt.date()
     return dt
 
 def normalize_tel(tel):
-    if not isinstance(tel, str): return ""
-    return "".join(filter(str.isdigit, tel))
+    if tel is None: return ""
+    return "".join(filter(str.isdigit, str(tel)))
 
 def ics_escape(text):
     if text is None: return ""
     return str(text).replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
 
 def generate_ics(row):
+    if pd.isna(row['date_arrivee']) or pd.isna(row['date_depart']):
+        return ""
     start_time = datetime.combine(row['date_arrivee'], datetime.min.time()).astimezone(timezone.utc)
     end_time = datetime.combine(row['date_depart'], datetime.min.time()).astimezone(timezone.utc)
     
@@ -263,8 +269,7 @@ def vue_reservations(df):
 
     df_sorted = df.sort_values(by="date_arrivee", ascending=False)
     
-    # Calcul des totaux
-    df_core = df_sorted[BASE_COLS + ["%"]]
+    df_core = df_sorted[[col for col in BASE_COLS + ["%"] if col in df_sorted.columns]]
     total_row = pd.DataFrame({
         'nom_client': ['-- TOTAL --'],
         'prix_brut': [df_core['prix_brut'].sum()],
@@ -274,10 +279,8 @@ def vue_reservations(df):
     
     show_tot = pd.concat([total_row, df_core], ignore_index=True)
     
-    # Colonnes à afficher
     cols_to_show = ["paye", "nom_client", "date_arrivee", "date_depart", "nb_nuits", "plateforme", "prix_brut", "charges", "prix_net", "%"]
     
-    # Configuration des colonnes pour le data_editor
     config = {
         "paye": st.column_config.CheckboxColumn("Payé", width="small"),
         "nom_client": st.column_config.TextColumn("Client", width="medium"),
@@ -291,12 +294,12 @@ def vue_reservations(df):
         "%": st.column_config.NumberColumn("Charges (%)", format="%.1f%%", width="small"),
     }
 
-    edited_df = st.data_editor(
-        show_tot[cols_to_show],
+    st.data_editor(
+        show_tot[[col for col in cols_to_show if col in show_tot.columns]],
         key="editor_reservations",
         hide_index=True,
         column_config=config,
-        disabled=True # Affichage seul
+        disabled=True
     )
 
 def vue_ajouter(df):
@@ -334,11 +337,11 @@ def vue_ajouter(df):
                     "date_reservation": date_reservation, "date_arrivee": date_arrivee, "date_depart": date_depart,
                     "plateforme": plateforme, "nom_client": nom_client, "tel_client": normalize_tel(tel_client),
                     "nb_adultes": nb_adultes, "nb_enfants": nb_enfants, "prix_brut": prix_brut, "charges": charges,
-                    "paye": paye, "notes": notes, "nb_nuits": 0, "prix_net": 0, "%": 0 # Valeurs calculées
+                    "paye": paye, "notes": notes
                 }
                 
                 df_a_jour = pd.concat([df, pd.DataFrame([nouvelle_ligne])], ignore_index=True)
-                df_a_jour = ensure_schema(df_a_jour) # Recalculer les champs dérivés
+                df_a_jour = ensure_schema(df_a_jour)
                 
                 sauvegarder_donnees(df_a_jour, get_palette())
                 st.cache_data.clear()
@@ -353,7 +356,9 @@ def vue_modifier(df):
 
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
     
-    options_resa = [f"{idx}: {row['nom_client']} | {row['date_arrivee'].strftime('%d/%m/%Y')}" for idx, row in df_sorted.iterrows()]
+    # Créer un identifiant unique et lisible pour chaque réservation
+    options_resa = [f"{idx}: {row['nom_client']} | {row['date_arrivee'].strftime('%d/%m/%Y')}" 
+                    for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
     
     selection = st.selectbox("Sélectionnez une réservation à modifier", options=options_resa, index=None, placeholder="Choisissez une réservation...")
     
@@ -375,7 +380,10 @@ def vue_modifier(df):
                 nb_enfants = st.number_input("Nb Enfants", min_value=0, value=int(resa_selectionnee['nb_enfants']), step=1)
                 charges = st.number_input("Charges (€)", min_value=0.0, value=float(resa_selectionnee['charges']), step=5.0, format="%.2f")
             with c3:
-                plateforme = st.selectbox("**Plateforme**", options=list(palette.keys()), index=list(palette.keys()).index(resa_selectionnee['plateforme']) if resa_selectionnee['plateforme'] in palette else 0)
+                plateforme_options = list(palette.keys())
+                current_plateforme = resa_selectionnee['plateforme']
+                plateforme_index = plateforme_options.index(current_plateforme) if current_plateforme in plateforme_options else 0
+                plateforme = st.selectbox("**Plateforme**", options=plateforme_options, index=plateforme_index)
                 date_reservation = st.date_input("Date de réservation", value=to_date_only(resa_selectionnee['date_reservation']))
                 paye = st.checkbox("La réservation est payée", value=bool(resa_selectionnee['paye']))
             
@@ -387,18 +395,14 @@ def vue_modifier(df):
                 if date_depart <= date_arrivee:
                     st.error("❌ La date de départ doit être après la date d'arrivée.")
                 else:
-                    df_sorted.loc[idx_selection, 'nom_client'] = nom_client
-                    df_sorted.loc[idx_selection, 'date_arrivee'] = date_arrivee
-                    df_sorted.loc[idx_selection, 'date_depart'] = date_depart
-                    df_sorted.loc[idx_selection, 'tel_client'] = normalize_tel(tel_client)
-                    df_sorted.loc[idx_selection, 'nb_adultes'] = nb_adultes
-                    df_sorted.loc[idx_selection, 'nb_enfants'] = nb_enfants
-                    df_sorted.loc[idx_selection, 'prix_brut'] = prix_brut
-                    df_sorted.loc[idx_selection, 'charges'] = charges
-                    df_sorted.loc[idx_selection, 'plateforme'] = plateforme
-                    df_sorted.loc[idx_selection, 'date_reservation'] = date_reservation
-                    df_sorted.loc[idx_selection, 'paye'] = paye
-                    df_sorted.loc[idx_selection, 'notes'] = notes
+                    updates = {
+                        'nom_client': nom_client, 'date_arrivee': date_arrivee, 'date_depart': date_depart,
+                        'tel_client': normalize_tel(tel_client), 'nb_adultes': nb_adultes, 'nb_enfants': nb_enfants,
+                        'prix_brut': prix_brut, 'charges': charges, 'plateforme': plateforme,
+                        'date_reservation': date_reservation, 'paye': paye, 'notes': notes
+                    }
+                    for key, value in updates.items():
+                        df_sorted.loc[idx_selection, key] = value
                     
                     df_final = ensure_schema(df_sorted)
                     sauvegarder_donnees(df_final, palette)
@@ -417,34 +421,31 @@ def vue_calendrier(df):
     st.header("📅 Calendrier des Réservations")
     palette = get_palette()
 
-    # Sélecteur de mois/année
+    df_dates_valides = df.dropna(subset=['date_arrivee', 'date_depart'])
+    if df_dates_valides.empty:
+        st.info("Aucune réservation avec des dates valides à afficher.")
+        return
+
     today = date.today()
     c1, c2 = st.columns(2)
     selected_month = c1.selectbox("Mois", options=range(1, 13), format_func=lambda m: calendar.month_name[m], index=today.month - 1)
-    selected_year = c2.selectbox("Année", options=range(today.year - 2, today.year + 3), index=2)
+    available_years = sorted(df_dates_valides['date_arrivee'].dt.year.unique())
+    if not available_years:
+        available_years = [today.year]
+    selected_year = c2.selectbox("Année", options=available_years, index=len(available_years) - 1)
 
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
 
-    # Préparer les données
-    df_filtered = df[(df['date_arrivee'] <= date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])) & 
-                     (df['date_depart'] > date(selected_year, selected_month, 1))].copy()
+    df_filtered = df_dates_valides[(df_dates_valides['date_arrivee'].dt.year == selected_year) & (df_dates_valides['date_arrivee'].dt.month == selected_month) |
+                                   (df_dates_valides['date_depart'].dt.year == selected_year) & (df_dates_valides['date_depart'].dt.month == selected_month)]
 
-    # Style CSS pour le calendrier
     st.markdown("""
     <style>
         .calendar-day { border: 1px solid #444; min-height: 120px; padding: 5px; }
-        .calendar-day.outside-month { background-color: #222; }
+        .calendar-day.outside-month { background-color: #2e2e2e; }
         .calendar-date { font-weight: bold; font-size: 1.1em; margin-bottom: 5px; }
-        .reservation-bar { 
-            padding: 3px 6px; 
-            margin-bottom: 3px; 
-            border-radius: 5px; 
-            font-size: 0.9em; 
-            overflow: hidden;
-            white-space: nowrap;
-            text-overflow: ellipsis;
-        }
+        .reservation-bar { padding: 3px 6px; margin-bottom: 3px; border-radius: 5px; font-size: 0.9em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     </style>
     """, unsafe_allow_html=True)
     
@@ -459,7 +460,6 @@ def vue_calendrier(df):
                 day_class = "outside-month" if day.month != selected_month else ""
                 day_html = f"<div class='calendar-day {day_class}'><div class='calendar-date'>{day.day}</div>"
                 
-                # Itérer sur les réservations qui couvrent ce jour
                 for _, resa in df_filtered.iterrows():
                     if resa['date_arrivee'] <= day < resa['date_depart']:
                         color = palette.get(resa['plateforme'], '#888888')
@@ -471,17 +471,16 @@ def vue_calendrier(df):
 
 def vue_rapport(df):
     st.header("📊 Rapport de Performance")
-    if df.empty:
+    df_dates_valides = df.dropna(subset=['date_arrivee'])
+    if df_dates_valides.empty:
         st.info("Aucune donnée à analyser.")
         return
         
-    # Filtres
-    years = sorted(df['date_arrivee'].dt.year.unique(), reverse=True)
+    years = sorted(df_dates_valides['date_arrivee'].dt.year.unique(), reverse=True)
     selected_year = st.selectbox("Sélectionner une année", options=years, index=0)
     
-    df_year = df[df['date_arrivee'].dt.year == selected_year]
+    df_year = df_dates_valides[df_dates_valides['date_arrivee'].dt.year == selected_year]
     
-    # KPIs
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     total_brut = df_year['prix_brut'].sum()
     total_net = df_year['prix_net'].sum()
@@ -491,7 +490,7 @@ def vue_rapport(df):
     kpi1.metric("Chiffre d'Affaires Brut", f"{total_brut:,.2f} €")
     kpi2.metric("Revenu Net", f"{total_net:,.2f} €")
     kpi3.metric("Nombre de Réservations", nb_resa)
-    kpi4.metric("Nuits Réservées", nb_nuits)
+    kpi4.metric("Nuits Réservées", f"{nb_nuits or 0:.0f}")
     
     st.markdown("---")
     
@@ -519,13 +518,14 @@ def vue_liste_clients(df):
 
 def vue_export_ics(df):
     st.header("📤 Export ICS (iCalendar)")
-    st.info("Téléchargez un fichier .ics pour une réservation spécifique, compatible avec la plupart des agendas (Google Calendar, Outlook, etc.).")
+    st.info("Téléchargez un fichier .ics pour une réservation spécifique, compatible avec la plupart des agendas.")
     
-    if df.empty:
+    df_dates_valides = df.dropna(subset=['date_arrivee', 'date_depart'])
+    if df_dates_valides.empty:
         st.warning("Aucune réservation à exporter.")
         return
 
-    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+    df_sorted = df_dates_valides.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
     options_resa = [f"{idx}: {row['nom_client']} | {row['date_arrivee'].strftime('%d/%m/%Y')}" for idx, row in df_sorted.iterrows()]
     selection = st.selectbox("Sélectionnez une réservation", options=options_resa, index=None)
 
@@ -549,7 +549,8 @@ def vue_sms(df):
         return
 
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
-    options_resa = [f"{idx}: {row['nom_client']} | {row['date_arrivee'].strftime('%d/%m/%Y')}" for idx, row in df_sorted.iterrows()]
+    options_resa = [f"{idx}: {row['nom_client']} | {row['date_arrivee'].strftime('%d/%m/%Y')}" 
+                    for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
     selection = st.selectbox("Sélectionnez un client", options=options_resa, index=None)
 
     if selection:
@@ -571,30 +572,29 @@ def vue_plateformes(df):
     st.header("🎨 Gestion des Plateformes")
     palette = get_palette().copy()
 
+    edited_palette = {}
     for p, c in palette.items():
         cols = st.columns([0.4, 0.4, 0.2])
-        new_color = cols[0].color_picker(f"Couleur pour **{p}**", value=c)
-        if new_color != c:
-            palette[p] = new_color
+        new_color = cols[0].color_picker(f"Couleur pour **{p}**", value=c, key=f"color_{p}")
+        edited_palette[p] = new_color
         
         if cols[2].button(f"🗑️", key=f"del_{p}"):
-            del palette[p]
+            del edited_palette[p]
+            st.session_state.palette = edited_palette
+            sauvegarder_donnees(df, edited_palette)
+            st.cache_data.clear()
             st.rerun()
 
     st.markdown("---")
-    st.subheader("Ajouter une nouvelle plateforme")
     with st.form("new_platform_form", clear_on_submit=True):
-        new_name = st.text_input("Nom de la nouvelle plateforme")
+        new_name = st.text_input("Ajouter une nouvelle plateforme")
         submitted = st.form_submit_button("Ajouter")
-        if submitted and new_name:
-            if new_name not in palette:
-                palette[new_name] = "#ffffff"
-            else:
-                st.warning(f"La plateforme '{new_name}' existe déjà.")
+        if submitted and new_name and new_name not in edited_palette:
+            edited_palette[new_name] = "#ffffff"
     
-    if st.button("💾 Enregistrer les changements de couleurs"):
-        sauvegarder_donnees(df, palette) # Sauvegarde le df original et la nouvelle palette
-        st.session_state.palette = palette
+    if st.button("💾 Enregistrer les changements"):
+        st.session_state.palette = edited_palette
+        sauvegarder_donnees(df, edited_palette)
         st.cache_data.clear()
         st.success("Palette de couleurs mise à jour !")
         st.rerun()
