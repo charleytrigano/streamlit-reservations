@@ -1,5 +1,5 @@
 # app.py — Villa Tobias (COMPLET) - Version SQLite
-# Version finale basée sur les données réelles
+# Version finale avec toutes les corrections
 
 import streamlit as st
 import pandas as pd
@@ -32,11 +32,35 @@ def charger_donnees():
         except:
             palette = DEFAULT_PALETTE.copy()
 
-    # Convertir les colonnes de dates qui sont stockées en texte
-    for col in ['date_arrivee', 'date_depart']:
-        df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-
+    df = ensure_schema(df)
     return df, palette
+
+# ==============================  SCHEMA & DATA VALIDATION  ==============================
+def ensure_schema(df):
+    df_res = df.copy()
+    
+    # S'assurer que les colonnes de base existent
+    for col in ['paye', 'nom_client', 'date_arrivee', 'date_depart', 'prix_brut', 'commissions']:
+        if col not in df_res.columns:
+            df_res[col] = None
+
+    # Convertir les dates
+    for col in ['date_arrivee', 'date_depart']:
+        df_res[col] = pd.to_datetime(df_res[col], errors='coerce').dt.date
+
+    # Nettoyer et convertir les nombres
+    numeric_cols = [
+        'prix_brut', 'commissions', 'frais_cb', 'prix_net', 'menage', 
+        'taxes_sejour', 'base', 'charges', 'nuitees'
+    ]
+    for col in numeric_cols:
+        if col in df_res.columns:
+            if df_res[col].dtype == 'object':
+                # Gère les formats comme "67 49 €" ou "150,50"
+                df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
+            df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
+
+    return df_res
 
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
@@ -44,13 +68,6 @@ def vue_reservations(df):
     if df.empty:
         st.info("Aucune réservation trouvée dans la base de données.")
         return
-
-    # S'assurer que les colonnes numériques existent avant de les utiliser
-    numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'prix_net', 'menage', 'taxes_sejour', 'base', 'charges']
-    for col in numeric_cols:
-        if col not in df.columns:
-            df[col] = 0 # Ajoute la colonne avec des zéros si elle manque
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     df_sorted = df.sort_values(by="date_arrivee", ascending=False, na_position='last').reset_index(drop=True)
     st.dataframe(df_sorted)
@@ -61,9 +78,7 @@ def main():
     df, palette = charger_donnees()
     
     st.sidebar.title("🧭 Navigation")
-    pages = {
-        "📋 Réservations": vue_reservations,
-    }
+    pages = { "📋 Réservations": vue_reservations }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     
     pages[selection](df)
