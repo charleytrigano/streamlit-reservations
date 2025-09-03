@@ -1,5 +1,5 @@
 # app.py — Villa Tobias (COMPLET) - Version SQLite
-# Version finale avec toutes les fonctionnalités réactivées
+# Version finale avec toutes les fonctionnalités restaurées
 
 import streamlit as st
 import pandas as pd
@@ -124,6 +124,8 @@ def ensure_schema(df):
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
+        if df_res[col].dtype == 'object':
+            df_res[col] = df_res[col].str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.strip()
         df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
 
     df_res['prix_net'] = df_res['prix_brut'] - df_res['commissions'] - df_res['frais_cb']
@@ -152,7 +154,7 @@ def is_dark_color(hex_color):
         luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
         return luminance < 0.5
     except (ValueError, TypeError):
-        return True # Default to dark background assumptions
+        return True
 
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
@@ -237,15 +239,11 @@ def main():
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "🎨 Plateformes": vue_plateformes,
-        # Ajoutez ici d'autres vues que vous souhaitez réactiver
-        # "✏️ Modifier / Supprimer": vue_modifier,
-        # "📅 Calendrier": vue_calendrier,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
 
     page_function = pages[selection]
 
-    # Passer les bons arguments à chaque fonction de vue
     if selection in ["➕ Ajouter", "🎨 Plateformes"]:
         page_function(df, palette)
     else:
