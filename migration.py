@@ -1,4 +1,4 @@
-# migration.py (Version finale basée sur les données réelles)
+# migration.py (Version finale avec le bon séparateur)
 import pandas as pd
 import sqlite3
 import os
@@ -17,29 +17,26 @@ def migrate_data():
         os.remove(DB_FILE)
 
     try:
-        # CORRECTION : Utilisation de la virgule comme délimiteur
-        df_reservations = pd.read_csv(CSV_RESERVATIONS, delimiter=',')
+        # CORRECTION : Utilisation du point-virgule comme délimiteur
+        df_reservations = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         df_reservations.columns = df_reservations.columns.str.strip()
-        print("✅ Données des réservations lues.")
+        print("✅ Données des réservations lues correctement.")
     except Exception as e:
         print(f"❌ ERREUR lors de la lecture du fichier de réservations: {e}")
         return
-    
-    # Pas besoin de nettoyer les nombres, ils sont déjà au bon format.
-    # On s'assure juste que les colonnes de dates sont bien gérées.
-    for col in ['date_arrivee', 'date_depart']:
-        df_reservations[col] = pd.to_datetime(df_reservations[col], format='%m/%d/%Y', errors='coerce')
 
     print(f"✍️ Écriture des données dans '{DB_FILE}'...")
     try:
         with sqlite3.connect(DB_FILE) as con:
             df_reservations.to_sql('reservations', con, if_exists='replace', index=False)
             
-            # On recrée une table plateformes simple par défaut
             if os.path.exists(CSV_PLATEFORMES):
-                df_plateformes = pd.read_csv(CSV_PLATEFORMES, delimiter=',')
-                df_plateformes.rename(columns={'plateforme': 'nom'}, inplace=True)
-                df_plateformes.to_sql('plateformes', con, if_exists='replace', index=False)
+                try:
+                    df_plateformes = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
+                    df_plateformes.rename(columns={'plateforme': 'nom'}, inplace=True)
+                    df_plateformes.to_sql('plateformes', con, if_exists='replace', index=False)
+                except:
+                    print("⚠️ Attention: Le fichier des plateformes n'a pas pu être lu.")
 
         print("🎉 Migration terminée avec succès !")
     except Exception as e:
