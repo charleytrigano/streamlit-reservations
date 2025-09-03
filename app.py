@@ -85,7 +85,7 @@ def charger_donnees():
         df = pd.read_sql_query("SELECT * FROM reservations", con)
         
        # Charger la palette
-df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
+        df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
 
 # S'assurer que la colonne 'nom' existe (gestion de l'ancien format)
 if 'nom' not in df_palette.columns and 'plateforme' in df_palette.columns:
