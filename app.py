@@ -1,5 +1,5 @@
 # app.py — Villa Tobias (COMPLET) - Version SQLite
-# Version finale avec toutes les fonctionnalités restaurées
+# Version finale avec toutes les fonctionnalités et corrections
 
 import streamlit as st
 import pandas as pd
@@ -140,21 +140,6 @@ def ensure_schema(df):
     df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
     
     return df_res[BASE_COLS]
-
-# ==============================  UTILITIES & HELPERS ==============================
-def to_date_only(dt):
-    if isinstance(dt, (datetime, pd.Timestamp)):
-        return dt.date()
-    return dt
-
-def is_dark_color(hex_color):
-    try:
-        hex_color = hex_color.lstrip('#')
-        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
-        return luminance < 0.5
-    except (ValueError, TypeError):
-        return True
 
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
