@@ -105,8 +105,8 @@ else:
     if 'paye' in df.columns:
         df['paye'] = df['paye'].astype(bool)
 
-    df = ensure_schema(df)
-    return df, palette
+        df = ensure_schema(df)
+        return df, palette
 
 def sauvegarder_donnees(df_reservations, palette_dict):
     """Sauvegarde le DataFrame des réservations et la palette dans la BDD SQLite."""
