@@ -13,7 +13,7 @@ CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv"
 DB_FILE = "reservations.db"
 # --------------------
 
-# Colonnes attendues par la nouvelle application (app.py version SQLite)
+# Colonnes attendues par la nouvelle application
 BASE_COLS = [
     "date_reservation", "date_arrivee", "date_depart", "plateforme",
     "nom_client", "tel_client", "nb_adultes", "nb_enfants",
