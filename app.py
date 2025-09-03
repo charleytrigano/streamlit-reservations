@@ -139,6 +139,21 @@ def ensure_schema(df):
     
     return df_res[BASE_COLS]
 
+# ==============================  UTILITIES & HELPERS ==============================
+def to_date_only(dt):
+    if isinstance(dt, (datetime, pd.Timestamp)):
+        return dt.date()
+    return dt
+
+def is_dark_color(hex_color):
+    try:
+        hex_color = hex_color.lstrip('#')
+        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+        return luminance < 0.5
+    except (ValueError, TypeError):
+        return True # Default to dark background assumptions
+
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
     st.header("📋 Liste des Réservations")
@@ -204,7 +219,7 @@ def vue_plateformes(df, palette):
         new_name = st.text_input("Ajouter une nouvelle plateforme")
         submitted = st.form_submit_button("Ajouter")
         if submitted and new_name and new_name not in edited_palette:
-            edited_palette[new_name] = "#ffffff" # Default color for new platforms
+            edited_palette[new_name] = "#ffffff"
     
     if st.button("💾 Enregistrer les changements"):
         sauvegarder_donnees(df, edited_palette)
@@ -222,13 +237,15 @@ def main():
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "🎨 Plateformes": vue_plateformes,
-        # Ajoutez ici d'autres vues si vous les avez (ex: vue_modifier, vue_calendrier)
+        # Ajoutez ici d'autres vues que vous souhaitez réactiver
+        # "✏️ Modifier / Supprimer": vue_modifier,
+        # "📅 Calendrier": vue_calendrier,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
 
     page_function = pages[selection]
 
-    # Certaines fonctions ont besoin de 'palette' et d'autres non.
+    # Passer les bons arguments à chaque fonction de vue
     if selection in ["➕ Ajouter", "🎨 Plateformes"]:
         page_function(df, palette)
     else:
