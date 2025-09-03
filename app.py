@@ -81,8 +81,9 @@ def charger_donnees():
         return pd.DataFrame(), DEFAULT_PALETTE
 
     with sqlite3.connect(DB_FILE) as con:
-        # Charger les réservations
-        df = pd.read_sql_query("SELECT * FROM reservations", con)
+    # La ligne doit être à l'intérieur du bloc 'with' pour que 'con' soit accessible
+    df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
+    # ... le reste du code qui utilise la base de données ...
         
        # Charger la palette
         df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
