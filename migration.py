@@ -15,14 +15,14 @@ DB_FILE = "reservations.db"
 
 # Colonnes attendues par la nouvelle application (app.py version SQLite)
 BASE_COLS = [
-    "date_reservation", "date_arrivee", "date_depart", "plateforme", 
-    "nom_client", "tel_client", "nb_adultes", "nb_enfants", 
+    "date_reservation", "date_arrivee", "date_depart", "plateforme",
+    "nom_client", "tel_client", "nb_adultes", "nb_enfants",
     "prix_brut", "charges", "paye", "notes"
 ]
 
 def migrate_data():
     """Fonction principale pour migrer les données de CSV vers SQLite."""
-    
+
     print("🚀 Démarrage de la migration...")
 
     if not os.path.exists(CSV_RESERVATIONS) or not os.path.exists(CSV_PLATEFORMES):
@@ -35,10 +35,10 @@ def migrate_data():
 
     print(f"📄 Lecture du fichier de réservations '{CSV_RESERVATIONS}'...")
     try:
-        # LA MODIFICATION CLÉ EST ICI : delimiter=';'
+        # Lecture du premier CSV avec le délimiteur point-virgule
         df_reservations = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
-        
-        # Nettoyer les espaces superflus dans les noms de colonnes
+
+        # Nettoyage des espaces superflus dans les noms de colonnes
         df_reservations.columns = df_reservations.columns.str.strip()
 
         df_reservations.rename(columns={'telephone': 'tel_client', 'nuitees': 'nb_nuits'}, inplace=True)
@@ -63,7 +63,7 @@ def migrate_data():
         df_cleaned['notes'] = df_cleaned['notes'].astype(str).fillna('')
 
         print("✅ Données des réservations nettoyées.")
-    
+
     except Exception as e:
         print(f"❌ ERREUR lors de la lecture du fichier de réservations: {e}")
         return
@@ -72,13 +72,14 @@ def migrate_data():
     try:
         # Vérifier si le fichier est vide avant de le lire
         if os.path.exists(CSV_PLATEFORMES) and os.path.getsize(CSV_PLATEFORMES) > 0:
+            # Lecture du second CSV avec le délimiteur point-virgule
             df_plateformes = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
             df_plateformes.rename(columns={'plateforme': 'nom', 'couleur': 'couleur'}, inplace=True)
         else:
-            # Si le fichier est vide, on crée un DataFrame vide
+            # Si le fichier est vide, on crée un DataFrame vide pour éviter une erreur
             print("Le fichier des plateformes est vide, on continue sans.")
             df_plateformes = pd.DataFrame(columns=['nom', 'couleur'])
-            
+
         print("✅ Données des plateformes lues.")
 
     except Exception as e:
