@@ -17,12 +17,6 @@ DB_FILE = "reservations.db"
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
-# ==============================  SESSION KEYS  ==============================
-if "uploader_key_restore" not in st.session_state:
-    st.session_state.uploader_key_restore = 0
-if "did_clear_cache" not in st.session_state:
-    st.session_state.did_clear_cache = False
-
 # ==============================  PALETTE (PLATEFORMES) ==============================
 DEFAULT_PALETTE = {
     "Booking": "#1e90ff",
@@ -66,6 +60,15 @@ def charger_donnees():
         df = pd.read_sql_query("SELECT * FROM reservations", con)
         df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
 
+    # Correction pour la table 'plateformes' mal formée
+    if len(df_palette.columns) == 1 and ';' in df_palette.columns[0]:
+        single_col_name = df_palette.columns[0]
+        split_data = df_palette[single_col_name].str.split(';', n=1, expand=True)
+        df_palette_corrected = pd.DataFrame()
+        df_palette_corrected['nom'] = split_data[0].str.strip()
+        df_palette_corrected['couleur'] = split_data[1].str.strip()
+        df_palette = df_palette_corrected
+    
     if 'nom' not in df_palette.columns and 'plateforme' in df_palette.columns:
         df_palette.rename(columns={'plateforme': 'nom'}, inplace=True)
 
@@ -81,7 +84,6 @@ def sauvegarder_donnees(df_reservations, palette_dict):
     """Sauvegarde le DataFrame des réservations et la palette dans la BDD SQLite."""
     with sqlite3.connect(DB_FILE) as con:
         df_to_save = df_reservations.copy()
-        
         for col in ['paye', 'sms_envoye']:
             if col in df_to_save.columns:
                 df_to_save[col] = df_to_save[col].astype(int)
@@ -139,7 +141,9 @@ def ensure_schema(df):
     df_res.loc[pd.notna(date_arrivee_dt), 'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
     df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
     
-    return df_res[BASE_COLS]
+    # S'assurer que les colonnes sont dans le bon ordre
+    final_cols = [col for col in BASE_COLS if col in df_res.columns]
+    return df_res[final_cols]
 
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
@@ -148,7 +152,7 @@ def vue_reservations(df):
         st.info("Aucune réservation pour le moment. Ajoutez-en une via l'onglet '➕ Ajouter'.")
         return
 
-    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+    df_sorted = df.sort_values(by="date_arrivee", ascending=False, na_position='last').reset_index(drop=True)
     st.dataframe(df_sorted)
 
 def vue_ajouter(df, palette):
