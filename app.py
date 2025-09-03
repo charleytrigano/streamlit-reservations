@@ -1,5 +1,5 @@
 # app.py — Villa Tobias (COMPLET) - Version SQLite
-# Schéma de données enrichi et logique de chargement finalisée
+# Version finale avec toutes les fonctionnalités réactivées
 
 import streamlit as st
 import pandas as pd
@@ -156,13 +156,16 @@ def vue_ajouter(df, palette):
         with c1:
             nom_client = st.text_input("**Nom du Client**")
             date_arrivee = st.date_input("**Date d'arrivée**", date.today())
+            prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, step=10.0, format="%.2f")
         with c2:
             plateforme = st.selectbox("**Plateforme**", options=list(palette.keys()))
             date_depart = st.date_input("**Date de départ**", date.today() + timedelta(days=1))
+            commissions = st.number_input("Commissions (€)", min_value=0.0, step=1.0, format="%.2f")
         with c3:
-            prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, step=10.0, format="%.2f")
+            telephone = st.text_input("Téléphone")
             paye = st.checkbox("Payé", False)
-
+            frais_cb = st.number_input("Frais CB (€)", min_value=0.0, step=0.1, format="%.2f")
+        
         submitted = st.form_submit_button("✅ Ajouter la réservation")
         if submitted:
             if not nom_client or date_depart <= date_arrivee:
@@ -171,7 +174,8 @@ def vue_ajouter(df, palette):
             
             nouvelle_ligne = pd.DataFrame([{
                 'nom_client': nom_client, 'date_arrivee': date_arrivee, 'date_depart': date_depart,
-                'plateforme': plateforme, 'prix_brut': prix_brut, 'paye': paye
+                'plateforme': plateforme, 'prix_brut': prix_brut, 'paye': paye,
+                'commissions': commissions, 'frais_cb': frais_cb, 'telephone': telephone
             }])
             
             df_a_jour = pd.concat([df, nouvelle_ligne], ignore_index=True)
@@ -200,7 +204,7 @@ def vue_plateformes(df, palette):
         new_name = st.text_input("Ajouter une nouvelle plateforme")
         submitted = st.form_submit_button("Ajouter")
         if submitted and new_name and new_name not in edited_palette:
-            edited_palette[new_name] = "#ffffff"
+            edited_palette[new_name] = "#ffffff" # Default color for new platforms
     
     if st.button("💾 Enregistrer les changements"):
         sauvegarder_donnees(df, edited_palette)
@@ -218,15 +222,17 @@ def main():
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "🎨 Plateformes": vue_plateformes,
+        # Ajoutez ici d'autres vues si vous les avez (ex: vue_modifier, vue_calendrier)
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
 
-    # Appeler la fonction de la page sélectionnée
     page_function = pages[selection]
-    if selection == "📋 Réservations":
-        page_function(df)
-    else:
+
+    # Certaines fonctions ont besoin de 'palette' et d'autres non.
+    if selection in ["➕ Ajouter", "🎨 Plateformes"]:
         page_function(df, palette)
+    else:
+        page_function(df)
 
 if __name__ == "__main__":
     main()
