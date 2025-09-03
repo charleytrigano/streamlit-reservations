@@ -1,5 +1,5 @@
 # app.py — Villa Tobias (COMPLET) - Version SQLite
-# Schéma de données enrichi pour correspondre à la source
+# Schéma de données enrichi et logique de chargement corrigée
 
 import streamlit as st
 import pandas as pd
@@ -35,7 +35,7 @@ def init_db():
     """Crée les tables de la base de données si elles n'existent pas."""
     with sqlite3.connect(DB_FILE) as con:
         cur = con.cursor()
-        # Schéma de la table des réservations enrichi
+        # Schéma de la table des réservations basé sur votre fichier source
         cur.execute("""
             CREATE TABLE IF NOT EXISTS reservations (
                 paye INTEGER,
@@ -78,7 +78,7 @@ def init_db():
 def charger_donnees():
     """Charge les réservations et la palette depuis la base de données SQLite."""
     if not os.path.exists(DB_FILE):
-        init_db()  # Crée la DB si elle n'existe pas
+        init_db()
         return pd.DataFrame(), DEFAULT_PALETTE
 
     with sqlite3.connect(DB_FILE) as con:
@@ -86,12 +86,15 @@ def charger_donnees():
         df_palette = pd.read_sql_query("SELECT * FROM plateformes", con)
 
     # Traitement de la palette
+    if 'nom' not in df_palette.columns and 'plateforme' in df_palette.columns:
+        df_palette.rename(columns={'plateforme': 'nom'}, inplace=True)
+
     if 'nom' in df_palette.columns and 'couleur' in df_palette.columns:
         palette = dict(zip(df_palette['nom'], df_palette['couleur']))
     else:
         palette = DEFAULT_PALETTE.copy()
 
-    # Traitement des réservations
+    # Traitement et nettoyage des réservations
     df = ensure_schema(df)
     return df, palette
 
@@ -99,14 +102,13 @@ def sauvegarder_donnees(df_reservations, palette_dict):
     """Sauvegarde le DataFrame des réservations et la palette dans la BDD SQLite."""
     with sqlite3.connect(DB_FILE) as con:
         df_to_save = df_reservations.copy()
-        # Conversion des booléens en entiers pour SQLite
+        
         for col in ['paye', 'sms_envoye']:
             if col in df_to_save.columns:
                 df_to_save[col] = df_to_save[col].astype(int)
         
         df_to_save.to_sql('reservations', con, if_exists='replace', index=False)
 
-        # Sauvegarde de la palette
         cur = con.cursor()
         cur.execute("DELETE FROM plateformes")
         if palette_dict:
@@ -126,39 +128,41 @@ def ensure_schema(df):
     df_res = df.copy()
     for col in BASE_COLS:
         if col not in df_res.columns:
-            df_res[col] = None  # Ajouter les colonnes manquantes
+            df_res[col] = None
 
-    # Conversion des types
-    for col in ["date_arrivee", "date_depart"]:
-        df_res[col] = pd.to_datetime(df_res[col], errors='coerce').dt.date
-    
+    # Étape 1: Convertir en objets datetime complets pour le calcul
+    date_cols_to_convert = ["date_arrivee", "date_depart"]
+    for col in date_cols_to_convert:
+        df_res[col] = pd.to_datetime(df_res[col], errors='coerce')
+
+    # Étape 2: Calculer les nuitées
+    mask_dates = pd.notna(df_res["date_arrivee"]) & pd.notna(df_res["date_depart"])
+    df_res.loc[mask_dates, "nuitees"] = (df_res.loc[mask_dates, "date_depart"] - df_res.loc[mask_dates, "date_arrivee"]).dt.days
+
+    # Étape 3: Reconvertir les colonnes de date en objets date simples pour l'affichage
+    for col in date_cols_to_convert:
+        df_res[col] = df_res[col].dt.date
+
     for col in ['paye', 'sms_envoye']:
         df_res[col] = df_res[col].fillna(0).astype(bool)
 
-    numeric_cols = ['nuitees', 'prix_brut', 'commissions', 'frais_cb', 'prix_net', 
-                    'menage', 'taxes_sejour', 'base', 'charges', '%', 'AAAA', 'MM']
+    numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
-        df_res[col] = pd.to_numeric(df_res[col], errors='coerce')
+        df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
 
     # Recalculs pour garantir la cohérence
-    mask_dates = pd.notna(df_res["date_arrivee"]) & pd.notna(df_res["date_depart"])
-    df_res.loc[mask_dates, "nuitees"] = (df_res.loc[mask_dates, "date_depart"] - df_res.loc[mask_dates, "date_arrivee"]).dt.days
-    
-    df_res['prix_net'] = df_res['prix_brut'].fillna(0) - df_res['commissions'].fillna(0) - df_res['frais_cb'].fillna(0)
-    df_res['base'] = df_res['prix_net'] - df_res['menage'].fillna(0) - df_res['taxes_sejour'].fillna(0)
-    df_res['charges'] = df_res['prix_brut'].fillna(0) - df_res['prix_net']
+    df_res['prix_net'] = df_res['prix_brut'] - df_res['commissions'] - df_res['frais_cb']
+    df_res['base'] = df_res['prix_net'] - df_res['menage'] - df_res['taxes_sejour']
+    df_res['charges'] = df_res['prix_brut'] - df_res['prix_net']
     
     with np.errstate(divide='ignore', invalid='ignore'):
         df_res['%'] = np.where(df_res['prix_brut'] > 0, (df_res['charges'] / df_res['prix_brut'] * 100), 0)
 
-    df_res.loc[pd.notna(df_res["date_arrivee"]), 'AAAA'] = df_res.loc[pd.notna(df_res["date_arrivee"]), 'date_arrivee'].dt.year
-    df_res.loc[pd.notna(df_res["date_arrivee"]), 'MM'] = df_res.loc[pd.notna(df_res["date_arrivee"]), 'date_arrivee'].dt.month
+    df_res.loc[pd.notna(df_res["date_arrivee"]), 'AAAA'] = pd.to_datetime(df_res.loc[pd.notna(df_res["date_arrivee"]), 'date_arrivee']).dt.year
+    df_res.loc[pd.notna(df_res["date_arrivee"]), 'MM'] = pd.to_datetime(df_res.loc[pd.notna(df_res["date_arrivee"]), 'date_arrivee']).dt.month
     
     return df_res[BASE_COLS]
 
-# Le reste du fichier app.py (les fonctions "vue_*", "main", etc.) reste identique à la version précédente.
-# S'il y a des erreurs dans les vues, elles devront être ajustées, mais la logique de données est maintenant correcte.
-# ... (collez ici le reste de votre fichier app.py à partir de la section PALETTE HELPERS)
 # ==============================  PALETTE HELPERS ==============================
 def get_palette():
     if 'palette' in st.session_state:
@@ -167,15 +171,47 @@ def get_palette():
     st.session_state.palette = pal
     return pal
 
-# ... (et ainsi de suite pour toutes les autres fonctions)
+def is_dark_color(hex_color):
+    try:
+        hex_color = hex_color.lstrip('#')
+        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+        return luminance < 0.5
+    except:
+        return True
+
+# ==============================  VIEWS (ONGLETS) ==============================
+def vue_reservations(df):
+    st.header("📋 Liste des Réservations")
+    if df.empty:
+        st.info("Aucune réservation pour le moment.")
+        return
+
+    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+    st.dataframe(df_sorted)
+
+# ... (les autres fonctions "vue_" peuvent être ajoutées ici)
+
+# ==============================  MAIN APP  ==============================
 def main():
     init_db()
     st.title("📖 Gestion des Réservations - Villa Tobias")
-    # ... etc.
+    
+    st.sidebar.markdown("## ⚙️ Administration")
+    # bouton_telecharger() et bouton_restaurer() peuvent être ajoutés ici si nécessaire
 
-# Assurez-vous d'avoir le reste de vos fonctions ici
-# Par exemple :
-# def vue_reservations(df):
-#    ...
-# if __name__ == "__main__":
-#    main()
+    df, palette = charger_donnees()
+    
+    st.session_state.palette = palette
+
+    st.sidebar.title("🧭 Navigation")
+    onglet = st.sidebar.radio(
+        "Aller à",
+        ["📋 Réservations", "➕ Ajouter", "🎨 Plateformes"] # Simplifié pour le débogage
+    )
+
+    if onglet == "📋 Réservations":
+        vue_reservations(df)
+    # Les autres vues peuvent être réactivées une par une
+    # elif onglet == "➕ Ajouter":
+    #     vue_ajouter(df)
