@@ -42,7 +42,7 @@ def migrate_data():
     # --- Étape 3: Lire et nettoyer les données des réservations ---
     print(f"📄 Lecture du fichier de réservations '{CSV_RESERVATIONS}'...")
     try:
-        df_reservations = pd.read_csv(CSV_RESERVATIONS)
+        df_reservations = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         
         # Renommer les colonnes si nécessaire (ex: 'telephone' -> 'tel_client')
         df_reservations.rename(columns={'telephone': 'tel_client', 'nuitees': 'nb_nuits'}, inplace=True)
