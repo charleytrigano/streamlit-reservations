@@ -105,6 +105,12 @@ else:
     if 'paye' in df.columns:
         df['paye'] = df['paye'].astype(bool)
 
+   # Fichier app.py
+
+def charger_donnees():
+    # ... code pour charger les données ...
+
+    # Assurez-vous que les lignes suivantes sont bien à l'intérieur de la fonction
     df = ensure_schema(df)
     return df, palette
 
