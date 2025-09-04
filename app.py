@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET) - Correction ValueError et Submit Button
+# app.py — Villa Tobias (COMPLET) - Version finale et stable
 
 import streamlit as st
 import pandas as pd
@@ -19,7 +19,7 @@ DEFAULT_PALETTE = { "Booking": "#1e90ff", "Airbnb":  "#e74c3c", "Autre":   "#f59
 # ============================== CORE DATA FUNCTIONS ==============================
 @st.cache_data
 def charger_donnees_csv():
-    """Charge les données directement depuis les fichiers CSV."""
+    """Charge et nettoie les données directement depuis les fichiers CSV."""
     df = pd.DataFrame()
     palette = DEFAULT_PALETTE.copy()
 
@@ -27,7 +27,7 @@ def charger_donnees_csv():
         df = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         df.columns = df.columns.str.strip()
     except FileNotFoundError:
-        st.warning(f"Fichier '{CSV_RESERVATIONS}' introuvable.")
+        st.warning(f"Fichier '{CSV_RESERVATIONS}' introuvable. Vous pouvez commencer par ajouter une réservation.")
     except Exception as e:
         st.error(f"Erreur de lecture de {CSV_RESERVATIONS}")
         st.exception(e)
@@ -35,11 +35,8 @@ def charger_donnees_csv():
     try:
         df_palette = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
         palette = dict(zip(df_palette['plateforme'], df_palette['couleur']))
-    except FileNotFoundError:
-        st.warning(f"Fichier '{CSV_PLATEFORMES}' introuvable. Utilisation de la palette par défaut.")
-    except Exception as e:
-        st.error(f"Erreur de lecture de {CSV_PLATEFORMES}")
-        st.exception(e)
+    except:
+        pass # Utilise la palette par défaut si le fichier n'est pas trouvé ou est invalide
 
     df = ensure_schema(df)
     return df, palette
@@ -94,10 +91,9 @@ def ensure_schema(df):
     for col in date_cols:
         df_res[col] = df_res[col].dt.date
 
-    if 'paye' in df_res.columns:
-        if df_res['paye'].dtype == 'object':
-            df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
-        df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
+    if 'paye' in df_res.columns and df_res['paye'].dtype == 'object':
+        df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
+    df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
@@ -127,8 +123,29 @@ def vue_reservations(df):
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une Réservation")
     with st.form("form_ajout", clear_on_submit=True):
-        # ... (le code de ce formulaire reste le même)
-        pass
+        c1, c2 = st.columns(2)
+        with c1:
+            nom_client = st.text_input("**Nom du Client**")
+            telephone = st.text_input("Téléphone")
+            date_arrivee = st.date_input("**Date d'arrivée**", date.today())
+            date_depart = st.date_input("**Date de départ**", date.today() + timedelta(days=1))
+        with c2:
+            plateforme = st.selectbox("**Plateforme**", options=list(palette.keys()))
+            prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, step=0.01, format="%.2f")
+            commissions = st.number_input("Commissions (€)", min_value=0.0, step=0.01, format="%.2f")
+            paye = st.checkbox("Payé", False)
+        
+        submitted = st.form_submit_button("✅ Ajouter la réservation")
+        if submitted:
+            if not nom_client or date_depart <= date_arrivee:
+                st.error("Veuillez entrer un nom et vérifier que les dates sont correctes.")
+            else:
+                nouvelle_ligne = pd.DataFrame([{'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}])
+                df_a_jour = pd.concat([df, nouvelle_ligne], ignore_index=True)
+                df_a_jour = ensure_schema(df_a_jour)
+                if sauvegarder_donnees_csv(df_a_jour):
+                    st.success(f"Réservation pour **{nom_client}** ajoutée !")
+                    st.rerun()
 
 def vue_modifier(df, palette):
     st.header("✏️ Modifier / Supprimer une Réservation")
@@ -157,20 +174,14 @@ def vue_modifier(df, palette):
                 current_plateforme = resa_selectionnee.get('plateforme')
                 plateforme_index = plateforme_options.index(current_plateforme) if current_plateforme in plateforme_options else 0
                 plateforme = st.selectbox("**Plateforme**", options=plateforme_options, index=plateforme_index)
-                
-                # --- CORRECTION APPLIQUÉE ICI : Retrait de float() ---
-                prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=resa_selectionnee.get('prix_brut', 0.0), format="%.2f")
-                commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa_selectionnee.get('commissions', 0.0), format="%.2f")
-                frais_cb = st.number_input("Frais CB (€)", min_value=0.0, value=resa_selectionnee.get('frais_cb', 0.0), format="%.2f")
-                menage = st.number_input("Ménage (€)", min_value=0.0, value=resa_selectionnee.get('menage', 0.0), format="%.2f")
-                taxes_sejour = st.number_input("Taxes Séjour (€)", min_value=0.0, value=resa_selectionnee.get('taxes_sejour', 0.0), format="%.2f")
+                prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=resa_selectionnee.get('prix_brut', 0.0), step=0.01, format="%.2f")
+                commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa_selectionnee.get('commissions', 0.0), step=0.01, format="%.2f")
                 paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
             
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             
-            # --- CORRECTION APPLIQUÉE ICI : Utilisation de st.form_submit_button ---
             if btn_enregistrer.form_submit_button("💾 Enregistrer"):
-                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'frais_cb': frais_cb, 'menage': menage, 'taxes_sejour': taxes_sejour, 'paye': paye}
+                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}
                 for key, value in updates.items():
                     df.loc[original_index, key] = value
                 
@@ -187,13 +198,23 @@ def vue_modifier(df, palette):
 
 def vue_plateformes(df, palette):
     st.header("🎨 Gestion des Plateformes")
-    # ... (le code de cette vue reste le même)
-    pass
+    df_palette = pd.DataFrame(list(palette.items()), columns=['plateforme', 'couleur'])
+
+    edited_df = st.data_editor(
+        df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
+        column_config={ "plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)") }
+    )
+
+    if st.button("💾 Enregistrer les modifications des plateformes"):
+        nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
+        df_plateformes_save = pd.DataFrame(list(nouvelle_palette.items()), columns=['plateforme', 'couleur'])
+        if sauvegarder_donnees_csv(df_plateformes_save, file_path=CSV_PLATEFORMES):
+            st.success("Palette de couleurs mise à jour !")
+            st.rerun()
 
 # ==============================  MAIN APP  ==============================
 def main():
     st.title("📖 Gestion des Réservations - Villa Tobias")
-    st.info("**Important :** Pour rendre vos modifications permanentes, téléchargez le fichier CSV mis à jour et envoyez-le sur GitHub.")
     df, palette = charger_donnees_csv()
     
     st.sidebar.title("🧭 Navigation")
