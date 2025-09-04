@@ -1,8 +1,9 @@
-# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec Ajout/Sauvegarde
+# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec toutes les fonctionnalités
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv" 
@@ -16,36 +17,43 @@ DEFAULT_PALETTE = { "Booking": "#1e90ff", "Airbnb":  "#e74c3c", "Autre":   "#f59
 # ============================== CORE DATA FUNCTIONS ==============================
 @st.cache_data
 def charger_donnees_csv():
-    """Charge les données directement depuis le fichier CSV."""
+    """Charge les données directement depuis les fichiers CSV."""
+    # Charger les réservations
     try:
         df = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         df.columns = df.columns.str.strip()
     except FileNotFoundError:
         st.error(f"ERREUR : Le fichier '{CSV_RESERVATIONS}' est introuvable.")
-        return pd.DataFrame()
+        return pd.DataFrame(), DEFAULT_PALETTE
     except Exception as e:
-        st.error("Une erreur est survenue lors de la lecture du fichier CSV.")
+        st.error(f"Une erreur est survenue lors de la lecture du fichier de réservations.")
         st.exception(e)
-        return pd.DataFrame()
+        return pd.DataFrame(), DEFAULT_PALETTE
+
+    # Charger la palette de couleurs
+    try:
+        df_palette = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
+        palette = dict(zip(df_palette['plateforme'], df_palette['couleur']))
+    except:
+        palette = DEFAULT_PALETTE.copy()
 
     df = ensure_schema(df)
-    return df
+    return df, palette
 
-def sauvegarder_donnees_csv(df):
-    """Sauvegarde le DataFrame dans le fichier CSV."""
+def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
+    """Sauvegarde le DataFrame dans le fichier CSV spécifié."""
     try:
-        # On s'assure que les dates sont bien au format texte pour la sauvegarde
         df_to_save = df.copy()
+        # S'assurer que les dates sont au bon format texte pour la sauvegarde
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
         
-        df_to_save.to_csv(CSV_RESERVATIONS, sep=';', index=False)
-        st.cache_data.clear() # Vider le cache pour refléter les changements
+        df_to_save.to_csv(file_path, sep=';', index=False)
+        st.cache_data.clear()
         return True
     except Exception as e:
-        st.error("Une erreur est survenue lors de la sauvegarde.")
-        st.exception(e)
+        st.error(f"Une erreur est survenue lors de la sauvegarde : {e}")
         return False
 
 # ==============================  SCHEMA & DATA VALIDATION  ==============================
@@ -68,7 +76,7 @@ def ensure_schema(df):
 
     for col in BASE_COLS:
         if col not in df_res.columns:
-            df_res[col] = 0
+            df_res[col] = None
 
     date_cols = ["date_arrivee", "date_depart"]
     for col in date_cols:
@@ -81,14 +89,15 @@ def ensure_schema(df):
         df_res[col] = df_res[col].dt.date
 
     if 'paye' in df_res.columns and df_res['paye'].dtype == 'object':
-        df_res['paye'] = df_res['paye'].str.strip().str.upper() == 'VRAI'
+        df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
     df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
-        if col in df_res.columns and df_res[col].dtype == 'object':
-            df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
-        df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
+        if col in df_res.columns:
+            if df_res[col].dtype == 'object':
+                df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
+            df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
     
     # Recalculs
     df_res['prix_net'] = df_res['prix_brut'].fillna(0) - df_res['commissions'].fillna(0) - df_res['frais_cb'].fillna(0)
@@ -136,22 +145,30 @@ def vue_ajouter(df, palette):
                     st.success(f"Réservation pour **{nom_client}** ajoutée !")
                     st.rerun()
 
+def vue_plateformes(df, palette):
+    st.header("🎨 Gestion des Plateformes")
+    st.warning("La modification des plateformes n'est pas encore implémentée dans cette version.")
+    
+    st.subheader("Plateformes Actuelles")
+    for p, c in palette.items():
+        st.markdown(f"- <span style='color:{c};'>■</span> {p}", unsafe_allow_html=True)
+
 # ==============================  MAIN APP  ==============================
 def main():
     st.title("📖 Gestion des Réservations - Villa Tobias")
-    df = charger_donnees_csv()
-    palette = DEFAULT_PALETTE # Pour l'instant, on utilise la palette par défaut
+    df, palette = charger_donnees_csv()
     
     st.sidebar.title("🧭 Navigation")
     pages = { 
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
+        "🎨 Plateformes": vue_plateformes,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     
     page_function = pages[selection]
 
-    if selection == "➕ Ajouter":
+    if selection in ["➕ Ajouter", "🎨 Plateformes"]:
         page_function(df, palette)
     else:
         page_function(df)
