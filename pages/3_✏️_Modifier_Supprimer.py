@@ -13,12 +13,12 @@ df, palette = utils.charger_donnees_csv()
 if df.empty:
     st.warning("Aucune réservation à modifier.")
 else:
-    # Créer une copie pour travailler dessus
+    # Trier les réservations pour l'affichage et garder une trace de l'index original
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
     
     # Créer les options pour le selectbox
     options_resa = {
-        f"{idx}: {row['nom_client']} (Arrivée le {row['date_arrivee'].strftime('%d/%m/%Y')})": idx 
+        f"{idx}: {row['nom_client']} (Arrivée le {row['date_arrivee'].strftime('%d/%m/%Y')})": row['index']
         for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])
     }
     
@@ -30,11 +30,8 @@ else:
     )
     
     if selection_str:
-        # Retrouver l'index de la ligne sélectionnée dans le DataFrame trié
-        idx_selection_sorted = options_resa[selection_str]
-        # Retrouver l'index original de cette ligne dans le DataFrame non-trié
-        original_index = df_sorted.loc[idx_selection_sorted, 'index']
-        
+        # Retrouver l'index original de la ligne dans le DataFrame df
+        original_index = options_resa[selection_str]
         resa_selectionnee = df.loc[original_index].copy()
         
         with st.form(f"form_modif_{original_index}"):
@@ -64,7 +61,7 @@ else:
                         'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 
                         'paye': paye
                     }
-                    # Mettre à jour la ligne dans le DataFrame original en utilisant l'index original
+                    # Mettre à jour la ligne dans le DataFrame original
                     for key, value in updates.items():
                         df.loc[original_index, key] = value
                     
