@@ -1,30 +1,39 @@
-# app.py (Version de débogage minimaliste)
+# app.py (Test d'inspection des données)
 import streamlit as st
 import pandas as pd
-import os
 
 st.set_page_config(layout="wide")
-st.title("Test de Démarrage")
-
-st.write("✅ **Étape 1 :** Le script a démarré.")
+st.title("Test d'Inspection des Données")
 
 try:
     CSV_FILE = "reservations.xlsx - Sheet1.csv"
-    st.write(f"✅ **Étape 2 :** Le nom du fichier CSV est '{CSV_FILE}'. Vérification de son existence...")
-
-    if not os.path.exists(CSV_FILE):
-        st.error(f"❌ **ERREUR :** Le fichier '{CSV_FILE}' n'a pas été trouvé dans le dépôt GitHub.")
-    else:
-        st.write(f"✅ **Étape 3 :** Le fichier '{CSV_FILE}' a été trouvé.")
-        
-        df = pd.read_csv(CSV_FILE, delimiter=';')
-        st.write(f"✅ **Étape 4 :** Le fichier a été lu par pandas. Il contient {len(df)} lignes.")
-        
-        st.header("Données Brutes du CSV")
-        st.dataframe(df)
-        
-        st.write("✅ **Étape 5 :** Le script a terminé avec succès.")
+    st.write(f"Lecture du fichier '{CSV_FILE}'...")
+    df = pd.read_csv(CSV_FILE, delimiter=';')
+    st.success(f"Fichier lu ! {len(df)} lignes trouvées.")
+    
+    st.markdown("---")
+    st.subheader("1. Noms exacts des colonnes")
+    st.write(df.columns.tolist())
+    
+    st.markdown("---")
+    st.subheader("2. Types des données par colonne")
+    st.write(df.dtypes.apply(lambda x: x.name))
+    
+    st.markdown("---")
+    st.subheader("3. Aperçu de la première ligne (données brutes)")
+    st.json(df.head(1).to_dict('records'))
+    
+    st.markdown("---")
+    st.subheader("4. Test d'affichage de deux colonnes simples")
+    # Assurez-vous que ces noms de colonnes correspondent EXACTEMENT à ceux affichés au point 1
+    # J'utilise les noms probables basés sur vos fichiers précédents
+    try:
+        st.dataframe(df[['Client', 'Plateforme']])
+        st.success("L'affichage de deux colonnes simples a fonctionné.")
+    except Exception as e_df:
+        st.error("L'affichage des deux colonnes a échoué.")
+        st.exception(e_df)
 
 except Exception as e:
-    st.error("❌ **ERREUR INATTENDUE :** Le script a planté.")
+    st.error("❌ ERREUR LORS DE L'INSPECTION")
     st.exception(e)
