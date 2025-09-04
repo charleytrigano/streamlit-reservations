@@ -1,11 +1,10 @@
 # pages/3_✏️_Modifier_Supprimer.py
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
-import utils # Importe notre fichier de fonctions partagées
+from datetime import date
+import utils
 
 st.set_page_config(page_title="Modifier Réservation", layout="wide")
-
 st.header("✏️ Modifier / Supprimer une Réservation")
 
 df, palette = utils.charger_donnees_csv()
@@ -13,10 +12,8 @@ df, palette = utils.charger_donnees_csv()
 if df.empty:
     st.warning("Aucune réservation à modifier.")
 else:
-    # Trier les réservations pour l'affichage et garder une trace de l'index original
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
     
-    # Créer les options pour le selectbox
     options_resa = {
         f"{idx}: {row['nom_client']} (Arrivée le {row['date_arrivee'].strftime('%d/%m/%Y')})": row['index']
         for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])
@@ -30,12 +27,11 @@ else:
     )
     
     if selection_str:
-        # Retrouver l'index original de la ligne dans le DataFrame df
         original_index = options_resa[selection_str]
         resa_selectionnee = df.loc[original_index].copy()
         
         with st.form(f"form_modif_{original_index}"):
-            st.subheader(f"Modification de la réservation pour : {resa_selectionnee['nom_client']}")
+            st.subheader(f"Modification pour : {resa_selectionnee['nom_client']}")
             c1, c2 = st.columns(2)
             with c1:
                 nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
@@ -52,23 +48,19 @@ else:
             
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             
-            if btn_enregistrer.form_submit_button("💾 Enregistrer les modifications"):
-                if date_depart <= date_arrivee:
-                    st.error("La date de départ doit être après la date d'arrivée.")
-                else:
-                    updates = {
-                        'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 
-                        'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 
-                        'paye': paye
-                    }
-                    # Mettre à jour la ligne dans le DataFrame original
-                    for key, value in updates.items():
-                        df.loc[original_index, key] = value
-                    
-                    df_final = utils.ensure_schema(df)
-                    if utils.sauvegarder_donnees_csv(df_final):
-                        st.success("Modifications enregistrées !")
-                        st.rerun()
+            if btn_enregistrer.form_submit_button("💾 Enregistrer"):
+                updates = {
+                    'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 
+                    'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 
+                    'paye': paye
+                }
+                for key, value in updates.items():
+                    df.loc[original_index, key] = value
+                
+                df_final = utils.ensure_schema(df)
+                if utils.sauvegarder_donnees_csv(df_final):
+                    st.success("Modifications enregistrées !")
+                    st.rerun()
 
             if btn_supprimer.form_submit_button("🗑️ Supprimer"):
                 df_final = df.drop(index=original_index)
