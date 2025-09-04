@@ -13,11 +13,10 @@ df, palette = utils.charger_donnees_csv()
 if df.empty:
     st.warning("Aucune réservation à modifier.")
 else:
-    # Créer une copie pour éviter de modifier l'original directement dans la session
-    df_copy = df.copy()
-    df_sorted = df_copy.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+    # Créer une copie pour travailler dessus
+    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
     
-    # Créer les options pour le selectbox en utilisant le nouvel index (0, 1, 2...)
+    # Créer les options pour le selectbox
     options_resa = {
         f"{idx}: {row['nom_client']} (Arrivée le {row['date_arrivee'].strftime('%d/%m/%Y')})": idx 
         for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])
@@ -31,11 +30,14 @@ else:
     )
     
     if selection_str:
-        # Retrouver l'index (0, 1, 2...) de la ligne sélectionnée dans df_sorted
-        idx_selection = options_resa[selection_str]
-        resa_selectionnee = df_sorted.loc[idx_selection].copy()
+        # Retrouver l'index de la ligne sélectionnée dans le DataFrame trié
+        idx_selection_sorted = options_resa[selection_str]
+        # Retrouver l'index original de cette ligne dans le DataFrame non-trié
+        original_index = df_sorted.loc[idx_selection_sorted, 'index']
         
-        with st.form(f"form_modif_{idx_selection}"):
+        resa_selectionnee = df.loc[original_index].copy()
+        
+        with st.form(f"form_modif_{original_index}"):
             st.subheader(f"Modification de la réservation pour : {resa_selectionnee['nom_client']}")
             c1, c2 = st.columns(2)
             with c1:
@@ -62,26 +64,16 @@ else:
                         'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 
                         'paye': paye
                     }
-                    # Mettre à jour la ligne directement dans df_sorted
+                    # Mettre à jour la ligne dans le DataFrame original en utilisant l'index original
                     for key, value in updates.items():
-                        df_sorted.loc[idx_selection, key] = value
+                        df.loc[original_index, key] = value
                     
-                    # Retrouver l'index original pour le mettre à jour dans le df principal
-                    original_index = df_sorted.index[idx_selection]
-                    df.iloc[original_index] = df_sorted.iloc[idx_selection]
-
                     df_final = utils.ensure_schema(df)
                     if utils.sauvegarder_donnees_csv(df_final):
                         st.success("Modifications enregistrées !")
                         st.rerun()
 
             if btn_supprimer.form_submit_button("🗑️ Supprimer"):
-                # Retrouver l'index original dans le df non trié
-                original_index = df[
-                    (df['nom_client'] == resa_selectionnee['nom_client']) &
-                    (df['date_arrivee'] == resa_selectionnee['date_arrivee'])
-                ].index[0]
-
                 df_final = df.drop(index=original_index)
                 if utils.sauvegarder_donnees_csv(df_final):
                     st.warning("Réservation supprimée.")
