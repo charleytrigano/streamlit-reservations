@@ -3,4 +3,4 @@ pandas
 numpy
 gspread
 gspread-dataframe
-streamlit-gsheets
+st-gsheets-connection
