@@ -24,6 +24,7 @@ def charger_donnees_csv():
     """Charge et nettoie les données directement depuis les fichiers CSV."""
     df = pd.DataFrame()
     palette = DEFAULT_PALETTE.copy()
+
     try:
         df = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         df.columns = df.columns.str.strip()
@@ -128,6 +129,7 @@ def kpi_chips(df, title="Indicateurs Clés"):
     n = df["prix_net"].sum()
     nuits = df["nuitees"].sum()
     pm_brut = b / nuits if nuits > 0 else 0
+    
     html = f"""
     <style>
         .chips-container {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }}
@@ -153,7 +155,7 @@ def vue_reservations(df):
         st.info("Aucune réservation trouvée.")
         return
     df_sorted = df.sort_values(by="date_arrivee", ascending=False, na_position='last').reset_index(drop=True)
-    column_config={ "paye": st.column_config.CheckboxColumn("Payé"), "nuitees": st.column_config.NumberColumn("Nuits", format="%d"), "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"), "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"), "prix_net": st.column_config.NumberColumn("Prix Net", format="%.2f €"), "base": st.column_config.NumberColumn("Base", format="%.2f €"), "charges": st.column_config.NumberColumn("Charges", format="%.2f €"), "%": st.column_config.NumberColumn("% Charges", format="%.2f %%"), "AAAA": st.column_config.NumberColumn("Année", format="%d"), "MM": st.column_config.NumberColumn("Mois", format="%d"), "date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"), "date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"), }
+    column_config={ "paye": st.column_config.CheckboxColumn("Payé"), "nuitees": st.column_config.NumberColumn("Nuits", format="%d"), "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"), "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"),"prix_net": st.column_config.NumberColumn("Prix Net", format="%.2f €"), "base": st.column_config.NumberColumn("Base", format="%.2f €"),"charges": st.column_config.NumberColumn("Charges", format="%.2f €"), "%": st.column_config.NumberColumn("% Charges", format="%.2f %%"),"AAAA": st.column_config.NumberColumn("Année", format="%d"), "MM": st.column_config.NumberColumn("Mois", format="%d"),"date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"),"date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"), }
     st.dataframe(df_sorted, column_config=column_config, use_container_width=True)
 
 def vue_ajouter(df, palette):
@@ -250,10 +252,8 @@ def vue_calendrier(df, palette):
     try: default_year_index = available_years.index(today.year)
     except ValueError: default_year_index = len(available_years) - 1
     selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
-
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
-
     st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}.calendar-day.outside-month{background-color:#2e2e2e}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
     headers = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
@@ -273,8 +273,8 @@ def vue_calendrier(df, palette):
                 st.markdown(day_html, unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Détails des réservations du mois")
-    start_of_month = date(selected_year, selected_month, 1)
-    end_of_month = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
+    start_of_month, end_day = date(selected_year, selected_month, 1), calendar.monthrange(selected_year, selected_month)[1]
+    end_of_month = date(selected_year, selected_month, end_day)
     reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
     if not reservations_du_mois.empty:
         options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
@@ -330,9 +330,10 @@ def vue_sms(df):
     if df.empty:
         st.warning("Aucune réservation pour envoyer un SMS.")
         return
-    df_with_tel = df.dropna(subset=['telephone'])
+    df_with_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee'])
+    df_with_tel = df_with_tel[df_with_tel['telephone'].astype(str).str.isdigit()]
     if df_with_tel.empty:
-        st.warning("Aucune réservation avec un numéro de téléphone.")
+        st.warning("Aucune réservation avec un numéro de téléphone valide.")
         return
     df_sorted = df_with_tel.sort_values(by="date_arrivee", ascending=False).reset_index()
     options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
@@ -373,7 +374,6 @@ def main():
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-
     if selection in ["➕ Ajouter", "✏️ Modifier / Supprimer", "🎨 Plateformes", "📅 Calendrier", "📊 Rapport"]:
         page_function(df, palette)
     else:
