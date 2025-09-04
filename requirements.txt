@@ -1,5 +1,6 @@
 streamlit
 pandas
 numpy
-openpyxl
+gspread
+gspread-dataframe
 streamlit-gsheets
