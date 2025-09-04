@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec toutes les fonctionnalités
+# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec formatage des nombres
 
 import streamlit as st
 import pandas as pd
@@ -42,7 +42,6 @@ def sauvegarder_donnees_csv(df):
     """Sauvegarde le DataFrame dans le fichier CSV."""
     try:
         df_to_save = df.copy()
-        # Formatter les dates pour la sauvegarde pour éviter les problèmes de format
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
@@ -97,7 +96,6 @@ def ensure_schema(df):
                 df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
             df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
     
-    # --- CALCULS COMPLETS RESTAURÉS ---
     df_res['prix_net'] = df_res['prix_brut'].fillna(0) - df_res['commissions'].fillna(0) - df_res['frais_cb'].fillna(0)
     df_res['charges'] = df_res['prix_brut'].fillna(0) - df_res['prix_net'].fillna(0)
     df_res['base'] = df_res['prix_net'].fillna(0) - df_res['menage'].fillna(0) - df_res['taxes_sejour'].fillna(0)
@@ -127,8 +125,29 @@ def vue_reservations(df):
     if df.empty:
         st.info("Aucune réservation trouvée.")
         return
+        
     df_sorted = df.sort_values(by="date_arrivee", ascending=False, na_position='last').reset_index(drop=True)
-    st.dataframe(df_sorted)
+    
+    # Configuration de l'affichage des colonnes
+    column_config = {
+        "paye": st.column_config.CheckboxColumn("Payé"),
+        "nuitees": st.column_config.NumberColumn("Nuits", format="%d"),
+        "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"),
+        "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"),
+        "frais_cb": st.column_config.NumberColumn("Frais CB", format="%.2f €"),
+        "prix_net": st.column_config.NumberColumn("Prix Net", format="%.2f €"),
+        "menage": st.column_config.NumberColumn("Ménage", format="%.2f €"),
+        "taxes_sejour": st.column_config.NumberColumn("Taxes Séjour", format="%.2f €"),
+        "base": st.column_config.NumberColumn("Base", format="%.2f €"),
+        "charges": st.column_config.NumberColumn("Charges", format="%.2f €"),
+        "%": st.column_config.NumberColumn("% Charges", format="%.2f %%"),
+        "AAAA": st.column_config.NumberColumn("Année", format="%d"),
+        "MM": st.column_config.NumberColumn("Mois", format="%d"),
+        "date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"),
+        "date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"),
+    }
+    
+    st.dataframe(df_sorted, column_config=column_config, use_container_width=True)
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une Réservation")
