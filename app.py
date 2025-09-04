@@ -48,10 +48,6 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
         
-        # Conserver uniquement les colonnes de base pour éviter d'écrire des colonnes temporaires
-        colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
-        df_to_save = df_to_save[colonnes_a_sauvegarder]
-
         df_to_save.to_csv(file_path, sep=';', index=False)
         st.cache_data.clear()
         return True
@@ -73,8 +69,7 @@ def ensure_schema(df):
     rename_map = { 
         'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme', 
         'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
-        'Brut (€)': 'prix_brut', 'Charges (€)': 'charges', 'Net (€)': 'prix_net',
-        'Charges (%)': '%'
+        'Brut (€)': 'prix_brut'
     }
     df_res.rename(columns=rename_map, inplace=True)
 
@@ -91,10 +86,9 @@ def ensure_schema(df):
     for col in date_cols:
         df_res[col] = df_res[col].dt.date
 
-    if 'paye' in df_res.columns:
-        if df_res['paye'].dtype == 'object':
-            df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
-        df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
+    if 'paye' in df_res.columns and df_res['paye'].dtype == 'object':
+        df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
+    df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
@@ -116,41 +110,10 @@ def ensure_schema(df):
     
     return df_res
 
-# ============================== UTILITIES & HELPERS ==============================
-def is_dark_color(hex_color):
-    try:
-        hex_color = hex_color.lstrip('#')
-        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
-        return luminance < 0.5
-    except (ValueError, TypeError): return True
-
-def kpi_chips(df):
-    if df.empty or 'nuitees' not in df.columns or df['nuitees'].sum() == 0:
-        return
-    b = df["prix_brut"].sum()
-    n = df["prix_net"].sum()
-    ch = df["charges"].sum()
-    nuits = df["nuitees"].sum()
-    pm_brut = b / nuits if nuits > 0 else 0
-    pm_net = n / nuits if nuits > 0 else 0
-    pct = (ch / b * 100) if b > 0 else 0
-    html = f"""<style>...</style><div class="chips-container">...</div>""" # (Le code HTML des KPIs)
-    st.markdown(html, unsafe_allow_html=True)
-
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
     st.header("📋 Liste des Réservations")
-    st.download_button(label="📥 Télécharger le fichier (CSV)", data=df.to_csv(sep=';', index=False).encode('utf-8'), file_name=CSV_RESERVATIONS, mime='text/csv')
-    st.markdown("---")
-
-    if df.empty:
-        st.info("Aucune réservation trouvée.")
-        return
-        
-    df_sorted = df.sort_values(by="date_arrivee", ascending=False, na_position='last').reset_index(drop=True)
-    column_config={ "paye": st.column_config.CheckboxColumn("Payé"), "nuitees": st.column_config.NumberColumn("Nuits", format="%d"), "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"), "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"), "prix_net": st.column_config.NumberColumn("Prix Net", format="%.2f €"), "base": st.column_config.NumberColumn("Base", format="%.2f €"), "charges": st.column_config.NumberColumn("Charges", format="%.2f €"), "%": st.column_config.NumberColumn("% Charges", format="%.2f %%"), "AAAA": st.column_config.NumberColumn("Année", format="%d"), "MM": st.column_config.NumberColumn("Mois", format="%d"), "date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"), "date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"), }
-    st.dataframe(df_sorted, column_config=column_config, use_container_width=True)
+    st.dataframe(df)
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une Réservation")
@@ -160,19 +123,18 @@ def vue_ajouter(df, palette):
             nom_client = st.text_input("**Nom du Client**")
             telephone = st.text_input("Téléphone")
             date_arrivee = st.date_input("**Date d'arrivée**", date.today())
-            date_depart = st.date_input("**Date de départ**", date.today() + timedelta(days=1))
         with c2:
             plateforme = st.selectbox("**Plateforme**", options=list(palette.keys()))
+            date_depart = st.date_input("**Date de départ**", date.today() + timedelta(days=1))
             prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, step=0.01, format="%.2f")
-            commissions = st.number_input("Commissions (€)", min_value=0.0, step=0.01, format="%.2f")
-            paye = st.checkbox("Payé", False)
+        paye = st.checkbox("Payé", False)
 
         submitted = st.form_submit_button("✅ Ajouter la réservation")
         if submitted:
             if not nom_client or date_depart <= date_arrivee:
                 st.error("Veuillez entrer un nom et vérifier que les dates sont correctes.")
             else:
-                nouvelle_ligne = pd.DataFrame([{'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}])
+                nouvelle_ligne = pd.DataFrame([{'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'paye': paye}])
                 df_a_jour = pd.concat([df, nouvelle_ligne], ignore_index=True)
                 df_a_jour = ensure_schema(df_a_jour)
                 if sauvegarder_donnees_csv(df_a_jour):
@@ -200,20 +162,19 @@ def vue_modifier(df, palette):
                 nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
                 telephone = st.text_input("Téléphone", value=resa_selectionnee.get('telephone', ''))
                 date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee.get('date_arrivee'))
-                date_depart = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
             with c2:
                 plateforme_options = list(palette.keys())
                 current_plateforme = resa_selectionnee.get('plateforme')
                 plateforme_index = plateforme_options.index(current_plateforme) if current_plateforme in plateforme_options else 0
                 plateforme = st.selectbox("**Plateforme**", options=plateforme_options, index=plateforme_index)
+                date_depart = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
                 prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=resa_selectionnee.get('prix_brut', 0.0), step=0.01, format="%.2f")
-                commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa_selectionnee.get('commissions', 0.0), step=0.01, format="%.2f")
                 paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
             
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             
             if btn_enregistrer.form_submit_button("💾 Enregistrer"):
-                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}
+                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'paye': paye}
                 for key, value in updates.items():
                     df.loc[original_index, key] = value
                 df_final = ensure_schema(df)
@@ -232,60 +193,12 @@ def vue_plateformes(df, palette):
     df_palette = pd.DataFrame(list(palette.items()), columns=['plateforme', 'couleur'])
     edited_df = st.data_editor(df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
         column_config={ "plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)") })
-    if st.button("💾 Enregistrer les modifications des plateformes"):
+    if st.button("💾 Enregistrer les modifications"):
         nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
         df_plateformes_save = pd.DataFrame(list(nouvelle_palette.items()), columns=['plateforme', 'couleur'])
         if sauvegarder_donnees_csv(df_plateformes_save, file_path=CSV_PLATEFORMES):
             st.success("Palette de couleurs mise à jour !")
             st.rerun()
-
-def vue_calendrier(df, palette):
-    st.header("📅 Calendrier des Réservations")
-    df_dates_valides = df.dropna(subset=['date_arrivee', 'date_depart', 'AAAA'])
-    if df_dates_valides.empty:
-        st.info("Aucune réservation avec des dates valides à afficher.")
-        return
-
-    c1, c2 = st.columns(2)
-    today = date.today()
-    noms_mois = [calendar.month_name[i] for i in range(1, 13)]
-    selected_month_name = c1.selectbox("Mois", options=noms_mois, index=today.month - 1)
-    selected_month = noms_mois.index(selected_month_name) + 1
-    available_years = sorted(list(df_dates_valides['AAAA'].dropna().astype(int).unique()))
-    if not available_years: available_years = [today.year]
-    try: default_year_index = available_years.index(today.year)
-    except ValueError: default_year_index = len(available_years) - 1
-    selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
-
-    cal = calendar.Calendar()
-    month_days = cal.monthdatescalendar(selected_year, selected_month)
-
-    # ... (le code d'affichage du calendrier HTML)
-    
-    st.markdown("---")
-    st.subheader("Détails des réservations du mois")
-    
-    start_of_month = date(selected_year, selected_month, 1)
-    end_day = calendar.monthrange(selected_year, selected_month)[1]
-    end_of_month = date(selected_year, selected_month, end_day)
-
-    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
-
-    if not reservations_du_mois.empty:
-        options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
-        selection_str = st.selectbox("Voir les détails d'une réservation :", options=options.keys(), index=None, placeholder="Choisissez une réservation...")
-        if selection_str:
-            selected_idx = options[selection_str]
-            details = reservations_du_mois.loc[selected_idx]
-            st.markdown(f"**Détails pour {details.get('nom_client', 'N/A')}**")
-            # ... (code d'affichage des détails)
-    else:
-        st.info("Aucune réservation pour ce mois.")
-
-def vue_rapport(df, palette):
-    st.header("📊 Rapport")
-    # ... (le code du rapport sera restauré dans la prochaine étape)
-    st.info("La page Rapport sera restaurée dans la prochaine étape.")
 
 # ==============================  MAIN APP  ==============================
 def main():
@@ -298,14 +211,13 @@ def main():
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "✏️ Modifier / Supprimer": vue_modifier,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
         "🎨 Plateformes": vue_plateformes,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
+    
     page_function = pages[selection]
 
-    if selection in ["➕ Ajouter", "✏️ Modifier / Supprimer", "📅 Calendrier", "📊 Rapport", "🎨 Plateformes"]:
+    if selection in ["➕ Ajouter", "✏️ Modifier / Supprimer", "🎨 Plateformes"]:
         page_function(df, palette)
     else:
         page_function(df)
