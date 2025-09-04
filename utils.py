@@ -23,10 +23,7 @@ def charger_donnees_csv():
     try:
         df = pd.read_csv(CSV_RESERVATIONS, delimiter=';')
         df.columns = df.columns.str.strip()
-    except FileNotFoundError:
-        st.warning(f"Fichier '{CSV_RESERVATIONS}' introuvable.")
-    except Exception as e:
-        st.error(f"Erreur de lecture de {CSV_RESERVATIONS}: {e}")
+    except: pass
     try:
         df_palette = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
         palette = dict(zip(df_palette['plateforme'], df_palette['couleur']))
@@ -80,11 +77,3 @@ def ensure_schema(df):
     df_res.loc[pd.notna(date_arrivee_dt), 'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
     df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
     return df_res
-
-def is_dark_color(hex_color):
-    try:
-        hex_color = hex_color.lstrip('#')
-        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
-        return luminance < 0.5
-    except: return True
