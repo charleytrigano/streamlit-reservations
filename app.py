@@ -42,6 +42,7 @@ def sauvegarder_donnees_csv(df):
     """Sauvegarde le DataFrame dans le fichier CSV."""
     try:
         df_to_save = df.copy()
+        # Formatter les dates pour la sauvegarde pour éviter les problèmes de format
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
@@ -58,11 +59,17 @@ BASE_COLS = [
     'paye', 'nom_client', 'sms_envoye', 'plateforme', 'telephone', 'date_arrivee',
     'date_depart', 'nuitees', 'prix_brut', 'commissions', 'frais_cb',
     'prix_net', 'menage', 'taxes_sejour', 'base', 'charges', '%',
+    'AAAA', 'MM', 'ical_uid'
 ]
 
 def ensure_schema(df):
     df_res = df.copy()
-    rename_map = { 'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme', 'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees', 'Brut (€)': 'prix_brut', 'Charges (€)': 'charges', 'Net (€)': 'prix_net', 'Charges (%)': '%' }
+    rename_map = { 
+        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme', 
+        'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
+        'Brut (€)': 'prix_brut', 'Charges (€)': 'charges', 'Net (€)': 'prix_net',
+        'Charges (%)': '%'
+    }
     df_res.rename(columns=rename_map, inplace=True)
 
     for col in BASE_COLS:
@@ -85,12 +92,22 @@ def ensure_schema(df):
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
-        if col in df_res.columns and df_res[col].dtype == 'object':
-            df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
-        df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
+        if col in df_res.columns:
+            if df_res[col].dtype == 'object':
+                df_res[col] = df_res[col].astype(str).str.replace('€', '', regex=False).str.replace(',', '.', regex=False).str.replace(' ', '', regex=False).str.strip()
+            df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
     
+    # --- CALCULS COMPLETS RESTAURÉS ---
     df_res['prix_net'] = df_res['prix_brut'].fillna(0) - df_res['commissions'].fillna(0) - df_res['frais_cb'].fillna(0)
     df_res['charges'] = df_res['prix_brut'].fillna(0) - df_res['prix_net'].fillna(0)
+    df_res['base'] = df_res['prix_net'].fillna(0) - df_res['menage'].fillna(0) - df_res['taxes_sejour'].fillna(0)
+    
+    with np.errstate(divide='ignore', invalid='ignore'):
+        df_res['%'] = np.where(df_res['prix_brut'] > 0, (df_res['charges'] / df_res['prix_brut'] * 100), 0)
+
+    date_arrivee_dt = pd.to_datetime(df_res["date_arrivee"], errors='coerce')
+    df_res.loc[pd.notna(date_arrivee_dt), 'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
+    df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
     
     return df_res
 
@@ -98,7 +115,6 @@ def ensure_schema(df):
 def vue_reservations(df):
     st.header("📋 Liste des Réservations")
 
-    # Bouton de téléchargement
     csv_data = df.to_csv(sep=';', index=False).encode('utf-8')
     st.download_button(
         label="📥 Télécharger le fichier de réservations (CSV)",
@@ -161,21 +177,21 @@ def vue_modifier(df, palette):
         with st.form("form_modif"):
             c1, c2 = st.columns(2)
             with c1:
-                nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee['nom_client'])
-                telephone = st.text_input("Téléphone", value=resa_selectionnee['telephone'])
-                date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee['date_arrivee'])
-                date_depart = st.date_input("**Date de départ**", value=resa_selectionnee['date_depart'])
+                nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
+                telephone = st.text_input("Téléphone", value=resa_selectionnee.get('telephone', ''))
+                date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee.get('date_arrivee'))
+                date_depart = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
                 plateforme_options = list(palette.keys())
-                current_plateforme = resa_selectionnee['plateforme']
+                current_plateforme = resa_selectionnee.get('plateforme')
                 plateforme_index = plateforme_options.index(current_plateforme) if current_plateforme in plateforme_options else 0
                 plateforme = st.selectbox("**Plateforme**", options=plateforme_options, index=plateforme_index)
             with c2:
-                prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=float(resa_selectionnee['prix_brut']), format="%.2f")
-                commissions = st.number_input("Commissions (€)", min_value=0.0, value=float(resa_selectionnee['commissions']), format="%.2f")
-                frais_cb = st.number_input("Frais CB (€)", min_value=0.0, value=float(resa_selectionnee['frais_cb']), format="%.2f")
-                menage = st.number_input("Ménage (€)", min_value=0.0, value=float(resa_selectionnee['menage']), format="%.2f")
-                taxes_sejour = st.number_input("Taxes Séjour (€)", min_value=0.0, value=float(resa_selectionnee['taxes_sejour']), format="%.2f")
-                paye = st.checkbox("Payé", value=bool(resa_selectionnee['paye']))
+                prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=float(resa_selectionnee.get('prix_brut', 0.0)), format="%.2f")
+                commissions = st.number_input("Commissions (€)", min_value=0.0, value=float(resa_selectionnee.get('commissions', 0.0)), format="%.2f")
+                frais_cb = st.number_input("Frais CB (€)", min_value=0.0, value=float(resa_selectionnee.get('frais_cb', 0.0)), format="%.2f")
+                menage = st.number_input("Ménage (€)", min_value=0.0, value=float(resa_selectionnee.get('menage', 0.0)), format="%.2f")
+                taxes_sejour = st.number_input("Taxes Séjour (€)", min_value=0.0, value=float(resa_selectionnee.get('taxes_sejour', 0.0)), format="%.2f")
+                paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
             
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             
