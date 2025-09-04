@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec Calendrier
+# app.py — Villa Tobias (COMPLET) - Version CSV-Direct avec débogage du calendrier
 
 import streamlit as st
 import pandas as pd
@@ -204,9 +204,41 @@ def vue_modifier(df, palette):
         resa_selectionnee = df_sorted.loc[idx_selection].copy()
         
         with st.form("form_modif"):
-            # ... (contenu du formulaire de modification, similaire à vue_ajouter)
-            st.warning("Le formulaire de modification complet sera ajouté dans la prochaine étape.")
-            # ...
+            c1, c2 = st.columns(2)
+            with c1:
+                nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
+                telephone = st.text_input("Téléphone", value=resa_selectionnee.get('telephone', ''))
+                date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee.get('date_arrivee'))
+                date_depart = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
+                plateforme_options = list(palette.keys())
+                current_plateforme = resa_selectionnee.get('plateforme')
+                plateforme_index = plateforme_options.index(current_plateforme) if current_plateforme in plateforme_options else 0
+                plateforme = st.selectbox("**Plateforme**", options=plateforme_options, index=plateforme_index)
+            with c2:
+                prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=float(resa_selectionnee.get('prix_brut', 0.0)), format="%.2f")
+                commissions = st.number_input("Commissions (€)", min_value=0.0, value=float(resa_selectionnee.get('commissions', 0.0)), format="%.2f")
+                frais_cb = st.number_input("Frais CB (€)", min_value=0.0, value=float(resa_selectionnee.get('frais_cb', 0.0)), format="%.2f")
+                menage = st.number_input("Ménage (€)", min_value=0.0, value=float(resa_selectionnee.get('menage', 0.0)), format="%.2f")
+                taxes_sejour = st.number_input("Taxes Séjour (€)", min_value=0.0, value=float(resa_selectionnee.get('taxes_sejour', 0.0)), format="%.2f")
+                paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
+            
+            btn_enregistrer, btn_supprimer = st.columns([.8, .2])
+            
+            if btn_enregistrer.form_submit_button("💾 Enregistrer"):
+                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart, 'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'frais_cb': frais_cb, 'menage': menage, 'taxes_sejour': taxes_sejour, 'paye': paye}
+                for key, value in updates.items():
+                    df_sorted.loc[idx_selection, key] = value
+                
+                df_final = ensure_schema(df_sorted.drop(columns=['index']))
+                if sauvegarder_donnees_csv(df_final):
+                    st.success("Modifications enregistrées !")
+                    st.rerun()
+
+            if btn_supprimer.form_submit_button("🗑️ Supprimer"):
+                df_final = df_sorted.drop(index=idx_selection).drop(columns=['index'])
+                if sauvegarder_donnees_csv(df_final):
+                    st.warning("Réservation supprimée.")
+                    st.rerun()
 
 def vue_calendrier(df, palette):
     st.header("📅 Calendrier des Réservations")
@@ -216,15 +248,33 @@ def vue_calendrier(df, palette):
         st.info("Aucune réservation avec des dates valides à afficher.")
         return
 
+    # --- DÉBUT DU DÉBOGAGE ---
+    st.markdown("---")
+    st.subheader("🕵️‍♂️ Mode Débogage : Vérification des données")
+    st.write(f"Nombre de réservations avec des dates valides : **{len(df_dates_valides)}**")
+    st.write("Aperçu des données utilisées pour le calendrier :")
+    st.dataframe(df_dates_valides[['nom_client', 'date_arrivee', 'date_depart']].head())
+    st.markdown("---")
+    # --- FIN DU DÉBOGAGE ---
+
     c1, c2 = st.columns(2)
     today = date.today()
-    selected_month_name = c1.selectbox("Mois", options=calendar.month_name[1:], index=today.month - 1)
-    selected_month = list(calendar.month_name).index(selected_month_name)
     
-    available_years = sorted(df_dates_valides['AAAA'].dropna().unique().astype(int))
+    noms_mois = [calendar.month_name[i] for i in range(1, 13)]
+    selected_month_name = c1.selectbox("Mois", options=noms_mois, index=today.month - 1)
+    selected_month = noms_mois.index(selected_month_name) + 1
+    
+    available_years_series = df_dates_valides['AAAA'].dropna().astype(int).unique()
+    available_years = sorted(list(available_years_series))
     if not available_years:
         available_years = [today.year]
-    selected_year = c2.selectbox("Année", options=available_years, index=len(available_years) - 1)
+    
+    try:
+        default_year_index = available_years.index(today.year)
+    except ValueError:
+        default_year_index = len(available_years) - 1
+        
+    selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
 
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
@@ -249,10 +299,11 @@ def vue_calendrier(df, palette):
                 day_html = f"<div class='calendar-day {day_class}'><div class='calendar-date'>{day.day}</div>"
                 
                 for _, resa in df_dates_valides.iterrows():
-                    if resa['date_arrivee'] <= day < resa['date_depart']:
-                        color = palette.get(resa['plateforme'], '#888888')
-                        text_color = "#FFFFFF" if is_dark_color(color) else "#000000"
-                        day_html += f"<div class='reservation-bar' style='background-color:{color}; color:{text_color};' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
+                    if isinstance(resa['date_arrivee'], date) and isinstance(resa['date_depart'], date):
+                        if resa['date_arrivee'] <= day < resa['date_depart']:
+                            color = palette.get(resa['plateforme'], '#888888')
+                            text_color = "#FFFFFF" if is_dark_color(color) else "#000000"
+                            day_html += f"<div class='reservation-bar' style='background-color:{color}; color:{text_color};' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
