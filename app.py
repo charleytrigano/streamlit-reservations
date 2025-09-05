@@ -46,6 +46,10 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
     """Sauvegarde le DataFrame dans le fichier CSV spécifié."""
     try:
         df_to_save = df.copy()
+        # Conserver uniquement les colonnes de base pour la sauvegarde pour être propre
+        colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
+        df_to_save = df_to_save[colonnes_a_sauvegarder]
+        
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
@@ -345,8 +349,8 @@ def vue_rapport(df, palette):
     st.subheader("Revenus bruts par Plateforme")
     chart_data = data.groupby("plateforme")['prix_brut'].sum().sort_values(ascending=False)
     if not chart_data.empty:
-        colors = [palette.get(str(x), "#888") for x in chart_data.index]
-        st.bar_chart(chart_data, color=colors)
+        # CORRECTION : On ne passe pas de couleurs pour laisser Streamlit gérer
+        st.bar_chart(chart_data)
         
 def vue_liste_clients(df):
     st.header("👥 Liste des Clients")
