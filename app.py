@@ -134,7 +134,7 @@ def kpi_chips(df, title="Indicateurs Clés"):
         "Total Frais CB": df["frais_cb"].sum(),
         "Total Ménage": df["menage"].sum(),
         "Total Base": df["base"].sum(),
-        "Nuitées": df["nuitees"].sum()
+        "Nuitées": df["nuitees"].sum(),
     }
     
     html = f"""
@@ -145,7 +145,9 @@ def kpi_chips(df, title="Indicateurs Clés"):
         .chip-value {{ font-weight: bold; color: #eee; }}
     </style>
     <div class="chips-container">
-        {"".join([f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{value:,.2f} €</span></div>' if "Nuitées" not in label else f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{int(value)}</span></div>' for label, value in totals.items()])}
+        {"".join([f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{value:,.2f} €</span></div>' 
+                   if "Nuitées" not in label else f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{int(value)}</span></div>' 
+                   for label, value in totals.items()])}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
@@ -281,11 +283,9 @@ def vue_calendrier(df, palette):
     try: default_year_index = available_years.index(today.year)
     except ValueError: default_year_index = len(available_years) - 1
     selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
-
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
-
-    st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS
+    st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}.calendar-day.outside-month{background-color:#2e2e2e}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
     headers = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
     for week in month_days:
@@ -302,7 +302,6 @@ def vue_calendrier(df, palette):
                             day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
-    
     st.markdown("---")
     st.subheader("Détails des réservations du mois")
     start_of_month = date(selected_year, selected_month, 1)
@@ -404,7 +403,8 @@ We wish you a wonderful trip and look forward to meeting you very soon.
 Annick & Charley 
 
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
-                     https://urlr.me/Xu7Sq3"""
+
+https://urlr.me/Xu7Sq3"""
         
         message_area = st.text_area("Message à envoyer", value=message_body, height=400)
         encoded_message = quote(message_area)
