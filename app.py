@@ -404,8 +404,7 @@ We wish you a wonderful trip and look forward to meeting you very soon.
 Annick & Charley 
 
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
-
-https://urlr.me/Xu7Sq3"""
+                     https://urlr.me/Xu7Sq3"""
         
         message_area = st.text_area("Message à envoyer", value=message_body, height=400)
         encoded_message = quote(message_area)
