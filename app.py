@@ -123,10 +123,10 @@ def is_dark_color(hex_color):
 
 def kpi_chips(df, title="Indicateurs Clés"):
     st.subheader(title)
-    if df.empty or 'nuitees' not in df.columns or df['nuitees'].sum() == 0:
+    if df.empty:
+        st.warning("Pas de données à afficher pour cette sélection.")
         return
-    
-    # Dictionnaire des totaux à afficher
+
     totals = {
         "Total Brut": df["prix_brut"].sum(),
         "Total Net": df["prix_net"].sum(),
@@ -134,7 +134,7 @@ def kpi_chips(df, title="Indicateurs Clés"):
         "Total Frais CB": df["frais_cb"].sum(),
         "Total Ménage": df["menage"].sum(),
         "Total Base": df["base"].sum(),
-        "Nuitées": df["nuitees"].sum(),
+        "Nuitées": df["nuitees"].sum()
     }
     
     html = f"""
@@ -145,9 +145,7 @@ def kpi_chips(df, title="Indicateurs Clés"):
         .chip-value {{ font-weight: bold; color: #eee; }}
     </style>
     <div class="chips-container">
-        {"".join([f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{value:,.2f} €</span></div>' 
-                   if "Nuitées" not in label else f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{int(value)}</span></div>' 
-                   for label, value in totals.items()])}
+        {"".join([f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{value:,.2f} €</span></div>' if "Nuitées" not in label else f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{int(value)}</span></div>' for label, value in totals.items()])}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
@@ -162,8 +160,8 @@ def vue_reservations(df):
     df_dates_valides = df.dropna(subset=['AAAA', 'MM'])
     
     c1, c2, c3 = st.columns(3)
-    annees = sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
-    annee_selectionnee = c1.selectbox("Filtrer par Année", ["Toutes"] + annees)
+    annees = ["Toutes"] + sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
+    annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
     mois_options = ["Tous"] + list(range(1, 13))
     mois_selectionne = c2.selectbox("Filtrer par Mois", mois_options)
     plateformes_options = ["Toutes"] + sorted(df_dates_valides['plateforme'].dropna().unique())
@@ -283,21 +281,46 @@ def vue_calendrier(df, palette):
     try: default_year_index = available_years.index(today.year)
     except ValueError: default_year_index = len(available_years) - 1
     selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
+
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
+
     st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS
     headers = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-    st.write(f'<div>...</div>', unsafe_allow_html=True)
+    st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
     for week in month_days:
         cols = st.columns(7)
         for i, day in enumerate(week):
             with cols[i]:
-                # ... Code complet pour dessiner la case du calendrier ...
-                pass
+                day_class = "outside-month" if day.month != selected_month else ""
+                day_html = f"<div class='calendar-day {day_class}'><div class='calendar-date'>{day.day}</div>"
+                for _, resa in df_dates_valides.iterrows():
+                    if isinstance(resa['date_arrivee'], date) and isinstance(resa['date_depart'], date):
+                        if resa['date_arrivee'] <= day < resa['date_depart']:
+                            color = palette.get(resa['plateforme'], '#888')
+                            text_color = "#FFF" if is_dark_color(color) else "#000"
+                            day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
+                day_html += "</div>"
+                st.markdown(day_html, unsafe_allow_html=True)
+    
     st.markdown("---")
     st.subheader("Détails des réservations du mois")
-    # ... Code complet pour les détails interactifs ...
-    pass
+    start_of_month = date(selected_year, selected_month, 1)
+    end_of_month = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
+    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
+    if not reservations_du_mois.empty:
+        options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
+        selection_str = st.selectbox("Voir les détails :", options=options.keys(), index=None, placeholder="Choisissez une réservation...")
+        if selection_str:
+            details = reservations_du_mois.loc[options[selection_str]]
+            st.markdown(f"**Détails pour {details.get('nom_client')}**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"""- **Téléphone :** {details.get('telephone', 'N/A')}\n- **Arrivée :** {details.get('date_arrivee').strftime('%d/%m/%Y') if pd.notna(details.get('date_arrivee')) else 'N/A'}\n- **Départ :** {details.get('date_depart').strftime('%d/%m/%Y') if pd.notna(details.get('date_depart')) else 'N/A'}\n- **Nuits :** {details.get('nuitees', 0):.0f}""")
+            with col2:
+                st.markdown(f"""- **Prix Net :** {details.get('prix_net', 0):.2f} €\n- **Prix Brut :** {details.get('prix_brut', 0):.2f} €\n- **Statut :** {"Payé" if details.get('paye', False) else "Non Payé"}""")
+    else:
+        st.info("Aucune réservation pour ce mois.")
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance")
@@ -337,15 +360,13 @@ def vue_liste_clients(df):
 def vue_sms(df):
     st.header("✉️ Générateur de SMS")
     df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee'])
-    df_tel = df_tel[df_tel['telephone'].astype(str).str.isdigit()]
+    df_tel = df_tel[df_tel['telephone'].astype(str).str.replace('+', '').str.isdigit()]
     if df_tel.empty:
         st.warning("Aucune réservation avec un numéro de téléphone valide.")
         return
-    
     df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index()
     options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
     selection = st.selectbox("Sélectionnez un client", options=options_resa, index=None)
-    
     if selection:
         idx = int(selection.split(":")[0])
         resa = df_sorted.loc[idx]
@@ -357,10 +378,36 @@ Bonjour {resa.get('nom_client')}
 Téléphone : {resa.get('telephone')}
 
 Bienvenue chez nous !
-... (votre texte complet ici) ...
-Annick & Charley"""
+
+Nous sommes ravis de vous acceuillir bientot a Nice. Aussi afin d'organiser au mieux votre receptionmerci de nous indiquer votre heure d'arrivee. 
+
+Sachez qu'une place de parking vous est allouee en cas de besoin. 
+
+Le check-in se fait a partir de 14:00 h et le check-out avant 11:00 h. 
+
+Vous trouverez des consignes a bagages dans chaque quartier a Nice. 
+
+Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot. 
+
+Welcome to our home ! 
+
+We are delighted to welcome you soon to Nice. In order to organize your reception as best as possibleplease let us know your arrival time. 
+
+Please note that a parking space is available if needed. 
+
+Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. 
+
+You will find luggage storage facilities in every neighborhood in Nice. 
+
+We wish you a wonderful trip and look forward to meeting you very soon. 
+
+Annick & Charley 
+
+Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
+
+https://urlr.me/Xu7Sq3"""
         
-        message_area = st.text_area("Message à envoyer", value=message_body, height=300)
+        message_area = st.text_area("Message à envoyer", value=message_body, height=400)
         encoded_message = quote(message_area)
         sms_link = f"sms:{resa['telephone']}?&body={encoded_message}"
         st.link_button("📲 Envoyer via Smartphone", sms_link)
@@ -384,7 +431,6 @@ def admin_sidebar(df):
 def main():
     st.title("📖 Gestion des Réservations - Villa Tobias")
     df, palette = charger_donnees_csv()
-    
     st.sidebar.title("🧭 Navigation")
     pages = { 
         "📋 Réservations": vue_reservations, "➕ Ajouter": vue_ajouter, "✏️ Modifier / Supprimer": vue_modifier,
