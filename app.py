@@ -46,10 +46,6 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
     """Sauvegarde le DataFrame dans le fichier CSV spécifié."""
     try:
         df_to_save = df.copy()
-        # Conserver uniquement les colonnes de base pour la sauvegarde pour être propre
-        colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
-        df_to_save = df_to_save[colonnes_a_sauvegarder]
-        
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
@@ -92,10 +88,9 @@ def ensure_schema(df):
     for col in date_cols:
         df_res[col] = df_res[col].dt.date
 
-    if 'paye' in df_res.columns:
-        if df_res['paye'].dtype == 'object':
-            df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
-        df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
+    if 'paye' in df_res.columns and df_res['paye'].dtype == 'object':
+        df_res['paye'] = df_res['paye'].str.strip().str.upper().isin(['VRAI', 'TRUE'])
+    df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
 
     numeric_cols = ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']
     for col in numeric_cols:
@@ -288,13 +283,11 @@ def vue_calendrier(df, palette):
     try: default_year_index = available_years.index(today.year)
     except ValueError: default_year_index = len(available_years) - 1
     selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
-
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
-
-    st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS
+    st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}.calendar-day.outside-month{background-color:#2e2e2e}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
     headers = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-    st.write(f'<div>...</div>', unsafe_allow_html=True)
+    st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
     for week in month_days:
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -309,7 +302,6 @@ def vue_calendrier(df, palette):
                             day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
-    
     st.markdown("---")
     st.subheader("Détails des réservations du mois")
     start_of_month = date(selected_year, selected_month, 1)
