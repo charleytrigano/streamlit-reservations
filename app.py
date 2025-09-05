@@ -46,6 +46,10 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
     """Sauvegarde le DataFrame dans le fichier CSV spécifié."""
     try:
         df_to_save = df.copy()
+        # Conserver uniquement les colonnes de base pour la sauvegarde
+        colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
+        df_to_save = df_to_save[colonnes_a_sauvegarder]
+        
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
