@@ -1,16 +1,16 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde) + email
-# - SMS : n'affiche que les clients "non cochés" (sms_envoye = False), nettoyage tél, debug, marquage envoyé
+#   -> data_editor robuste : colonnes et formats générés dynamiquement selon les dtypes
+# - SMS : seulement clients non cochés (sms_envoye=False), nettoyage tél, debug, marquage envoyé
 #         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ)
-# - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes
-#             + Total mensuel optionnel + Cumuler (YTD) + Moyenne par nuitée
-#             + Export agrégé sans None/NaN + option "Masquer les zéros"
+# - Rapport : métrique au choix, année/plateformes, barres groupées/empilées/courbes,
+#             total mensuel optionnel, cumul (YTD), moyenne / nuitée, export CSV (sans None/NaN)
 # - Export ICS (Google Calendar) :
 #   * UID stables (v5) basés sur res_id + nom + téléphone
-#   * Toggle "Créer et sauvegarder les UID manquants"
-#   * OPTION B : Toggle "Ignorer les filtres et créer pour toute la base"
+#   * Création/sauvegarde des IDs manquants
+#   * Option B : ignorer les filtres pour créer les IDs sur toute la base
 # - Google Form/Sheet (Option 2) :
-#   * Formulaire intégré PRÉREMPLI pour la réservation choisie
+#   * Formulaire intégré PRÉREMPLI
 #   * Feuille intégrée (iframe) + lecture CSV publié
 
 import streamlit as st
@@ -246,27 +246,6 @@ def vue_reservations(df):
         if bcol in df_sorted.columns:
             df_sorted[bcol] = _to_bool_series(df_sorted[bcol]).fillna(False).astype(bool)
 
-    column_config = {
-        "paye": st.column_config.CheckboxColumn("Payé"),
-        "sms_envoye": st.column_config.CheckboxColumn("SMS envoyé"),
-        "email": st.column_config.TextColumn("Email"),
-        "nuitees": st.column_config.NumberColumn("Nuits", format="%d"),
-        "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"),
-        "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"),
-        "prix_net": st.column_config.NumberColumn("Prix Net", format="%.2f €"),
-        "base": st.column_config.NumberColumn("Base", format="%.2f €"),
-        "charges": st.column_config.NumberColumn("Charges", format="%.2f €"),
-        "%": st.column_config.NumberColumn("% Charges", format="%.2f %%"),
-        "AAAA": st.column_config.NumberColumn("Année", format="%d"),
-        "MM": st.column_config.NumberColumn("Mois", format="%d"),
-        "date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"),
-        "date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"),
-        "_rowid": st.column_config.TextColumn("", help="ID interne (index)", disabled=True),
-        "res_id": st.column_config.TextColumn("res_id", help="Identifiant persistant"),
-        "ical_uid": st.column_config.TextColumn("ical_uid", help="UID ICS (ne pas modifier)"),
-    }
-    col_order = [c for c in df_sorted.columns if c != "_rowid"] + ["_rowid"]
-
     # --- Casts robustes AVANT data_editor ---
     df_edit = df_sorted.copy()
 
@@ -291,14 +270,58 @@ def vue_reservations(df):
     if "_rowid" in df_edit.columns:
         df_edit["_rowid"] = df_edit["_rowid"].astype(str)
 
-    # Filtrer column_config/order sur colonnes présentes
-    column_config_filtered = {k: v for k, v in column_config.items() if k in df_edit.columns}
-    col_order_filtered = [c for c in col_order if c in df_edit.columns]
+    # ---------- Configuration DYNAMIQUE ----------
+    col_order = list(df_edit.columns)
+    if "_rowid" in col_order:
+        col_order = [c for c in col_order if c != "_rowid"] + ["_rowid"]
+
+    column_config = {}
+    for c in df_edit.columns:
+        if c in ("paye", "sms_envoye"):
+            column_config[c] = st.column_config.CheckboxColumn("Payé" if c=="paye" else "SMS envoyé")
+        elif np.issubdtype(df_edit[c].dtype, np.datetime64):
+            column_config[c] = st.column_config.DateColumn(
+                "Arrivée" if c=="date_arrivee" else ("Départ" if c=="date_depart" else c),
+                format="DD/MM/YYYY"
+            )
+        elif np.issubdtype(df_edit[c].dtype, np.number):
+            if c in ("nuitees","AAAA","MM"):
+                column_config[c] = st.column_config.NumberColumn(
+                    "Nuits" if c=="nuitees" else ("Année" if c=="AAAA" else "Mois"),
+                    format="%d"
+                )
+            elif c in ("prix_brut","commissions","frais_cb","prix_net","menage","taxes_sejour","base","charges"):
+                pretty = {
+                    "prix_brut":"Prix Brut","commissions":"Commissions","frais_cb":"Frais CB",
+                    "prix_net":"Prix Net","menage":"Ménage","taxes_sejour":"Taxes Séjour",
+                    "base":"Base","charges":"Charges"
+                }[c]
+                column_config[c] = st.column_config.NumberColumn(pretty, format="%.2f €")
+            elif c == "%":
+                column_config[c] = st.column_config.NumberColumn("% Charges", format="%.2f %%")
+            else:
+                column_config[c] = st.column_config.NumberColumn(c)
+        elif c == "_rowid":
+            column_config[c] = st.column_config.TextColumn("", help="ID interne (index)", disabled=True)
+        elif c == "email":
+            column_config[c] = st.column_config.TextColumn("Email")
+        elif c == "res_id":
+            column_config[c] = st.column_config.TextColumn("res_id", help="Identifiant persistant")
+        elif c == "ical_uid":
+            column_config[c] = st.column_config.TextColumn("ical_uid", help="UID ICS (ne pas modifier)")
+        elif c == "plateforme":
+            column_config[c] = st.column_config.TextColumn("Plateforme")
+        elif c == "nom_client":
+            column_config[c] = st.column_config.TextColumn("Nom du Client")
+        elif c == "telephone":
+            column_config[c] = st.column_config.TextColumn("Téléphone")
+        else:
+            column_config[c] = st.column_config.TextColumn(c)
 
     edited = st.data_editor(
         df_edit,
-        column_config=column_config_filtered,
-        column_order=col_order_filtered,
+        column_config=column_config,
+        column_order=col_order,
         use_container_width=True,
         num_rows="fixed",
         hide_index=True,
@@ -940,3 +963,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
