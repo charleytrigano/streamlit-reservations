@@ -8,6 +8,9 @@
 #   * UID stables (v5) basés sur res_id + nom + téléphone
 #   * Toggle "Créer et sauvegarder les UID manquants"
 #   * OPTION B : Toggle "Ignorer les filtres et créer pour toute la base"
+# - Google Sheet (Option 2) :
+#   * Onglet avec feuille intégrée (iframe)
+#   * Onglet avec lecture du CSV publié (Publier sur le Web)
 
 import streamlit as st
 import pandas as pd
@@ -22,6 +25,10 @@ import uuid, re, unicodedata  # pour res_id/UID stables
 # --- Configuration des Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv"
+
+# --- Google Sheet (Option 2 - fourni par toi) ---
+GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pubhtml?gid=1915058425&single=true"
+GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -424,33 +431,52 @@ def _safe_div(num, den):
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance")
+
     data = df.dropna(subset=['AAAA','MM','plateforme']).copy()
     if data.empty:
         st.info("Aucune donnée pour générer un rapport.")
         return
+
     c1, c2, c3 = st.columns([1,1,2])
     annees = sorted(data['AAAA'].astype(int).unique(), reverse=True)
     annee = c1.selectbox("Année", annees, index=0)
+
     plateformes = sorted(data['plateforme'].dropna().unique())
     plateformes_sel = c2.multiselect("Plateformes", plateformes, default=plateformes)
-    metrics = {"Prix brut (€)":"prix_brut","Prix net (€)":"prix_net","Ménage (€)":"menage","Commissions (€)":"commissions","Frais CB (€)":"frais_cb","Base (€)":"base","Charges (€)":"charges","Nuitées":"nuitees"}
+
+    metrics = {
+        "Prix brut (€)": "prix_brut",
+        "Prix net (€)": "prix_net",
+        "Ménage (€)": "menage",
+        "Commissions (€)": "commissions",
+        "Frais CB (€)": "frais_cb",
+        "Base (€)": "base",
+        "Charges (€)": "charges",
+        "Nuitées": "nuitees",
+    }
     metric_label = c3.selectbox("Métrique", list(metrics.keys()), index=0)
     metric = metrics[metric_label]
+
     c4, c5, c6 = st.columns([1,1,1])
-    chart_type = c4.selectbox("Type de graphique", ["Barres groupées","Barres empilées (total mensuel)","Courbes"], index=0)
+    chart_type = c4.selectbox("Type de graphique", ["Barres groupées", "Barres empilées (total mensuel)", "Courbes"], index=0)
     show_totals = c5.toggle("Afficher aussi le total mensuel", value=False)
     avg_per_night = c6.toggle("Moyenne par nuitée", value=False)
     c7 = st.columns(1)[0]
     cumulate = c7.toggle("Cumuler (YTD)", value=False)
+
     if avg_per_night and metric == "nuitees":
-        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à 'Nuitées'. Option ignorée.")
+        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à la métrique 'Nuitées'. Option ignorée.")
         avg_per_night = False
+
     data = data[(data['AAAA'].astype(int) == int(annee)) & (data['plateforme'].isin(plateformes_sel))].copy()
     if data.empty:
         st.warning("Aucune donnée pour les filtres sélectionnés.")
         return
+
     data['date_mois'] = pd.to_datetime(dict(year=data['AAAA'].astype(int), month=data['MM'].astype(int), day=1))
-    grp = (data.groupby(['plateforme','date_mois'], as_index=False).agg({metric:'sum','nuitees':'sum'}))
+    grp = (data.groupby(['plateforme','date_mois'], as_index=False)
+               .agg({metric:'sum', 'nuitees':'sum'}))
+
     all_months = pd.date_range(f"{annee}-01-01", f"{annee}-12-01", freq='MS')
     frames = []
     for p in plateformes_sel:
@@ -459,6 +485,7 @@ def vue_rapport(df, palette):
         g = g.reset_index().rename(columns={'index':'date_mois'})
         frames.append(g)
     grp_full = pd.concat(frames, ignore_index=True)
+
     if avg_per_night:
         if cumulate:
             grp_full = grp_full.sort_values(['plateforme','date_mois'])
@@ -477,29 +504,45 @@ def vue_rapport(df, palette):
         else:
             grp_full['value'] = grp_full[metric]
             metric_label_plot = metric_label
+
     color_map = {p: palette.get(p, '#888') for p in plateformes_sel}
     domain_sel = list(color_map.keys())
     range_sel = [color_map[p] for p in domain_sel]
+
     if avg_per_night and chart_type == "Barres empilées (total mensuel)":
         st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
         chart_type = "Barres groupées"
+
     base = alt.Chart(grp_full).encode(
         x=alt.X('yearmonth(date_mois):T', title='Mois'),
         color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
-        tooltip=[alt.Tooltip('plateforme:N', title='Plateforme'),
-                 alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                 alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')]
+        tooltip=[
+            alt.Tooltip('plateforme:N', title='Plateforme'),
+            alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+            alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')
+        ]
     )
+
     if chart_type == "Barres groupées":
-        chart = base.mark_bar().encode(y=alt.Y('value:Q', title=metric_label_plot), xOffset=alt.X('plateforme:N', title=None))
+        chart = base.mark_bar().encode(
+            y=alt.Y('value:Q', title=metric_label_plot),
+            xOffset=alt.X('plateforme:N', title=None),
+        )
     elif chart_type == "Barres empilées (total mensuel)":
-        chart = base.mark_bar().encode(y=alt.Y('value:Q', title=metric_label_plot, stack='zero'))
+        chart = base.mark_bar().encode(
+            y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
+        )
     else:
-        chart = base.mark_line(point=True).encode(y=alt.Y('value:Q', title=metric_label_plot))
+        chart = base.mark_line(point=True).encode(
+            y=alt.Y('value:Q', title=metric_label_plot),
+        )
+
     st.altair_chart(chart.properties(height=420).interactive(), use_container_width=True)
+
     if show_totals:
         if avg_per_night:
-            month_sums = (grp.groupby('date_mois', as_index=False).agg(num=(metric,'sum'), den=('nuitees','sum')))
+            month_sums = (grp.groupby('date_mois', as_index=False)
+                             .agg(num=(metric,'sum'), den=('nuitees','sum')))
             month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
             if cumulate:
                 month_sums['num_cum'] = month_sums['num'].cumsum()
@@ -512,7 +555,8 @@ def vue_rapport(df, palette):
             chart_tot = (alt.Chart(month_sums).mark_line(point=True).encode(
                 x=alt.X('yearmonth(date_mois):T', title='Mois'),
                 y=alt.Y('avg:Q', title=ytitle),
-                tooltip=[alt.Tooltip('yearmonth(date_mois):T', title='Mois'), alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')]
+                tooltip=[alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                         alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')]
             ))
             st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
         else:
@@ -526,6 +570,7 @@ def vue_rapport(df, palette):
                          alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' else '.0f')]
             )
             st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+
     with st.expander("Afficher les données agrégées et exporter"):
         display = grp_full.copy()
         display['Année'] = display['date_mois'].dt.year
@@ -664,10 +709,10 @@ def vue_export_ics(df, palette):
     include_paid = c4.toggle("Inclure les réservations non payées", value=True)
     include_sms_sent = c5.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
 
-    # 🚀 OPTION B : ignorer les filtres pour la création/persistance
+    # OPTION B : ignorer les filtres pour la création/persistance
     apply_to_all = st.toggle("Ignorer les filtres et créer pour toute la base", value=False)
 
-    # df_filtre = réservé au CONTENU du fichier ICS (téléchargement)
+    # df_filtre = réservé au contenu du fichier ICS
     df_filtre = base_all[(base_all['date_arrivee'].apply(lambda d: d.year) == annee) & (base_all['plateforme'].isin(plats))].copy()
     if not include_paid:
         df_filtre = df_filtre[df_filtre['paye'] == True]
@@ -675,9 +720,8 @@ def vue_export_ics(df, palette):
         df_filtre = df_filtre[df_filtre['sms_envoye'] == False]
     if df_filtre.empty:
         st.warning("Rien à exporter avec ces filtres.")
-        # On continue quand même pour permettre la génération des UID sur toute la base, si toggle activé.
 
-    # --- Jeu de lignes pour création/persistance des IDs
+    # Lignes cibles pour la génération/persistance des IDs
     df_to_gen = base_all.copy() if apply_to_all else df_filtre.copy()
     if df_to_gen.empty:
         st.info("Aucune ligne cible pour la création/persistance des IDs selon les options actuelles.")
@@ -693,7 +737,7 @@ def vue_export_ics(df, palette):
             except Exception as e:
                 st.error(f"Impossible de sauvegarder les ID internes : {e}")
 
-        # ical_uid
+        # ical_uid (v5 sur res_id + nom + téléphone)
         missing_uid_mask = df_to_gen['ical_uid'].isna() | (df_to_gen['ical_uid'].astype(str).str.strip() == "")
         if missing_uid_mask.any():
             df_to_gen.loc[missing_uid_mask, 'ical_uid'] = df_to_gen[missing_uid_mask].apply(build_stable_uid, axis=1)
@@ -705,12 +749,13 @@ def vue_export_ics(df, palette):
             except Exception as e:
                 st.error(f"Impossible de sauvegarder les UID : {e}")
 
-        # Mettre à jour le df_filtre avec d'éventuels UID générés
+        # Propager dans df_filtre si besoin
         if not df_filtre.empty:
-            df_filtre.loc[df_to_gen.index.intersection(df_filtre.index), 'res_id'] = df_to_gen.loc[df_to_gen.index.intersection(df_filtre.index), 'res_id']
-            df_filtre.loc[df_to_gen.index.intersection(df_filtre.index), 'ical_uid'] = df_to_gen.loc[df_to_gen.index.intersection(df_filtre.index), 'ical_uid']
+            inter = df_to_gen.index.intersection(df_filtre.index)
+            df_filtre.loc[inter, 'res_id'] = df_to_gen.loc[inter, 'res_id']
+            df_filtre.loc[inter, 'ical_uid'] = df_to_gen.loc[inter, 'ical_uid']
 
-    # ---- Construction ICS (uniquement sur df_filtre)
+    # Construction ICS (sur df_filtre)
     nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
@@ -766,6 +811,31 @@ def vue_export_ics(df, palette):
 - Pour une synchro directe (création/màj/suppression), utiliser l’**API Google Calendar** (OAuth).
         """)
 
+# ==============================  GOOGLE SHEET (Option 2) ==============================
+def vue_google_sheet(df, palette):
+    st.header("📝 Fiche d'arrivée — Google Sheet")
+
+    tab1, tab2 = st.tabs(["Feuille intégrée", "Réponses (CSV)"])
+
+    with tab1:
+        st.caption("Affichage intégré (lecture seule) de la feuille publiée.")
+        st.components.v1.iframe(GOOGLE_SHEET_EMBED_URL, height=900, scrolling=True)
+
+    with tab2:
+        st.caption("Lecture directe via l’URL 'Publier sur le Web' (CSV).")
+        try:
+            reponses = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+            st.dataframe(reponses, use_container_width=True)
+            st.download_button(
+                "⬇️ Télécharger les réponses (CSV)",
+                data=reponses.to_csv(index=False).encode("utf-8"),
+                file_name="reponses_formulaire.csv",
+                mime="text/csv"
+            )
+        except Exception as e:
+            st.error(f"Impossible de charger les réponses : {e}")
+            st.info("Vérifie que la feuille est bien 'Publiée sur le Web' au format CSV et accessible.")
+
 def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
@@ -798,10 +868,11 @@ def main():
         "👥 Liste des Clients": vue_liste_clients,
         "✉️ SMS": vue_sms,
         "📆 Export ICS (Google Calendar)": vue_export_ics,
+        "📝 Fiche d'arrivée / Google Sheet": vue_google_sheet,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)"]:
+    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)","📝 Fiche d'arrivée / Google Sheet"]:
         page_function(df, palette)
     else:
         page_function(df)
