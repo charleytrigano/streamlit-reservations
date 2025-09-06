@@ -4,8 +4,10 @@
 # - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes
 #             + Total mensuel optionnel + Cumuler (YTD) + Moyenne par nuitée
 #             + Export agrégé sans None/NaN + option "Masquer les zéros"
-# - Export ICS (Google Calendar) : génère un .ics avec UID stables (v5) basés sur res_id + nom + téléphone
-#   * Toggle "Créer et sauvegarder les UID manquants" -> crée/persiste res_id (uuid4) et ical_uid déterministes
+# - Export ICS (Google Calendar) :
+#   * UID stables (v5) basés sur res_id + nom + téléphone
+#   * Toggle "Créer et sauvegarder les UID manquants"
+#   * OPTION B : Toggle "Ignorer les filtres et créer pour toute la base"
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +17,7 @@ import calendar
 from datetime import date, timedelta, datetime
 from urllib.parse import quote
 import altair as alt
-import uuid, re, unicodedata  # <-- pour res_id/UID stables
+import uuid, re, unicodedata  # pour res_id/UID stables
 
 # --- Configuration des Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -67,7 +69,7 @@ BASE_COLS = [
     'paye', 'nom_client', 'sms_envoye', 'plateforme', 'telephone', 'date_arrivee',
     'date_depart', 'nuitees', 'prix_brut', 'commissions', 'frais_cb',
     'prix_net', 'menage', 'taxes_sejour', 'base', 'charges', '%',
-    'AAAA', 'MM', 'res_id', 'ical_uid'  # <-- res_id avant ical_uid
+    'AAAA', 'MM', 'res_id', 'ical_uid'
 ]
 
 def _to_bool_series(s):
@@ -83,17 +85,14 @@ def ensure_schema(df):
         return out
 
     df_res = df.copy()
-
     rename_map = {'Payé':'paye','Client':'nom_client','Plateforme':'plateforme',
                   'Arrivée':'date_arrivee','Départ':'date_depart','Nuits':'nuitees','Brut (€)':'prix_brut'}
     df_res.rename(columns=rename_map, inplace=True)
 
-    # Garantir toutes les colonnes
     for col in BASE_COLS:
         if col not in df_res.columns:
             df_res[col] = None
 
-    # Dates
     for col in ["date_arrivee","date_depart"]:
         df_res[col] = pd.to_datetime(df_res[col], dayfirst=True, errors='coerce')
     mask_dates = pd.notna(df_res["date_arrivee"]) & pd.notna(df_res["date_depart"])
@@ -101,11 +100,9 @@ def ensure_schema(df):
     for col in ["date_arrivee","date_depart"]:
         df_res[col] = df_res[col].dt.date
 
-    # Booléens
     df_res['paye'] = _to_bool_series(df_res['paye']).fillna(False).astype(bool)
     df_res['sms_envoye'] = _to_bool_series(df_res['sms_envoye']).fillna(False).astype(bool)
 
-    # Numériques
     for col in ['prix_brut','commissions','frais_cb','menage','taxes_sejour']:
         if df_res[col].dtype == 'object':
             df_res[col] = (df_res[col].astype(str)
@@ -115,26 +112,21 @@ def ensure_schema(df):
                            .str.strip())
         df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
 
-    # Calculs
     df_res['prix_net'] = df_res['prix_brut'] - df_res['commissions'] - df_res['frais_cb']
     df_res['charges'] = df_res['prix_brut'] - df_res['prix_net']
     df_res['base'] = df_res['prix_net'] - df_res['menage'] - df_res['taxes_sejour']
     with np.errstate(divide='ignore', invalid='ignore'):
         df_res['%'] = np.where(df_res['prix_brut'] > 0, (df_res['charges'] / df_res['prix_brut'] * 100), 0)
 
-    # AAAA / MM
     date_arrivee_dt = pd.to_datetime(df_res["date_arrivee"], errors='coerce')
     df_res.loc[pd.notna(date_arrivee_dt),'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
     df_res.loc[pd.notna(date_arrivee_dt),'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
-
-    # res_id : on NE génère pas automatiquement ici pour éviter d'en créer à chaque run.
-    # Il sera généré à l'ajout (vue_ajouter) et à l'export ICS si l'option est cochée.
 
     return df_res
 
 # ============================== UID STABLE (res_id + nom + téléphone) ==============================
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://villa-tobias.fr/reservations")
-PROPERTY_ID = "villa-tobias"  # si plusieurs biens: "villa-1", etc.
+PROPERTY_ID = "villa-tobias"
 
 def _canonize_text(s: str) -> str:
     if s is None: return ""
@@ -145,18 +137,16 @@ def _canonize_text(s: str) -> str:
 
 def _canonize_phone(s: str) -> str:
     if s is None: return ""
-    return re.sub(r"\D", "", str(s))  # digits only
+    return re.sub(r"\D", "", str(s))
 
 def build_stable_uid(row) -> str:
-    """UID v5 déterministe basé sur res_id + nom + téléphone (et un PROPERTY_ID)."""
     res_id = str(row.get('res_id') or "").strip()
-    parts = [
+    canonical = "|".join([
         PROPERTY_ID,
         res_id,
         _canonize_text(row.get('nom_client', '')),
         _canonize_phone(row.get('telephone', '')),
-    ]
-    canonical = "|".join(parts)
+    ])
     return str(uuid.uuid5(NAMESPACE, canonical))
 
 # ============================== UTILITIES & HELPERS ==============================
@@ -252,13 +242,8 @@ def vue_reservations(df):
     col_order = [c for c in df_sorted.columns if c != "_rowid"] + ["_rowid"]
 
     edited = st.data_editor(
-        df_sorted,
-        column_config=column_config,
-        column_order=col_order,
-        use_container_width=True,
-        num_rows="fixed",
-        hide_index=True,
-        key="editor_reservations"
+        df_sorted, column_config=column_config, column_order=col_order,
+        use_container_width=True, num_rows="fixed", hide_index=True, key="editor_reservations"
     )
 
     if st.button("💾 Enregistrer les modifications"):
@@ -266,8 +251,6 @@ def vue_reservations(df):
             for bcol in ["paye","sms_envoye"]:
                 if bcol in edited.columns:
                     edited[bcol] = edited[bcol].fillna(False).astype(bool)
-
-            # On met à jour Payé / SMS envoyé / res_id (si saisi manuellement) / ical_uid (si saisi manuellement)
             for _, row in edited.iterrows():
                 rid = row["_rowid"]
                 if pd.isna(rid): continue
@@ -277,7 +260,6 @@ def vue_reservations(df):
                     df.loc[rid,"res_id"] = row["res_id"].strip()
                 if isinstance(row.get("ical_uid"), str) and row["ical_uid"].strip() != "":
                     df.loc[rid,"ical_uid"] = row["ical_uid"].strip()
-
             df_final = ensure_schema(df)
             if sauvegarder_donnees_csv(df_final):
                 st.success("Modifications enregistrées ✅")
@@ -309,13 +291,12 @@ def vue_ajouter(df, palette):
                 st.error("Veuillez entrer un nom et des dates valides.")
             else:
                 nouvelle_ligne = pd.DataFrame([{
-                    'res_id': str(uuid.uuid4()),   # <-- ID interne persistant
+                    'res_id': str(uuid.uuid4()),
                     'nom_client': nom_client, 'telephone': telephone,
                     'date_arrivee': date_arrivee, 'date_depart': date_depart,
                     'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions,
                     'frais_cb': frais_cb, 'menage': menage, 'taxes_sejour': taxes_sejour,
-                    'paye': paye, 'sms_envoye': False,
-                    # on ne crée PAS ical_uid ici : il sera créé à l'export ICS si manquant
+                    'paye': paye, 'sms_envoye': False
                 }])
                 df_a_jour = pd.concat([df, nouvelle_ligne], ignore_index=True)
                 df_a_jour = ensure_schema(df_a_jour)
@@ -328,7 +309,6 @@ def vue_modifier(df, palette):
     if df.empty:
         st.warning("Aucune réservation à modifier.")
         return
-
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
     options_resa = [f"{idx}: {row['nom_client']} ({row['date_arrivee']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
     selection = st.selectbox("Sélectionnez une réservation", options=options_resa, index=None, placeholder="Choisissez une réservation...")
@@ -336,7 +316,6 @@ def vue_modifier(df, palette):
         idx_selection = int(selection.split(":")[0])
         original_index = df_sorted.loc[idx_selection, 'index']
         resa_selectionnee = df.loc[original_index].copy()
-
         with st.form(f"form_modif_{original_index}"):
             c1, c2 = st.columns(2)
             with c1:
@@ -352,23 +331,16 @@ def vue_modifier(df, palette):
                 prix_brut = st.number_input("Prix Brut (€)", min_value=0.0, value=resa_selectionnee.get('prix_brut', 0.0), step=0.01, format="%.2f")
                 commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa_selectionnee.get('commissions', 0.0), step=0.01, format="%.2f")
                 paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
-
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             if btn_enregistrer.form_submit_button("💾 Enregistrer"):
-                updates = {
-                    'nom_client': nom_client, 'telephone': telephone,
-                    'date_arrivee': date_arrivee, 'date_depart': date_depart,
-                    'plateforme': plateforme, 'prix_brut': prix_brut,
-                    'commissions': commissions, 'paye': paye
-                }
+                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart,
+                           'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}
                 for key, value in updates.items():
                     df.loc[original_index, key] = value
-
                 df_final = ensure_schema(df)
                 if sauvegarder_donnees_csv(df_final):
                     st.success("Modifications enregistrées !")
                     st.rerun()
-
             if btn_supprimer.form_submit_button("🗑️ Supprimer"):
                 df_final = df.drop(index=original_index)
                 if sauvegarder_donnees_csv(df_final):
@@ -378,10 +350,8 @@ def vue_modifier(df, palette):
 def vue_plateformes(df, palette):
     st.header("🎨 Gestion des Plateformes")
     df_palette = pd.DataFrame(list(palette.items()), columns=['plateforme', 'couleur'])
-    edited_df = st.data_editor(
-        df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
-        column_config={"plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)")}
-    )
+    edited_df = st.data_editor(df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
+        column_config={"plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)")})
     if st.button("💾 Enregistrer les modifications"):
         nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
         df_plateformes_save = pd.DataFrame(list(nouvelle_palette.items()), columns=['plateforme', 'couleur'])
@@ -395,7 +365,6 @@ def vue_calendrier(df, palette):
     if df_dates_valides.empty:
         st.info("Aucune réservation à afficher.")
         return
-
     c1, c2 = st.columns(2)
     today = date.today()
     noms_mois = [calendar.month_name[i] for i in range(1, 13)]
@@ -406,22 +375,11 @@ def vue_calendrier(df, palette):
     try: default_year_index = available_years.index(today.year)
     except ValueError: default_year_index = len(available_years) - 1
     selected_year = c2.selectbox("Année", options=available_years, index=default_year_index)
-
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
-
-    st.markdown("""
-    <style>
-        .calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}
-        .calendar-day.outside-month{background-color:#2e2e2e}
-        .calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}
-        .reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-    </style>
-    """, unsafe_allow_html=True)
-
+    st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}.calendar-day.outside-month{background-color:#2e2e2e}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
     headers = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
     st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
-
     for week in month_days:
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -436,14 +394,11 @@ def vue_calendrier(df, palette):
                             day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
-
     st.markdown("---")
     st.subheader("Détails des réservations du mois")
     start_of_month = date(selected_year, selected_month, 1)
     end_of_month = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
-    reservations_du_mois = (df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) &
-                                             (df_dates_valides['date_depart'] > start_of_month)]
-                            .sort_values(by="date_arrivee").reset_index())
+    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
     if not reservations_du_mois.empty:
         options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
         selection_str = st.selectbox("Voir les détails :", options=options.keys(), index=None, placeholder="Choisissez une réservation...")
@@ -469,56 +424,33 @@ def _safe_div(num, den):
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance")
-
     data = df.dropna(subset=['AAAA','MM','plateforme']).copy()
     if data.empty:
         st.info("Aucune donnée pour générer un rapport.")
         return
-
     c1, c2, c3 = st.columns([1,1,2])
     annees = sorted(data['AAAA'].astype(int).unique(), reverse=True)
     annee = c1.selectbox("Année", annees, index=0)
-
     plateformes = sorted(data['plateforme'].dropna().unique())
     plateformes_sel = c2.multiselect("Plateformes", plateformes, default=plateformes)
-
-    metrics = {
-        "Prix brut (€)": "prix_brut",
-        "Prix net (€)": "prix_net",
-        "Ménage (€)": "menage",
-        "Commissions (€)": "commissions",
-        "Frais CB (€)": "frais_cb",
-        "Base (€)": "base",
-        "Charges (€)": "charges",
-        "Nuitées": "nuitees",
-    }
+    metrics = {"Prix brut (€)":"prix_brut","Prix net (€)":"prix_net","Ménage (€)":"menage","Commissions (€)":"commissions","Frais CB (€)":"frais_cb","Base (€)":"base","Charges (€)":"charges","Nuitées":"nuitees"}
     metric_label = c3.selectbox("Métrique", list(metrics.keys()), index=0)
     metric = metrics[metric_label]
-
     c4, c5, c6 = st.columns([1,1,1])
-    chart_type = c4.selectbox("Type de graphique", ["Barres groupées", "Barres empilées (total mensuel)", "Courbes"], index=0)
+    chart_type = c4.selectbox("Type de graphique", ["Barres groupées","Barres empilées (total mensuel)","Courbes"], index=0)
     show_totals = c5.toggle("Afficher aussi le total mensuel", value=False)
     avg_per_night = c6.toggle("Moyenne par nuitée", value=False)
     c7 = st.columns(1)[0]
     cumulate = c7.toggle("Cumuler (YTD)", value=False)
-
     if avg_per_night and metric == "nuitees":
-        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à la métrique 'Nuitées'. Option ignorée.")
+        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à 'Nuitées'. Option ignorée.")
         avg_per_night = False
-
-    # Filtrage
     data = data[(data['AAAA'].astype(int) == int(annee)) & (data['plateforme'].isin(plateformes_sel))].copy()
     if data.empty:
         st.warning("Aucune donnée pour les filtres sélectionnés.")
         return
-
     data['date_mois'] = pd.to_datetime(dict(year=data['AAAA'].astype(int), month=data['MM'].astype(int), day=1))
-
-    # Agrégation mensuelle par plateforme
-    grp = (data.groupby(['plateforme','date_mois'], as_index=False)
-               .agg({metric:'sum', 'nuitees':'sum'}))
-
-    # Forcer 12 mois
+    grp = (data.groupby(['plateforme','date_mois'], as_index=False).agg({metric:'sum','nuitees':'sum'}))
     all_months = pd.date_range(f"{annee}-01-01", f"{annee}-12-01", freq='MS')
     frames = []
     for p in plateformes_sel:
@@ -527,8 +459,6 @@ def vue_rapport(df, palette):
         g = g.reset_index().rename(columns={'index':'date_mois'})
         frames.append(g)
     grp_full = pd.concat(frames, ignore_index=True)
-
-    # Valeur à tracer
     if avg_per_night:
         if cumulate:
             grp_full = grp_full.sort_values(['plateforme','date_mois'])
@@ -547,95 +477,55 @@ def vue_rapport(df, palette):
         else:
             grp_full['value'] = grp_full[metric]
             metric_label_plot = metric_label
-
-    # Couleurs
     color_map = {p: palette.get(p, '#888') for p in plateformes_sel}
     domain_sel = list(color_map.keys())
     range_sel = [color_map[p] for p in domain_sel]
-
-    # Moyenne + empilé -> forcer groupé
     if avg_per_night and chart_type == "Barres empilées (total mensuel)":
         st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
         chart_type = "Barres groupées"
-
     base = alt.Chart(grp_full).encode(
         x=alt.X('yearmonth(date_mois):T', title='Mois'),
         color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
-        tooltip=[
-            alt.Tooltip('plateforme:N', title='Plateforme'),
-            alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-            alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')
-        ]
+        tooltip=[alt.Tooltip('plateforme:N', title='Plateforme'),
+                 alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                 alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')]
     )
-
     if chart_type == "Barres groupées":
-        chart = base.mark_bar().encode(
-            y=alt.Y('value:Q', title=metric_label_plot),
-            xOffset=alt.X('plateforme:N', title=None),
-        )
+        chart = base.mark_bar().encode(y=alt.Y('value:Q', title=metric_label_plot), xOffset=alt.X('plateforme:N', title=None))
     elif chart_type == "Barres empilées (total mensuel)":
-        chart = base.mark_bar().encode(
-            y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
-        )
+        chart = base.mark_bar().encode(y=alt.Y('value:Q', title=metric_label_plot, stack='zero'))
     else:
-        chart = base.mark_line(point=True).encode(
-            y=alt.Y('value:Q', title=metric_label_plot),
-        )
-
+        chart = base.mark_line(point=True).encode(y=alt.Y('value:Q', title=metric_label_plot))
     st.altair_chart(chart.properties(height=420).interactive(), use_container_width=True)
-
-    # ----- Total mensuel additionnel
     if show_totals:
         if avg_per_night:
+            month_sums = (grp.groupby('date_mois', as_index=False).agg(num=(metric,'sum'), den=('nuitees','sum')))
+            month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
             if cumulate:
-                month_sums = (grp.groupby('date_mois', as_index=False)
-                                 .agg(num=(metric,'sum'), den=('nuitees','sum')))
-                month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
                 month_sums['num_cum'] = month_sums['num'].cumsum()
                 month_sums['den_cum'] = month_sums['den'].cumsum()
                 month_sums['avg'] = _safe_div(month_sums['num_cum'], month_sums['den_cum'])
-                chart_tot = (alt.Chart(month_sums)
-                             .mark_line(point=True)
-                             .encode(
-                                 x=alt.X('yearmonth(date_mois):T', title='Mois'),
-                                 y=alt.Y('avg:Q', title=f"{metric_label} / nuit (cumul YTD - total)"),
-                                 tooltip=[
-                                     alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                                     alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')
-                                 ]
-                             ))
-                st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+                ytitle = f"{metric_label} / nuit (cumul YTD - total)"
             else:
-                month_sums = (grp.groupby('date_mois', as_index=False)
-                                 .agg(num=(metric,'sum'), den=('nuitees','sum')))
-                month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
                 month_sums['avg'] = _safe_div(month_sums['num'], month_sums['den'])
-                chart_tot = (alt.Chart(month_sums)
-                             .mark_line(point=True)
-                             .encode(
-                                 x=alt.X('yearmonth(date_mois):T', title='Mois'),
-                                 y=alt.Y('avg:Q', title=f"{metric_label} / nuit (total)"),
-                                 tooltip=[
-                                     alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                                     alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')
-                                 ]
-                             ))
-                st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+                ytitle = f"{metric_label} / nuit (total)"
+            chart_tot = (alt.Chart(month_sums).mark_line(point=True).encode(
+                x=alt.X('yearmonth(date_mois):T', title='Mois'),
+                y=alt.Y('avg:Q', title=ytitle),
+                tooltip=[alt.Tooltip('yearmonth(date_mois):T', title='Mois'), alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')]
+            ))
+            st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
         else:
             st.markdown("**Total mensuel (toutes plateformes)**")
             chart_tot = alt.Chart(grp_full).mark_bar().encode(
                 x=alt.X('yearmonth(date_mois):T', title='Mois'),
                 y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
                 color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
-                tooltip=[
-                    alt.Tooltip('plateforme:N', title='Plateforme'),
-                    alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                    alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' else '.0f')
-                ],
+                tooltip=[alt.Tooltip('plateforme:N', title='Plateforme'),
+                         alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                         alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' else '.0f')]
             )
             st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
-
-    # Tableau + export (sans None/NaN + option masquer zéros)
     with st.expander("Afficher les données agrégées et exporter"):
         display = grp_full.copy()
         display['Année'] = display['date_mois'].dt.year
@@ -657,26 +547,20 @@ def vue_liste_clients(df):
     if df.empty:
         st.info("Aucun client.")
         return
-    clients = (df[['nom_client','telephone','plateforme']]
-               .dropna(subset=['nom_client'])
-               .drop_duplicates()
-               .sort_values('nom_client'))
+    clients = df[['nom_client','telephone','plateforme']].dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client')
     st.dataframe(clients, use_container_width=True)
 
 def vue_sms(df):
     st.header("✉️ Générateur de SMS")
-
     if 'sms_envoye' in df.columns:
         df['sms_envoye'] = _to_bool_series(df['sms_envoye']).fillna(False).astype(bool)
     else:
         df['sms_envoye'] = False
-
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     mask_valid_phone = df_tel['tel_clean'].str.len().between(9,15)
-    df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()  # <-- Non cochés uniquement
+    df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
-
     with st.expander("🔎 Debug SMS (pourquoi certains clients n'apparaissent pas ?)"):
         total = len(df)
         manquants = len(df) - len(df.dropna(subset=['telephone','nom_client','date_arrivee']))
@@ -689,20 +573,16 @@ def vue_sms(df):
         st.write(f"- Tél. hors plage (après nettoyage) : {hors_plage}")
         st.write(f"- Déjà cochés 'SMS envoyé' : {int(deja_coches)}")
         st.dataframe(df_tel[['nom_client','telephone','tel_clean','sms_envoye','date_arrivee']].head(30), use_container_width=True)
-
     if df_tel.empty:
         st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé' ou numéros invalides.")
         return
-
     df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
     options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
     selection = st.selectbox("Sélectionnez un client (SMS non envoyé)", options=options_resa, index=None)
-
     if selection:
         idx = int(selection.split(":")[0])
         resa = df_sorted.loc[idx]
         original_rowid = resa["_rowid"]
-
         message_body = f"""VILLA TOBIAS
 Plateforme : {resa.get('plateforme', 'N/A')}
 Arrivée : {resa.get('date_arrivee').strftime('%d/%m/%Y')} Départ : {resa.get('date_depart').strftime('%d/%m/%Y')} Nuitées : {resa.get('nuitees', 0):.0f}
@@ -743,7 +623,6 @@ https://urlr.me/Xu7Sq3"""
         encoded_message = quote(message_area)
         sms_link = f"sms:{resa['telephone']}?&body={encoded_message}"
         st.link_button("📲 Envoyer via Smartphone", sms_link)
-
         if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
             try:
                 df.loc[original_rowid,'sms_envoye'] = True
@@ -769,59 +648,69 @@ def vue_export_ics(df, palette):
             "(Paramètres ➜ Importer & Exporter ➜ Importer). "
             "Pour une **synchro auto**, il faut publier une **URL ICS** ou implémenter l’**API Google Calendar** (OAuth).")
 
-    df_ok = df.dropna(subset=['date_arrivee','date_depart']).copy()
-    if df_ok.empty:
+    base_all = df.dropna(subset=['date_arrivee','date_depart']).copy()
+    if base_all.empty:
         st.warning("Aucune réservation avec dates valides.")
         return
 
     col1, col2 = st.columns(2)
-    years = sorted(df_ok['date_arrivee'].apply(lambda d: d.year).unique())
+    years = sorted(base_all['date_arrivee'].apply(lambda d: d.year).unique())
     annee = col1.selectbox("Filtrer Année (arrivée)", years, index=len(years)-1)
-    plateformes = sorted(df_ok['plateforme'].dropna().unique())
+    plateformes = sorted(base_all['plateforme'].dropna().unique())
     plats = col2.multiselect("Plateformes", plateformes, default=plateformes)
-
-    df_ok = df_ok[(df_ok['date_arrivee'].apply(lambda d: d.year) == annee) & (df_ok['plateforme'].isin(plats))]
 
     c3, c4, c5 = st.columns(3)
     create_missing_uid = c3.toggle("Créer et sauvegarder les UID manquants", value=True)
     include_paid = c4.toggle("Inclure les réservations non payées", value=True)
     include_sms_sent = c5.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
 
+    # 🚀 OPTION B : ignorer les filtres pour la création/persistance
+    apply_to_all = st.toggle("Ignorer les filtres et créer pour toute la base", value=False)
+
+    # df_filtre = réservé au CONTENU du fichier ICS (téléchargement)
+    df_filtre = base_all[(base_all['date_arrivee'].apply(lambda d: d.year) == annee) & (base_all['plateforme'].isin(plats))].copy()
     if not include_paid:
-        df_ok = df_ok[df_ok['paye'] == True]
+        df_filtre = df_filtre[df_filtre['paye'] == True]
     if not include_sms_sent:
-        df_ok = df_ok[df_ok['sms_envoye'] == False]
-
-    if df_ok.empty:
+        df_filtre = df_filtre[df_filtre['sms_envoye'] == False]
+    if df_filtre.empty:
         st.warning("Rien à exporter avec ces filtres.")
-        return
+        # On continue quand même pour permettre la génération des UID sur toute la base, si toggle activé.
 
-    # Assurer res_id (si option active)
-    missing_res_id = df_ok['res_id'].isna() | (df_ok['res_id'].astype(str).str.strip() == "")
-    if create_missing_uid and missing_res_id.any():
-        df_ok.loc[missing_res_id, 'res_id'] = [str(uuid.uuid4()) for _ in range(int(missing_res_id.sum()))]
-        # persister dans df global + CSV
-        try:
-            df.loc[df_ok.index, 'res_id'] = df_ok['res_id']
-            if sauvegarder_donnees_csv(df):
-                st.success(f"ID internes (res_id) créés pour {int(missing_res_id.sum())} réservation(s).")
-        except Exception as e:
-            st.error(f"Impossible de sauvegarder les ID internes : {e}")
+    # --- Jeu de lignes pour création/persistance des IDs
+    df_to_gen = base_all.copy() if apply_to_all else df_filtre.copy()
+    if df_to_gen.empty:
+        st.info("Aucune ligne cible pour la création/persistance des IDs selon les options actuelles.")
+    else:
+        # res_id
+        missing_res_id = df_to_gen['res_id'].isna() | (df_to_gen['res_id'].astype(str).str.strip() == "")
+        if create_missing_uid and missing_res_id.any():
+            df_to_gen.loc[missing_res_id, 'res_id'] = [str(uuid.uuid4()) for _ in range(int(missing_res_id.sum()))]
+            try:
+                df.loc[df_to_gen.index, 'res_id'] = df_to_gen['res_id']
+                if sauvegarder_donnees_csv(df):
+                    st.success(f"ID internes (res_id) créés pour {int(missing_res_id.sum())} réservation(s).")
+            except Exception as e:
+                st.error(f"Impossible de sauvegarder les ID internes : {e}")
 
-    # Assurer ical_uid (dérivé stable de res_id + nom + téléphone)
-    missing_uid_mask = df_ok['ical_uid'].isna() | (df_ok['ical_uid'].astype(str).str.strip() == "")
-    if missing_uid_mask.any():
-        df_ok.loc[missing_uid_mask, 'ical_uid'] = df_ok[missing_uid_mask].apply(build_stable_uid, axis=1)
+        # ical_uid
+        missing_uid_mask = df_to_gen['ical_uid'].isna() | (df_to_gen['ical_uid'].astype(str).str.strip() == "")
+        if missing_uid_mask.any():
+            df_to_gen.loc[missing_uid_mask, 'ical_uid'] = df_to_gen[missing_uid_mask].apply(build_stable_uid, axis=1)
+        if create_missing_uid and missing_uid_mask.any():
+            try:
+                df.loc[df_to_gen.index, 'ical_uid'] = df_to_gen['ical_uid']
+                if sauvegarder_donnees_csv(df):
+                    st.success(f"UID (ical_uid) créés et sauvegardés pour {int(missing_uid_mask.sum())} réservation(s).")
+            except Exception as e:
+                st.error(f"Impossible de sauvegarder les UID : {e}")
 
-    if create_missing_uid and missing_uid_mask.any():
-        try:
-            df.loc[df_ok.index, 'ical_uid'] = df_ok['ical_uid']
-            if sauvegarder_donnees_csv(df):
-                st.success(f"UID (ical_uid) créés et sauvegardés pour {int(missing_uid_mask.sum())} réservation(s).")
-        except Exception as e:
-            st.error(f"Impossible de sauvegarder les UID : {e}")
+        # Mettre à jour le df_filtre avec d'éventuels UID générés
+        if not df_filtre.empty:
+            df_filtre.loc[df_to_gen.index.intersection(df_filtre.index), 'res_id'] = df_to_gen.loc[df_to_gen.index.intersection(df_filtre.index), 'res_id']
+            df_filtre.loc[df_to_gen.index.intersection(df_filtre.index), 'ical_uid'] = df_to_gen.loc[df_to_gen.index.intersection(df_filtre.index), 'ical_uid']
 
-    # Construction ICS
+    # ---- Construction ICS (uniquement sur df_filtre)
     nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
@@ -831,18 +720,15 @@ def vue_export_ics(df, palette):
         "METHOD:PUBLISH",
     ]
 
-    for _, r in df_ok.iterrows():
+    for _, r in df_filtre.iterrows():
         da = r['date_arrivee']
-        dd = r['date_depart']  # DTEND all-day est exclusif -> parfait pour la date de départ
+        dd = r['date_depart']
         if not isinstance(da, date) or not isinstance(dd, date):
             continue
-
-        uid = r.get('ical_uid') or build_stable_uid(r)  # ne recalculera pas si déjà présent
-
+        uid = r.get('ical_uid') or build_stable_uid(r)
         summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
         if r.get('plateforme'):
             summary += f" ({r['plateforme']})"
-
         desc_parts = [
             f"Client: {r.get('nom_client','')}",
             f"Téléphone: {r.get('telephone','')}",
@@ -855,7 +741,6 @@ def vue_export_ics(df, palette):
             f"UID: {uid}",
         ]
         desc = _escape_text("\n".join(desc_parts))
-
         lines += [
             "BEGIN:VEVENT",
             f"UID:{uid}",
@@ -876,25 +761,22 @@ def vue_export_ics(df, palette):
 
     with st.expander("Aide : éviter les doublons dans Google Calendar"):
         st.markdown("""
-- L’**import ICS** dans Google Calendar **ajoute** des événements (ne met pas à jour les anciens imports).
-- Grâce au champ **UID** (colonne `ical_uid`), vos événements ont une identité stable.
-- Pour une **mise à jour automatique**, abonnez-vous à une **URL ICS** (Google rafraîchit régulièrement) ou utilisez l’**API Google Calendar** (OAuth).
+- L’**import ICS** ajoute des événements (ne met pas à jour les imports passés).
+- Avec des **UID** stables (`ical_uid`), un agenda **abonné à une URL ICS** peut reconnaître et mettre à jour.
+- Pour une synchro directe (création/màj/suppression), utiliser l’**API Google Calendar** (OAuth).
         """)
 
 def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
-    st.sidebar.download_button(
-        label="Télécharger la sauvegarde (CSV)",
+    st.sidebar.download_button(label="Télécharger la sauvegarde (CSV)",
         data=df.to_csv(sep=';', index=False).encode('utf-8'),
-        file_name=CSV_RESERVATIONS, mime='text/csv'
-    )
+        file_name=CSV_RESERVATIONS, mime='text/csv')
     uploaded_file = st.sidebar.file_uploader("Restaurer depuis un fichier CSV", type=['csv'])
     if uploaded_file is not None:
         if st.sidebar.button("Confirmer la restauration"):
             try:
-                with open(CSV_RESERVATIONS, "wb") as f:
-                    f.write(uploaded_file.getvalue())
+                with open(CSV_RESERVATIONS, "wb") as f: f.write(uploaded_file.getvalue())
                 st.cache_data.clear()
                 st.success("Fichier restauré. L'application va se recharger.")
                 st.rerun()
@@ -905,7 +787,6 @@ def admin_sidebar(df):
 def main():
     st.title("📖 Gestion des Réservations - Villa Tobias")
     df, palette = charger_donnees_csv()
-
     st.sidebar.title("🧭 Navigation")
     pages = {
         "📋 Réservations": vue_reservations,
@@ -920,12 +801,10 @@ def main():
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-
     if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)"]:
         page_function(df, palette)
     else:
         page_function(df)
-
     admin_sidebar(df)
 
 if __name__ == "__main__":
