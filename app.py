@@ -1,4 +1,6 @@
-# app.py — Villa Tobias (COMPLET) - Checkboxes Payé/SMS + SMS filtre "non cochés"
+# app.py — Villa Tobias (COMPLET)
+# - Checkboxes Payé/SMS dans 📋 Réservations (éditables + sauvegarde)
+# - Onglet SMS : filtre "non cochés", nettoyage téléphone, debug, et bouton "Marquer comme envoyé"
 
 import streamlit as st
 import pandas as pd
@@ -453,19 +455,52 @@ def vue_liste_clients(df):
 def vue_sms(df):
     st.header("✉️ Générateur de SMS")
 
-    # Garder uniquement les réservations avec téléphone valide, et SMS non envoyé
-    df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee'])
-    df_tel = df_tel[df_tel['telephone'].astype(str).str.replace('+', '').str.isdigit()]
+    # 1) Normaliser le bool 'sms_envoye'
+    if 'sms_envoye' in df.columns:
+        df['sms_envoye'] = _to_bool_series(df['sms_envoye']).fillna(False).astype(bool)
+    else:
+        df['sms_envoye'] = False
 
-    # Filtre: seulement les clients NON cochés (sms_envoye == False)
-    if 'sms_envoye' in df_tel.columns:
-        df_tel = df_tel[~df_tel['sms_envoye'].fillna(False)]
+    # 2) Filtrer: nom_client, téléphone, date_arrivee présents
+    df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee']).copy()
+
+    # 3) Nettoyer les numéros: garder uniquement les chiffres (ex "+33 (0)6-12 34.56.78" -> "330612345678")
+    df_tel['tel_clean'] = (
+        df_tel['telephone']
+        .astype(str)
+        .str.replace(r'\D', '', regex=True)
+        .str.lstrip('0')  # optionnel: enlever les 0 en tête
+    )
+
+    # 4) Définir un numéro "valide": 9 à 15 chiffres (ajuster si besoin)
+    mask_valid_phone = df_tel['tel_clean'].str.len().between(9, 15)
+
+    # 5) Garder seulement SMS non envoyés + téléphone valide
+    df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
+
+    # 6) Conserver l'index d'origine pour mise à jour directe
+    df_tel["_rowid"] = df_tel.index
+
+    # ---- Debug expander
+    with st.expander("🔎 Debug SMS (pourquoi certains clients n'apparaissent pas ?)"):
+        total = len(df)
+        manquants = len(df) - len(df.dropna(subset=['telephone','nom_client','date_arrivee']))
+        df_tmp = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
+        df_tmp['tel_clean'] = df_tmp['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
+        hors_plage = (~df_tmp['tel_clean'].str.len().between(9,15)).sum()
+        deja_coches = df_tmp['sms_envoye'].sum() if 'sms_envoye' in df_tmp.columns else 0
+        st.write(f"- Total lignes : {total}")
+        st.write(f"- Manquants (tel/nom/date) : {manquants}")
+        st.write(f"- Tél. hors plage (après nettoyage) : {hors_plage}")
+        st.write(f"- Déjà cochés 'SMS envoyé' : {int(deja_coches)}")
+        st.dataframe(df_tel[['nom_client','telephone','tel_clean','sms_envoye','date_arrivee']].head(30), use_container_width=True)
 
     if df_tel.empty:
-        st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé'.")
+        st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé' ou numéros invalides.")
         return
 
     df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+
     options_resa = [
         f"{idx}: {row['nom_client']} ({row['telephone']})"
         for idx, row in df_sorted.iterrows()
@@ -476,6 +511,8 @@ def vue_sms(df):
     if selection:
         idx = int(selection.split(":")[0])
         resa = df_sorted.loc[idx]
+        original_rowid = resa["_rowid"]
+
         message_body = f"""VILLA TOBIAS
 Plateforme : {resa.get('plateforme', 'N/A')}
 Arrivée : {resa.get('date_arrivee').strftime('%d/%m/%Y')} Départ : {resa.get('date_depart').strftime('%d/%m/%Y')} Nuitées : {resa.get('nuitees', 0):.0f}
@@ -516,6 +553,17 @@ https://urlr.me/Xu7Sq3"""
         encoded_message = quote(message_area)
         sms_link = f"sms:{resa['telephone']}?&body={encoded_message}"
         st.link_button("📲 Envoyer via Smartphone", sms_link)
+
+        # Bouton : marquer comme "SMS envoyé" (mise à jour directe via _rowid)
+        if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
+            try:
+                df.loc[original_rowid, 'sms_envoye'] = True
+                df_final = ensure_schema(df)
+                if sauvegarder_donnees_csv(df_final):
+                    st.success("Marqué 'SMS envoyé' ✅")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Impossible de marquer comme envoyé : {e}")
 
 def admin_sidebar(df):
     st.sidebar.markdown("---")
