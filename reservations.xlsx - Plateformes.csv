@@ -1,7 +1,7 @@
-plateforme;couleur
-Airbnb;#f82e42
-Annule/Paye;#39102a
-Autre;#f59e0b
-Booking;#4310ce
-Direct;#a801b5
-PAP;#02c335
+plateforme;couleur;paye;nom_client;sms_envoye;telephone;date_arrivee;date_depart;nuitees;prix_brut;commissions;frais_cb;prix_net;menage;taxes_sejour;base;charges;%;AAAA;MM;ical_uid
+Airbnb;#f82e42;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
+Annule/Paye;#39102a;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
+Autre;#f59e0b;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
+Booking;#4310ce;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
+Direct;#a801b5;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
+PAP;#02c335;False;;False;;;;;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;0.0;;;
