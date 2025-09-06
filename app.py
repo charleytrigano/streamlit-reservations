@@ -787,7 +787,7 @@ We wish you a wonderful trip and look forward to meeting you very soon.
 Annick & Charley 
 
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
-{prefill_link}"""
+{prefill_link}"https://urlr.me/kZuH94""
 
         # --- Encodage du message
         encoded_message = quote(message_body)
