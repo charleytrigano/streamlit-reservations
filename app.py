@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET) - Checkboxes éditables Payé / SMS envoyé
+# app.py — Villa Tobias (COMPLET) - Checkboxes Payé/SMS + SMS filtre "non cochés"
 
 import streamlit as st
 import pandas as pd
@@ -10,13 +10,13 @@ from urllib.parse import quote
 
 # --- Configuration des Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
-CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv" 
+CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 
 # ==============================  PALETTE (PLATEFORMES) ==============================
-DEFAULT_PALETTE = { "Booking": "#1e90ff", "Airbnb":  "#e74c3c", "Autre": "#f59e0b" }
+DEFAULT_PALETTE = {"Booking": "#1e90ff", "Airbnb": "#e74c3c", "Autre": "#f59e0b"}
 
 # ============================== CORE DATA FUNCTIONS ==============================
 @st.cache_data
@@ -48,9 +48,11 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
         df_to_save = df.copy()
         colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
         df_to_save = df_to_save[colonnes_a_sauvegarder]
+
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
+
         df_to_save.to_csv(file_path, sep=';', index=False)
         st.cache_data.clear()
         return True
@@ -68,30 +70,32 @@ BASE_COLS = [
 
 def _to_bool_series(s):
     # Convertit proprement en bool (gère Oui/Vrai/True/1, None/NaN -> False)
-    return (
-        s.astype(str)
-         .str.strip()
-         .str.upper()
-         .isin(['OUI','VRAI','TRUE','1','YES','Y'])
-    ) if s.dtype == 'object' else s.fillna(False).astype(bool)
+    if s.dtype == 'object':
+        return (
+            s.astype(str)
+             .str.strip()
+             .str.upper()
+             .isin(['OUI', 'VRAI', 'TRUE', '1', 'YES', 'Y'])
+        )
+    return s.fillna(False).astype(bool)
 
 def ensure_schema(df):
-    if df.empty: 
+    if df.empty:
         out = pd.DataFrame(columns=BASE_COLS)
         out['paye'] = False
         out['sms_envoye'] = False
         return out
 
     df_res = df.copy()
-    rename_map = { 
-        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme', 
+    rename_map = {
+        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme',
         'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
         'Brut (€)': 'prix_brut'
     }
     df_res.rename(columns=rename_map, inplace=True)
 
     for col in BASE_COLS:
-        if col not in df_res.columns: 
+        if col not in df_res.columns:
             df_res[col] = None
 
     # Dates
@@ -102,7 +106,7 @@ def ensure_schema(df):
     for col in ["date_arrivee", "date_depart"]:
         df_res[col] = df_res[col].dt.date
 
-    # Booléens (normalisation stricte)
+    # Booléens
     df_res['paye'] = _to_bool_series(df_res['paye']).fillna(False).astype(bool)
     df_res['sms_envoye'] = _to_bool_series(df_res['sms_envoye']).fillna(False).astype(bool)
 
@@ -110,11 +114,10 @@ def ensure_schema(df):
     for col in ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']:
         if df_res[col].dtype == 'object':
             df_res[col] = (df_res[col].astype(str)
-                .str.replace('€', '', regex=False)
-                .str.replace(',', '.', regex=False)
-                .str.replace(' ', '', regex=False)
-                .str.strip()
-            )
+                           .str.replace('€', '', regex=False)
+                           .str.replace(',', '.', regex=False)
+                           .str.replace(' ', '', regex=False)
+                           .str.strip())
         df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
 
     # Calculs
@@ -128,7 +131,7 @@ def ensure_schema(df):
     date_arrivee_dt = pd.to_datetime(df_res["date_arrivee"], errors='coerce')
     df_res.loc[pd.notna(date_arrivee_dt), 'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
     df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
-    
+
     return df_res
 
 # ============================== UTILITIES & HELPERS ==============================
@@ -138,7 +141,7 @@ def is_dark_color(hex_color):
         rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
         luminance = (0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2]) / 255
         return luminance < 0.5
-    except (ValueError, TypeError): 
+    except (ValueError, TypeError):
         return True
 
 def kpi_chips(df, title="Indicateurs Clés"):
@@ -176,9 +179,9 @@ def vue_reservations(df):
     if df.empty:
         st.info("Aucune réservation trouvée.")
         return
-    
+
     df_dates_valides = df.dropna(subset=['AAAA', 'MM'])
-    
+
     c1, c2, c3 = st.columns(3)
     annees = ["Toutes"] + sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
     annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
@@ -197,11 +200,11 @@ def vue_reservations(df):
 
     kpi_chips(data_filtree, title="Totaux pour la Sélection")
     st.markdown("---")
-    
+
     df_sorted = data_filtree.sort_values(by="date_arrivee", ascending=False, na_position='last').copy()
     df_sorted["_rowid"] = df_sorted.index  # identifiant pour sauvegarde
 
-    # >>> FORÇAGE DU TYPE BOOL (clé pour l'affichage en cases à cocher)
+    # Forçage du type bool pour affichage en cases à cocher
     for bcol in ["paye", "sms_envoye"]:
         if bcol in df_sorted.columns:
             df_sorted[bcol] = _to_bool_series(df_sorted[bcol]).fillna(False).astype(bool)
@@ -223,7 +226,6 @@ def vue_reservations(df):
         "_rowid": st.column_config.TextColumn("", help="ID interne", disabled=True),
     }
 
-    # Masquer _rowid visuellement
     col_order = [c for c in df_sorted.columns if c != "_rowid"] + ["_rowid"]
 
     edited = st.data_editor(
@@ -238,12 +240,10 @@ def vue_reservations(df):
 
     if st.button("💾 Enregistrer les modifications"):
         try:
-            # Types sûrs après édition
-            for bcol in ["paye","sms_envoye"]:
+            for bcol in ["paye", "sms_envoye"]:
                 if bcol in edited.columns:
                     edited[bcol] = edited[bcol].fillna(False).astype(bool)
 
-            # Repercute seulement les 2 colonnes bool sur le DF original via _rowid
             for _, row in edited.iterrows():
                 rid = row["_rowid"]
                 if pd.isna(rid):
@@ -345,7 +345,7 @@ def vue_plateformes(df, palette):
     df_palette = pd.DataFrame(list(palette.items()), columns=['plateforme', 'couleur'])
     edited_df = st.data_editor(
         df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
-        column_config={ "plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)") }
+        column_config={"plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)")}
     )
     if st.button("💾 Enregistrer les modifications"):
         nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
@@ -452,14 +452,27 @@ def vue_liste_clients(df):
 
 def vue_sms(df):
     st.header("✉️ Générateur de SMS")
+
+    # Garder uniquement les réservations avec téléphone valide, et SMS non envoyé
     df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee'])
     df_tel = df_tel[df_tel['telephone'].astype(str).str.replace('+', '').str.isdigit()]
+
+    # Filtre: seulement les clients NON cochés (sms_envoye == False)
+    if 'sms_envoye' in df_tel.columns:
+        df_tel = df_tel[~df_tel['sms_envoye'].fillna(False)]
+
     if df_tel.empty:
-        st.warning("Aucune réservation avec un numéro de téléphone valide.")
+        st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé'.")
         return
-    df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index()
-    options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
-    selection = st.selectbox("Sélectionnez un client", options=options_resa, index=None)
+
+    df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
+    options_resa = [
+        f"{idx}: {row['nom_client']} ({row['telephone']})"
+        for idx, row in df_sorted.iterrows()
+        if pd.notna(row['date_arrivee'])
+    ]
+    selection = st.selectbox("Sélectionnez un client (SMS non envoyé)", options=options_resa, index=None)
+
     if selection:
         idx = int(selection.split(":")[0])
         resa = df_sorted.loc[idx]
@@ -507,12 +520,18 @@ https://urlr.me/Xu7Sq3"""
 def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
-    st.sidebar.download_button(label="Télécharger la sauvegarde (CSV)", data=df.to_csv(sep=';', index=False).encode('utf-8'), file_name=CSV_RESERVATIONS, mime='text/csv')
+    st.sidebar.download_button(
+        label="Télécharger la sauvegarde (CSV)",
+        data=df.to_csv(sep=';', index=False).encode('utf-8'),
+        file_name=CSV_RESERVATIONS,
+        mime='text/csv'
+    )
     uploaded_file = st.sidebar.file_uploader("Restaurer depuis un fichier CSV", type=['csv'])
     if uploaded_file is not None:
         if st.sidebar.button("Confirmer la restauration"):
             try:
-                with open(CSV_RESERVATIONS, "wb") as f: f.write(uploaded_file.getvalue())
+                with open(CSV_RESERVATIONS, "wb") as f:
+                    f.write(uploaded_file.getvalue())
                 st.cache_data.clear()
                 st.success("Fichier restauré. L'application va se recharger.")
                 st.rerun()
@@ -524,10 +543,15 @@ def main():
     st.title("📖 Gestion des Réservations - Villa Tobias")
     df, palette = charger_donnees_csv()
     st.sidebar.title("🧭 Navigation")
-    pages = { 
-        "📋 Réservations": vue_reservations, "➕ Ajouter": vue_ajouter, "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes, "📅 Calendrier": vue_calendrier, "📊 Rapport": vue_rapport,
-        "👥 Liste des Clients": vue_liste_clients, "✉️ SMS": vue_sms,
+    pages = {
+        "📋 Réservations": vue_reservations,
+        "➕ Ajouter": vue_ajouter,
+        "✏️ Modifier / Supprimer": vue_modifier,
+        "🎨 Plateformes": vue_plateformes,
+        "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,
+        "👥 Liste des Clients": vue_liste_clients,
+        "✉️ SMS": vue_sms,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
@@ -536,7 +560,7 @@ def main():
         page_function(df, palette)
     else:
         page_function(df)
-        
+
     admin_sidebar(df)
 
 if __name__ == "__main__":
