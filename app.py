@@ -289,27 +289,72 @@ def vue_reservations(df):
     }
     col_order = [c for c in df_sorted.columns if c != "_rowid"] + ["_rowid"]
 
+    # --- 👇 CASTS pour compatibilité data_editor ---
+    df_edit = df_sorted.copy()
+
+    # Dates en datetime64[ns] pour DateColumn
+    for c in ['date_arrivee', 'date_depart']:
+        df_edit[c] = pd.to_datetime(df_edit[c], errors='coerce')
+
+    # Booléens pour CheckboxColumn
+    for bcol in ['paye', 'sms_envoye']:
+        if bcol in df_edit.columns:
+            df_edit[bcol] = df_edit[bcol].fillna(False).astype(bool)
+
+    # Entiers "souples" (acceptent NaN) pour AAAA/MM/nuitees
+    for c in ['AAAA', 'MM', 'nuitees']:
+        if c in df_edit.columns:
+            df_edit[c] = pd.to_numeric(df_edit[c], errors='coerce').astype('Int64')
+
+    # Numériques en float
+    for c in ['prix_brut', 'commissions', 'frais_cb', 'prix_net', 'menage', 'taxes_sejour', 'base', 'charges', '%']:
+        if c in df_edit.columns:
+            df_edit[c] = pd.to_numeric(df_edit[c], errors='coerce')
+
+    # --- Appel éditeur sur df_edit (pas df_sorted) ---
     edited = st.data_editor(
-        df_sorted, column_config=column_config, column_order=col_order,
-        use_container_width=True, num_rows="fixed", hide_index=True, key="editor_reservations"
+        df_edit,
+        column_config=column_config,
+        column_order=col_order,
+        use_container_width=True,
+        num_rows="fixed",
+        hide_index=True,
+        key="editor_reservations"
     )
 
     if st.button("💾 Enregistrer les modifications"):
         try:
+            # booleans
             for bcol in ["paye","sms_envoye"]:
                 if bcol in edited.columns:
                     edited[bcol] = edited[bcol].fillna(False).astype(bool)
+
             for _, row in edited.iterrows():
                 rid = row["_rowid"]
-                if pd.isna(rid): continue
-                df.loc[rid,"paye"] = bool(row["paye"])
-                df.loc[rid,"sms_envoye"] = bool(row["sms_envoye"])
+                if pd.isna(rid):
+                    continue
+
+                # simples
+                df.loc[rid, "paye"] = bool(row.get("paye", False))
+                df.loc[rid, "sms_envoye"] = bool(row.get("sms_envoye", False))
                 if "email" in row:
-                    df.loc[rid,"email"] = row["email"]
+                    df.loc[rid, "email"] = row["email"]
                 if isinstance(row.get("res_id"), str) and row["res_id"].strip() != "":
-                    df.loc[rid,"res_id"] = row["res_id"].strip()
+                    df.loc[rid, "res_id"] = row["res_id"].strip()
                 if isinstance(row.get("ical_uid"), str) and row["ical_uid"].strip() != "":
-                    df.loc[rid,"ical_uid"] = row["ical_uid"].strip()
+                    df.loc[rid, "ical_uid"] = row["ical_uid"].strip()
+
+                # dates : Timestamp -> date
+                for c in ["date_arrivee", "date_depart"]:
+                    val = row.get(c)
+                    if pd.isna(val):
+                        df.loc[rid, c] = pd.NaT
+                    else:
+                        if isinstance(val, (pd.Timestamp, datetime)):
+                            df.loc[rid, c] = val.date()
+                        else:
+                            df.loc[rid, c] = val  # déjà un date
+
             df_final = ensure_schema(df)
             if sauvegarder_donnees_csv(df_final):
                 st.success("Modifications enregistrées ✅")
@@ -557,7 +602,7 @@ def vue_rapport(df, palette):
     domain_sel = list(color_map.keys())
     range_sel = [color_map[p] for p in domain_sel]
 
-    if avg_per_night and chart_type == "Barres empilées (total mensuel)":
+    if avg_per_night && chart_type == "Barres empilées (total mensuel)":
         st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
         chart_type = "Barres groupées"
 
