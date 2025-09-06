@@ -2,7 +2,7 @@
 # - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde) + email
 #   -> data_editor robuste : colonnes et formats générés dynamiquement selon les dtypes
 # - SMS : seulement clients non cochés (sms_envoye=False), nettoyage tél, debug, marquage envoyé
-#         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ)
+#         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métrique au choix, année/plateformes, barres groupées/empilées/courbes,
 #             total mensuel optionnel, cumul (YTD), moyenne / nuitée, export CSV (sans None/NaN)
 # - Export ICS (Google Calendar) :
@@ -29,15 +29,24 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
+
+# ⬇️ Feuille intégrée : URL raccourcie fournie
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
+
+# Réponses publiées (CSV) : garde l'URL publish-to-web CSV (à adapter si tu as un raccourci CSV dédié)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs des champs (préremplissage)
+# IDs des champs (préremplissage) — RENSEIGNE ces 3 nouveaux si tu veux les préremplir
 FORM_ENTRY_NOM      = "entry.937556468"
 FORM_ENTRY_TEL      = "entry.702324920"
 FORM_ENTRY_EMAIL    = "entry.1712365042"
 FORM_ENTRY_ARRIVEE  = "entry.1099006415"
 FORM_ENTRY_DEPART   = "entry.2013910918"
+
+# ✅ NOUVEAUX CHAMPS (laisser "" tant que tu n'as pas les IDs ; l'app les ignorera)
+FORM_ENTRY_PLATEFORME = ""   # ex: "entry.123456789"
+FORM_ENTRY_NUITEES    = ""   # ex: "entry.987654321"
+FORM_ENTRY_RESID      = ""   # ex: "entry.111222333"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -197,7 +206,25 @@ def kpi_chips(df, title="Indicateurs Clés"):
     """
     st.markdown(html, unsafe_allow_html=True)
 
-def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None):
+def _ensure_res_id_on_row(df, idx):
+    """Si res_id manquant sur une ligne, on le crée et on sauvegarde."""
+    try:
+        cur = str(df.at[idx, 'res_id']) if 'res_id' in df.columns else ""
+    except Exception:
+        cur = ""
+    if (cur is None) or (str(cur).strip() == "") or (str(cur).lower() == "nan"):
+        new_id = str(uuid.uuid4())
+        df.at[idx, 'res_id'] = new_id
+        # On persiste discrètement
+        try:
+            sauvegarder_donnees_csv(ensure_schema(df))
+        except Exception:
+            pass
+        return new_id
+    return cur
+
+def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None,
+                     plateforme=None, nuitees=None, res_id=None):
     base = GOOGLE_FORM_URL.split("?")[0]
     def to_ymd(d):
         if d is None or (isinstance(d, float) and np.isnan(d)): return ""
@@ -211,6 +238,18 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
     if email: params[FORM_ENTRY_EMAIL] = str(email)
     if date_arrivee: params[FORM_ENTRY_ARRIVEE] = to_ymd(date_arrivee)
     if date_depart:  params[FORM_ENTRY_DEPART]  = to_ymd(date_depart)
+
+    # ✅ Nouveaux champs — uniquement si les entry IDs sont renseignés
+    if FORM_ENTRY_PLATEFORME and plateforme:
+        params[FORM_ENTRY_PLATEFORME] = str(plateforme)
+    if FORM_ENTRY_NUITEES and (nuitees is not None):
+        try:
+            params[FORM_ENTRY_NUITEES] = str(int(nuitees))
+        except Exception:
+            params[FORM_ENTRY_NUITEES] = str(nuitees)
+    if FORM_ENTRY_RESID and res_id:
+        params[FORM_ENTRY_RESID] = str(res_id)
+
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
 
 # ==============================  VUES  ==============================
@@ -248,25 +287,17 @@ def vue_reservations(df):
 
     # --- Casts robustes AVANT data_editor ---
     df_edit = df_sorted.copy()
-
-    # Dates -> datetime64
     for c in ['date_arrivee', 'date_depart']:
         if c in df_edit.columns:
             df_edit[c] = pd.to_datetime(df_edit[c], errors='coerce')
-
-    # Booléens
     for bcol in ['paye', 'sms_envoye']:
         if bcol in df_edit.columns:
             df_edit[bcol] = _to_bool_series(df_edit[bcol]).fillna(False).astype(bool)
-
-    # Numériques (dont AAAA/MM/nuitees/%) -> float pour éviter Int64 nullable
     num_cols = ['AAAA','MM','nuitees','prix_brut','commissions','frais_cb','prix_net',
                 'menage','taxes_sejour','base','charges','%']
     for c in num_cols:
         if c in df_edit.columns:
             df_edit[c] = pd.to_numeric(df_edit[c], errors='coerce').astype(float)
-
-    # _rowid en string pour TextColumn
     if "_rowid" in df_edit.columns:
         df_edit["_rowid"] = df_edit["_rowid"].astype(str)
 
@@ -716,13 +747,19 @@ def vue_sms(df):
         resa = df_sorted.loc[idx]
         original_rowid = resa["_rowid"]
 
+        # ✅ s'assurer d'avoir un res_id persistant
+        res_id_val = _ensure_res_id_on_row(df, original_rowid)
+
         email_val = resa.get('email') if 'email' in df_tel.columns else None
         prefill_link = form_prefill_url(
             nom         = resa.get('nom_client'),
             tel         = resa.get('telephone'),
             email       = email_val,
             date_arrivee= resa.get('date_arrivee'),
-            date_depart = resa.get('date_depart')
+            date_depart = resa.get('date_depart'),
+            plateforme  = resa.get('plateforme'),
+            nuitees     = resa.get('nuitees'),
+            res_id      = res_id_val
         )
 
         message_body = f"""VILLA TOBIAS
@@ -892,19 +929,26 @@ def vue_google_sheet(df, palette):
             choice = st.selectbox("Préremplir pour :", options=list(options.keys()),
                                   format_func=lambda i: options[i], index=0)
             sel = df_ok.loc[choice]
+
+            # ✅ s'assurer d'avoir un res_id persistant aussi depuis cet onglet
+            res_id_val = _ensure_res_id_on_row(df, sel['index'])
+
             email_val = sel.get('email') if 'email' in df_ok.columns else None
             url_prefill = form_prefill_url(
                 nom = sel.get('nom_client'),
                 tel = sel.get('telephone'),
                 email = email_val,
                 date_arrivee = sel.get('date_arrivee'),
-                date_depart  = sel.get('date_depart')
+                date_depart  = sel.get('date_depart'),
+                plateforme   = sel.get('plateforme'),
+                nuitees      = sel.get('nuitees'),
+                res_id       = res_id_val
             )
             st.write("Lien direct :", url_prefill)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
-        st.caption("Affichage intégré (lecture seule) de la feuille publiée.")
+        st.caption("Affichage intégré (lecture seule) de la feuille publiée (lien raccourci).")
         st.components.v1.iframe(GOOGLE_SHEET_EMBED_URL, height=900, scrolling=True)
 
     with tab_csv:
@@ -924,7 +968,7 @@ def admin_sidebar(df):
     st.sidebar.header("⚙️ Administration")
     st.sidebar.download_button(label="Télécharger la sauvegarde (CSV)",
         data=df.to_csv(sep=';', index=False).encode('utf-8'),
-        file_name=CSV_RESERVATIONS, mime='text/csv')
+        file_name=CSV_RESERVATIONS, mime="text/csv")
     uploaded_file = st.sidebar.file_uploader("Restaurer depuis un fichier CSV", type=['csv'])
     if uploaded_file is not None:
         if st.sidebar.button("Confirmer la restauration"):
