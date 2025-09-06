@@ -3,16 +3,18 @@
 # - SMS : filtre "non cochés", nettoyage téléphone, debug, bouton "Marquer comme envoyé"
 # - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes
 #             + option Total mensuel + option Cumuler (YTD) + option Moyenne par nuitée
-#             + export sans lignes None/NaN
+#             + export sans None/NaN et option "Masquer les zéros"
+# - Export ICS (Google Calendar) : génère un .ics avec UID stables (ical_uid)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import os
 import calendar
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from urllib.parse import quote
 import altair as alt
+import uuid
 
 # --- Configuration des Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -342,7 +344,7 @@ def vue_calendrier(df, palette):
     st.subheader("Détails des réservations du mois")
     start_of_month = date(selected_year, selected_month, 1)
     end_of_month = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
-    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & df_dates_valides['date_depart'] > start_of_month].sort_values(by="date_arrivee").reset_index()
+    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
     if not reservations_du_mois.empty:
         options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
         selection_str = st.selectbox("Voir les détails :", options=options.keys(), index=None, placeholder="Choisissez une réservation...")
@@ -397,7 +399,6 @@ def vue_rapport(df, palette):
     chart_type = c4.selectbox("Type de graphique", ["Barres groupées", "Barres empilées (total mensuel)", "Courbes"], index=0)
     show_totals = c5.toggle("Afficher aussi le total mensuel", value=False)
     avg_per_night = c6.toggle("Moyenne par nuitée", value=False)
-
     c7 = st.columns(1)[0]
     cumulate = c7.toggle("Cumuler (YTD)", value=False)
 
@@ -534,15 +535,17 @@ def vue_rapport(df, palette):
             )
             st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
 
-    # Tableau + export (sans lignes None/NaN)
+    # Tableau + export (sans None/NaN + option masquer zéros)
     with st.expander("Afficher les données agrégées et exporter"):
         display = grp_full.copy()
         display['Année'] = display['date_mois'].dt.year
         display['Mois'] = display['date_mois'].dt.month
         out = display[['Année','Mois','plateforme','value']].sort_values(['Année','Mois','plateforme'])
-        # 🔧 Filtrer les lignes None/NaN (et plateformes vides)
         out = out[out['value'].notna()]
         out = out[out['plateforme'].notna() & (out['plateforme'].astype(str).str.strip() != "")]
+        hide_zeros = st.toggle("Masquer les zéros", value=True)
+        if hide_zeros:
+            out = out[np.abs(out['value']) > 1e-9]
         st.dataframe(out.rename(columns={'plateforme':'Plateforme','value':metric_label_plot}), use_container_width=True)
         csv = out.to_csv(index=False, sep=';').encode('utf-8')
         fname_metric = (metric_label_plot.replace(' ', '_').replace('/', '-')).lower()
@@ -640,6 +643,127 @@ https://urlr.me/Xu7Sq3"""
             except Exception as e:
                 st.error(f"Impossible de marquer comme envoyé : {e}")
 
+# ==============================  EXPORT ICS (Google Calendar) ==============================
+def _fmt_ics_date(d: date) -> str:
+    return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+
+def _build_uid(row) -> str:
+    """UID stable basé sur nom+dates+tel si ical_uid absent."""
+    base = f"villa-tobias|{row.get('nom_client','') or ''}|{row.get('date_arrivee') or ''}|{row.get('date_depart') or ''}|{row.get('telephone','') or ''}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, base))
+
+def _escape_text(s: str) -> str:
+    if s is None: return ""
+    return str(s).replace('\\','\\\\').replace(';','\\;').replace(',','\\,').replace('\n','\\n')
+
+def vue_export_ics(df, palette):
+    st.header("📆 Export ICS (Google Calendar)")
+
+    st.info("Cet export génère un fichier **.ics** que vous pouvez **importer** dans Google Calendar "
+            "(Paramètres ➜ Importer & Exporter ➜ **Importer**). "
+            "Pour une **vraie synchro auto**, il faut publier un ICS via une **URL** ou implémenter l’**API Google Calendar** avec autorisation OAuth.")
+
+    df_ok = df.dropna(subset=['date_arrivee','date_depart']).copy()
+    if df_ok.empty:
+        st.warning("Aucune réservation avec dates valides.")
+        return
+
+    col1, col2 = st.columns(2)
+    years = sorted(df_ok['date_arrivee'].apply(lambda d: d.year).unique())
+    annee = col1.selectbox("Filtrer Année (arrivée)", years, index=len(years)-1)
+    plateformes = sorted(df_ok['plateforme'].dropna().unique())
+    plats = col2.multiselect("Plateformes", plateformes, default=plateformes)
+
+    df_ok = df_ok[(df_ok['date_arrivee'].apply(lambda d: d.year) == annee) & (df_ok['plateforme'].isin(plats))]
+
+    c3, c4, c5 = st.columns(3)
+    create_missing_uid = c3.toggle("Créer et sauvegarder les UID manquants", value=True)
+    include_paid = c4.toggle("Inclure les réservations non payées", value=True)
+    include_sms_sent = c5.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
+
+    if not include_paid:
+        df_ok = df_ok[df_ok['paye'] == True]
+    if not include_sms_sent:
+        df_ok = df_ok[df_ok['sms_envoye'] == False]
+
+    if df_ok.empty:
+        st.warning("Rien à exporter avec ces filtres.")
+        return
+
+    # Assurer les UID
+    missing_uid_mask = df_ok['ical_uid'].isna() | (df_ok['ical_uid'].astype(str).str.strip() == "")
+    if missing_uid_mask.any():
+        df_ok.loc[missing_uid_mask, 'ical_uid'] = df_ok[missing_uid_mask].apply(_build_uid, axis=1)
+
+    # Optionnel : persister les UID manquants
+    if create_missing_uid and missing_uid_mask.any():
+        try:
+            df.loc[df_ok.index, 'ical_uid'] = df_ok['ical_uid']
+            if sauvegarder_donnees_csv(df):
+                st.success(f"UID créés et sauvegardés pour {missing_uid_mask.sum()} réservation(s).")
+        except Exception as e:
+            st.error(f"Impossible de sauvegarder les UID : {e}")
+
+    # Construction ICS
+    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Villa Tobias//Reservations//FR",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+    ]
+
+    for _, r in df_ok.iterrows():
+        da = r['date_arrivee']
+        dd = r['date_depart']  # DTEND all-day est exclusif -> parfait pour la date de départ
+        if not isinstance(da, date) or not isinstance(dd, date):
+            continue
+        uid = r.get('ical_uid') or _build_uid(r)
+        summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
+        if r.get('plateforme'):
+            summary += f" ({r['plateforme']})"
+        desc_parts = [
+            f"Client: {r.get('nom_client','')}",
+            f"Téléphone: {r.get('telephone','')}",
+            f"Plateforme: {r.get('plateforme','')}",
+            f"Nuitées: {int(r.get('nuitees') or 0)}",
+            f"Prix brut: {float(r.get('prix_brut') or 0):.2f} €",
+            f"Prix net: {float(r.get('prix_net') or 0):.2f} €",
+            f"Payé: {'Oui' if bool(r.get('paye')) else 'Non'}",
+        ]
+        desc = _escape_text("\n".join(desc_parts))
+
+        color = palette.get(r.get('plateforme'), None)  # non standard ICS, on peut ignorer
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{nowstamp}",
+            f"DTSTART;VALUE=DATE:{_fmt_ics_date(da)}",
+            f"DTEND;VALUE=DATE:{_fmt_ics_date(dd)}",
+            f"SUMMARY:{_escape_text(summary)}",
+            f"DESCRIPTION:{desc}",
+            "TRANSP:OPAQUE",
+            "END:VEVENT",
+        ]
+
+    lines.append("END:VCALENDAR")
+    ics_content = "\r\n".join(lines) + "\r\n"
+
+    st.download_button("📥 Télécharger le fichier ICS", data=ics_content.encode('utf-8'),
+                       file_name=f"villa_tobias_{annee}.ics", mime="text/calendar")
+
+    with st.expander("Aide : éviter les doublons dans Google Calendar"):
+        st.markdown("""
+- L’**import ICS** dans Google Calendar **ajoute** des événements. Il ne met pas à jour les anciens imports.
+- Grâce au champ **UID** (colonne `ical_uid`), vos événements ont une identité stable.  
+  Pour une **mise à jour automatique**, il faut **s’abonner** à une **URL ICS** (Google rafraîchit périodiquement).  
+  Depuis cette app locale, on ne peut pas publier d’URL stable.
+- Alternatives :
+  1. Hébergez le `.ics` sur un serveur (ex : Drive/Dropbox public, ou votre site) et **Ajoutez un agenda à partir d’une URL** dans Google Calendar.
+  2. Implémentez l’**API Google Calendar** côté serveur (OAuth) pour créer/mettre à jour/supprimer directement.
+        """)
+
 def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
@@ -671,10 +795,11 @@ def main():
         "📊 Rapport": vue_rapport,
         "👥 Liste des Clients": vue_liste_clients,
         "✉️ SMS": vue_sms,
+        "📆 Export ICS (Google Calendar)": vue_export_ics,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport"]:
+    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)"]:
         page_function(df, palette)
     else:
         page_function(df)
