@@ -1,14 +1,16 @@
 # app.py — Villa Tobias (COMPLET)
-# - Checkboxes Payé/SMS dans 📋 Réservations (éditables + sauvegarde)
-# - Onglet SMS : filtre "non cochés", nettoyage téléphone, debug, et bouton "Marquer comme envoyé"
+# - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde)
+# - SMS : filtre "non cochés", nettoyage téléphone, debug, bouton "Marquer comme envoyé"
+# - Rapport : graphique mensuel par année & plateformes, métrique au choix (barres groupées)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import os
 import calendar
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from urllib.parse import quote
+import altair as alt  # <- pour les graphes de l'onglet Rapport
 
 # --- Configuration des Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -420,29 +422,96 @@ def vue_calendrier(df, palette):
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance")
-    df_dates_valides = df.dropna(subset=['AAAA', 'MM', 'plateforme'])
-    if df_dates_valides.empty:
+
+    # Données valides
+    data = df.dropna(subset=['AAAA', 'MM', 'plateforme']).copy()
+    if data.empty:
         st.info("Aucune donnée pour générer un rapport.")
         return
-    c1, c2, c3 = st.columns(3)
-    annees = sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
-    annee_selectionnee = c1.selectbox("Année", annees)
-    mois_options = ["Tous"] + list(range(1, 13))
-    mois_selectionne = c2.selectbox("Mois", mois_options)
-    plateformes_options = ["Toutes"] + sorted(df_dates_valides['plateforme'].dropna().unique())
-    plateforme_selectionnee = c3.selectbox("Plateforme", plateformes_options)
-    data = df_dates_valides[df_dates_valides['AAAA'] == annee_selectionnee]
-    if mois_selectionne != "Tous": data = data[data['MM'] == mois_selectionne]
-    if plateforme_selectionnee != "Toutes": data = data[data['plateforme'] == plateforme_selectionnee]
-    st.markdown("---")
+
+    # Sélecteurs
+    c1, c2, c3 = st.columns([1, 1, 2])
+    annees = sorted(data['AAAA'].astype(int).unique(), reverse=True)
+    annee = c1.selectbox("Année", annees, index=0)
+
+    plateformes = sorted(data['plateforme'].dropna().unique())
+    plateformes_sel = c2.multiselect("Plateformes", plateformes, default=plateformes)
+
+    # Choix métrique
+    metrics = {
+        "Prix brut (€)": "prix_brut",
+        "Prix net (€)": "prix_net",
+        "Ménage (€)": "menage",
+        "Commissions (€)": "commissions",
+        "Frais CB (€)": "frais_cb",
+        "Base (€)": "base",
+        "Charges (€)": "charges",
+        "Nuitées": "nuitees",
+    }
+    metric_label = c3.selectbox("Métrique", list(metrics.keys()), index=0)
+    metric = metrics[metric_label]
+
+    # Filtrage
+    data = data[(data['AAAA'].astype(int) == int(annee)) & (data['plateforme'].isin(plateformes_sel))].copy()
     if data.empty:
         st.warning("Aucune donnée pour les filtres sélectionnés.")
         return
-    kpi_chips(data)
-    st.subheader("Revenus bruts par Plateforme")
-    chart_data = data.groupby("plateforme")['prix_brut'].sum().sort_values(ascending=False)
-    if not chart_data.empty:
-        st.bar_chart(chart_data)
+
+    # Construire une date au 1er du mois pour l'axe X
+    data['date_mois'] = pd.to_datetime(dict(year=data['AAAA'].astype(int), month=data['MM'].astype(int), day=1))
+
+    # Agrégation mensuelle par plateforme
+    grp = (data
+           .groupby(['plateforme', 'date_mois'], as_index=False)
+           .agg({metric: 'sum'}))
+
+    # Forcer les 12 mois (si certains mois manquent) pour chaque plateforme
+    all_months = pd.date_range(f"{annee}-01-01", f"{annee}-12-01", freq='MS')
+    frames = []
+    for p in plateformes_sel:
+        g = grp[grp['plateforme'] == p].set_index('date_mois').reindex(all_months).fillna({metric: 0.0})
+        g['plateforme'] = p
+        g = g.reset_index().rename(columns={'index': 'date_mois'})
+        frames.append(g)
+    grp_full = pd.concat(frames, ignore_index=True)
+
+    # Palette Altair conforme à la palette appli
+    domain = list(palette.keys())
+    range_ = [palette[k] for k in domain]
+    # Assurer que toutes les plateformes sélectionnées aient une couleur (fallback #888)
+    color_map = {p: palette.get(p, '#888') for p in plateformes_sel}
+    domain_sel = list(color_map.keys())
+    range_sel = [color_map[p] for p in domain_sel]
+
+    # Graphique: barres groupées par mois/plateforme
+    chart = (
+        alt.Chart(grp_full)
+        .mark_bar()
+        .encode(
+            x=alt.X('yearmonth(date_mois):T', title='Mois'),
+            xOffset=alt.X('plateforme:N', title=None),
+            y=alt.Y(f'{metric}:Q', title=metric_label),
+            color=alt.Color('plateforme:N',
+                            title="Plateforme",
+                            scale=alt.Scale(domain=domain_sel, range=range_sel)),
+            tooltip=[
+                alt.Tooltip('plateforme:N', title='Plateforme'),
+                alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                alt.Tooltip(f'{metric}:Q', title=metric_label, format='.2f' if metric != 'nuitees' else '.0f')
+            ]
+        )
+        .properties(height=420)
+        .interactive()
+    )
+
+    st.altair_chart(chart, use_container_width=True)
+
+    # Petits totaux sous le graphe
+    with st.expander("Totaux par plateforme sur l'année sélectionnée"):
+        totals = (grp_full.groupby('plateforme')[metric].sum()
+                  .sort_values(ascending=False)
+                  .rename(metric_label))
+        st.dataframe(totals.to_frame(), use_container_width=True)
 
 def vue_liste_clients(df):
     st.header("👥 Liste des Clients")
@@ -464,15 +533,15 @@ def vue_sms(df):
     # 2) Filtrer: nom_client, téléphone, date_arrivee présents
     df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee']).copy()
 
-    # 3) Nettoyer les numéros: garder uniquement les chiffres (ex "+33 (0)6-12 34.56.78" -> "330612345678")
+    # 3) Nettoyer les numéros: garder uniquement les chiffres
     df_tel['tel_clean'] = (
         df_tel['telephone']
         .astype(str)
         .str.replace(r'\D', '', regex=True)
-        .str.lstrip('0')  # optionnel: enlever les 0 en tête
+        .str.lstrip('0')  # optionnel
     )
 
-    # 4) Définir un numéro "valide": 9 à 15 chiffres (ajuster si besoin)
+    # 4) Numéro "valide": 9 à 15 chiffres (ajuster si besoin)
     mask_valid_phone = df_tel['tel_clean'].str.len().between(9, 15)
 
     # 5) Garder seulement SMS non envoyés + téléphone valide
