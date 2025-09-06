@@ -1,6 +1,7 @@
 # app.py — Villa Tobias (COMPLET)
-# - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde)
+# - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde) + email
 # - SMS : n'affiche que les clients "non cochés" (sms_envoye = False), nettoyage tél, debug, marquage envoyé
+#         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ)
 # - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes
 #             + Total mensuel optionnel + Cumuler (YTD) + Moyenne par nuitée
 #             + Export agrégé sans None/NaN + option "Masquer les zéros"
@@ -8,10 +9,10 @@
 #   * UID stables (v5) basés sur res_id + nom + téléphone
 #   * Toggle "Créer et sauvegarder les UID manquants"
 #   * OPTION B : Toggle "Ignorer les filtres et créer pour toute la base"
-# - Google Sheet / Form (Option 2) :
-#   * Onglet Formulaire (iframe Google Form)
-#   * Onglet Feuille intégrée (iframe)
-#   * Onglet Réponses (CSV publié)
+# - Google Form/Sheet (Option 2) :
+#   * Formulaire intégré PRÉREMPLI pour la réservation choisie
+#   * Feuille intégrée (iframe)
+#   * Réponses (CSV publié)
 
 import streamlit as st
 import pandas as pd
@@ -19,7 +20,7 @@ import numpy as np
 import os
 import calendar
 from datetime import date, timedelta, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, quote_plus
 import altair as alt
 import uuid, re, unicodedata  # pour res_id/UID stables
 
@@ -27,10 +28,17 @@ import uuid, re, unicodedata  # pour res_id/UID stables
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv"
 
-# --- Google Form / Sheet (Option 2 - fournis) ---
+# --- Google Form / Sheet (fournis) ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pubhtml?gid=1915058425&single=true"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
+
+# --- Google Form prefill (IDs extraits du lien prérempli) ---
+FORM_ENTRY_NOM = "entry.937556468"
+FORM_ENTRY_TEL = "entry.702324920"
+FORM_ENTRY_EMAIL = "entry.1712365042"      # optionnel si pas d'email en base
+FORM_ENTRY_ARRIVEE = "entry.1099006415"
+FORM_ENTRY_DEPART = "entry.2013910918"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -75,7 +83,7 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
 
 # ==============================  SCHEMA & DATA VALIDATION  ==============================
 BASE_COLS = [
-    'paye', 'nom_client', 'sms_envoye', 'plateforme', 'telephone', 'date_arrivee',
+    'paye', 'nom_client', 'email', 'sms_envoye', 'plateforme', 'telephone', 'date_arrivee',
     'date_depart', 'nuitees', 'prix_brut', 'commissions', 'frais_cb',
     'prix_net', 'menage', 'taxes_sejour', 'base', 'charges', '%',
     'AAAA', 'MM', 'res_id', 'ical_uid'
@@ -95,7 +103,7 @@ def ensure_schema(df):
 
     df_res = df.copy()
     rename_map = {'Payé':'paye','Client':'nom_client','Plateforme':'plateforme',
-                  'Arrivée':'date_arrivee','Départ':'date_depart','Nuits':'nuitees','Brut (€)':'prix_brut'}
+                  'Arrivée':'date_arrivee','Départ':'date_depart','Nuits':'nuitees','Brut (€)':'prix_brut','Email':'email'}
     df_res.rename(columns=rename_map, inplace=True)
 
     for col in BASE_COLS:
@@ -158,7 +166,7 @@ def build_stable_uid(row) -> str:
     ])
     return str(uuid.uuid5(NAMESPACE, canonical))
 
-# ============================== UTILITIES & HELPERS ==============================
+# ============================== HELPERS ==============================
 def is_dark_color(hex_color):
     try:
         hex_color = hex_color.lstrip('#')
@@ -197,6 +205,36 @@ def kpi_chips(df, title="Indicateurs Clés"):
     """
     st.markdown(html, unsafe_allow_html=True)
 
+# ------- Helper: URL Google Form préremplie -------
+def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None):
+    """
+    Construit l'URL du Google Form préremplie avec les champs disponibles.
+    - date_arrivee / date_depart : objets date OU chaînes 'YYYY-MM-DD'
+    """
+    base = GOOGLE_FORM_URL.split("?")[0]  # garde /viewform sans params
+
+    def to_ymd(d):
+        if d is None or (isinstance(d, float) and np.isnan(d)):
+            return ""
+        if isinstance(d, str):
+            return d
+        if isinstance(d, (pd.Timestamp, datetime)):
+            d = d.date()
+        if isinstance(d, date):
+            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
+        return ""
+
+    params = {}
+    if nom:   params[FORM_ENTRY_NOM] = str(nom)
+    if tel:   params[FORM_ENTRY_TEL] = str(tel)
+    if email: params[FORM_ENTRY_EMAIL] = str(email)
+    if date_arrivee: params[FORM_ENTRY_ARRIVEE] = to_ymd(date_arrivee)
+    if date_depart:  params[FORM_ENTRY_DEPART]  = to_ymd(date_depart)
+
+    if not params:
+        return base  # formulaire vierge
+    return f"{base}?{urlencode(params, quote_via=quote_plus)}"
+
 # ==============================  VIEWS (ONGLETS) ==============================
 def vue_reservations(df):
     st.header("📋 Liste des Réservations")
@@ -233,6 +271,7 @@ def vue_reservations(df):
     column_config = {
         "paye": st.column_config.CheckboxColumn("Payé"),
         "sms_envoye": st.column_config.CheckboxColumn("SMS envoyé"),
+        "email": st.column_config.TextColumn("Email"),
         "nuitees": st.column_config.NumberColumn("Nuits", format="%d"),
         "prix_brut": st.column_config.NumberColumn("Prix Brut", format="%.2f €"),
         "commissions": st.column_config.NumberColumn("Commissions", format="%.2f €"),
@@ -265,6 +304,8 @@ def vue_reservations(df):
                 if pd.isna(rid): continue
                 df.loc[rid,"paye"] = bool(row["paye"])
                 df.loc[rid,"sms_envoye"] = bool(row["sms_envoye"])
+                if "email" in row:
+                    df.loc[rid,"email"] = row["email"]
                 if isinstance(row.get("res_id"), str) and row["res_id"].strip() != "":
                     df.loc[rid,"res_id"] = row["res_id"].strip()
                 if isinstance(row.get("ical_uid"), str) and row["ical_uid"].strip() != "":
@@ -283,6 +324,7 @@ def vue_ajouter(df, palette):
         with c1:
             nom_client = st.text_input("**Nom du Client**")
             telephone = st.text_input("Téléphone")
+            email = st.text_input("Email (optionnel)")
             date_arrivee = st.date_input("**Date d'arrivée**", date.today())
             date_depart = st.date_input("**Date de départ**", date.today() + timedelta(days=1))
         with c2:
@@ -301,7 +343,7 @@ def vue_ajouter(df, palette):
             else:
                 nouvelle_ligne = pd.DataFrame([{
                     'res_id': str(uuid.uuid4()),
-                    'nom_client': nom_client, 'telephone': telephone,
+                    'nom_client': nom_client, 'telephone': telephone, 'email': email,
                     'date_arrivee': date_arrivee, 'date_depart': date_depart,
                     'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions,
                     'frais_cb': frais_cb, 'menage': menage, 'taxes_sejour': taxes_sejour,
@@ -330,6 +372,7 @@ def vue_modifier(df, palette):
             with c1:
                 nom_client = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
                 telephone = st.text_input("Téléphone", value=resa_selectionnee.get('telephone', ''))
+                email = st.text_input("Email (optionnel)", value=resa_selectionnee.get('email', '') if 'email' in resa_selectionnee else '')
                 date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee.get('date_arrivee'))
                 date_depart = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
             with c2:
@@ -342,8 +385,11 @@ def vue_modifier(df, palette):
                 paye = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
             if btn_enregistrer.form_submit_button("💾 Enregistrer"):
-                updates = {'nom_client': nom_client, 'telephone': telephone, 'date_arrivee': date_arrivee, 'date_depart': date_depart,
-                           'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye}
+                updates = {
+                    'nom_client': nom_client, 'telephone': telephone, 'email': email,
+                    'date_arrivee': date_arrivee, 'date_depart': date_depart,
+                    'plateforme': plateforme, 'prix_brut': prix_brut, 'commissions': commissions, 'paye': paye
+                }
                 for key, value in updates.items():
                     df.loc[original_index, key] = value
                 df_final = ensure_schema(df)
@@ -594,7 +640,7 @@ def vue_liste_clients(df):
     if df.empty:
         st.info("Aucun client.")
         return
-    clients = df[['nom_client','telephone','plateforme']].dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client')
+    clients = df[['nom_client','telephone','email','plateforme']].dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client')
     st.dataframe(clients, use_container_width=True)
 
 def vue_sms(df):
@@ -619,7 +665,7 @@ def vue_sms(df):
         st.write(f"- Manquants (tel/nom/date) : {manquants}")
         st.write(f"- Tél. hors plage (après nettoyage) : {hors_plage}")
         st.write(f"- Déjà cochés 'SMS envoyé' : {int(deja_coches)}")
-        st.dataframe(df_tel[['nom_client','telephone','tel_clean','sms_envoye','date_arrivee']].head(30), use_container_width=True)
+        st.dataframe(df_tel[['nom_client','telephone','email','tel_clean','sms_envoye','date_arrivee']].head(30), use_container_width=True)
     if df_tel.empty:
         st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé' ou numéros invalides.")
         return
@@ -630,6 +676,17 @@ def vue_sms(df):
         idx = int(selection.split(":")[0])
         resa = df_sorted.loc[idx]
         original_rowid = resa["_rowid"]
+
+        # 🔗 Lien Google Form PRÉREMPLI
+        email_val = resa.get('email') if 'email' in df_tel.columns else None
+        prefill_link = form_prefill_url(
+            nom         = resa.get('nom_client'),
+            tel         = resa.get('telephone'),
+            email       = email_val,
+            date_arrivee= resa.get('date_arrivee'),
+            date_depart = resa.get('date_depart')
+        )
+
         message_body = f"""VILLA TOBIAS
 Plateforme : {resa.get('plateforme', 'N/A')}
 Arrivée : {resa.get('date_arrivee').strftime('%d/%m/%Y')} Départ : {resa.get('date_depart').strftime('%d/%m/%Y')} Nuitées : {resa.get('nuitees', 0):.0f}
@@ -664,12 +721,13 @@ We wish you a wonderful trip and look forward to meeting you very soon.
 Annick & Charley 
 
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
+{prefill_link}"""
 
-https://urlr.me/Xu7Sq3"""
-        message_area = st.text_area("Message à envoyer", value=message_body, height=400)
+        message_area = st.text_area("Message à envoyer", value=message_body, height=420)
         encoded_message = quote(message_area)
         sms_link = f"sms:{resa['telephone']}?&body={encoded_message}"
         st.link_button("📲 Envoyer via Smartphone", sms_link)
+
         if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
             try:
                 df.loc[original_rowid,'sms_envoye'] = True
@@ -779,6 +837,7 @@ def vue_export_ics(df, palette):
         desc_parts = [
             f"Client: {r.get('nom_client','')}",
             f"Téléphone: {r.get('telephone','')}",
+            f"Email: {r.get('email','')}",
             f"Plateforme: {r.get('plateforme','')}",
             f"Nuitées: {int(r.get('nuitees') or 0)}",
             f"Prix brut: {float(r.get('prix_brut') or 0):.2f} €",
@@ -820,8 +879,27 @@ def vue_google_sheet(df, palette):
     tab_form, tab_sheet, tab_csv = st.tabs(["Formulaire (intégré)", "Feuille intégrée", "Réponses (CSV)"])
 
     with tab_form:
-        st.caption("Formulaire Google intégré (les réponses vont directement dans la Google Sheet).")
-        st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
+        st.caption("Formulaire Google intégré (prérempli à partir d'une réservation).")
+        df_ok = df.dropna(subset=['nom_client','telephone','date_arrivee']).copy()
+        if df_ok.empty:
+            st.info("Aucune réservation exploitable pour préremplir le formulaire.")
+            st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
+        else:
+            df_ok = df_ok.sort_values('date_arrivee', ascending=False).reset_index()
+            options = {i: f"{row['nom_client']} — arrivée {row['date_arrivee']}" for i, row in df_ok.iterrows()}
+            choice = st.selectbox("Préremplir pour :", options=list(options.keys()),
+                                  format_func=lambda i: options[i], index=0)
+            sel = df_ok.loc[choice]
+            email_val = sel.get('email') if 'email' in df_ok.columns else None
+            url_prefill = form_prefill_url(
+                nom = sel.get('nom_client'),
+                tel = sel.get('telephone'),
+                email = email_val,
+                date_arrivee = sel.get('date_arrivee'),
+                date_depart  = sel.get('date_depart')
+            )
+            st.write("Lien direct :", url_prefill)
+            st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
         st.caption("Affichage intégré (lecture seule) de la feuille publiée.")
