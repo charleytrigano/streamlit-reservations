@@ -1,17 +1,13 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde) + email
 #   -> data_editor robuste : colonnes et formats générés dynamiquement selon les dtypes
-# - SMS : seulement clients non cochés (sms_envoye=False), nettoyage tél, debug, marquage envoyé
+# - SMS : clients non cochés (sms_envoye=False), nettoyage tél, debug, marquage envoyé
+#         + Liens iPhone/Android/WhatsApp + bouton Copier
 #         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métrique au choix, année/plateformes, barres groupées/empilées/courbes,
 #             total mensuel optionnel, cumul (YTD), moyenne / nuitée, export CSV (sans None/NaN)
-# - Export ICS (Google Calendar) :
-#   * UID stables (v5) basés sur res_id + nom + téléphone
-#   * Création/sauvegarde des IDs manquants
-#   * Option B : ignorer les filtres pour créer les IDs sur toute la base
-# - Google Form/Sheet (Option 2) :
-#   * Formulaire intégré PRÉREMPLI
-#   * Feuille intégrée (iframe) + lecture CSV publié
+# - Export ICS (Google Calendar) : UID stables (v5) basés sur res_id + nom + téléphone
+# - Google Form/Sheet : Form intégré PRÉREMPLI, Feuille intégrée (iframe), lecture CSV publié
 
 import streamlit as st
 import pandas as pd
@@ -21,7 +17,7 @@ import calendar
 from datetime import date, timedelta, datetime
 from urllib.parse import quote, urlencode, quote_plus
 import altair as alt
-import uuid, re, unicodedata  # pour res_id/UID stables
+import uuid, re, unicodedata, json  # uid stables + nettoyage + copier message
 
 # --- Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -30,23 +26,21 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 
-# ⬇️ Feuille intégrée : URL raccourcie fournie
+# Feuille intégrée : URL raccourcie fournie
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
 
-# Réponses publiées (CSV) : garde l'URL publish-to-web CSV (à adapter si tu as un raccourci CSV dédié)
+# Réponses publiées (CSV) : garder l'URL publish-to-web CSV
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs des champs (préremplissage) — RENSEIGNE ces 3 nouveaux si tu veux les préremplir
+# IDs des champs (préremplissage) — de ton lien fourni
 FORM_ENTRY_NOM      = "entry.937556468"
 FORM_ENTRY_TEL      = "entry.702324920"
 FORM_ENTRY_EMAIL    = "entry.1712365042"
 FORM_ENTRY_ARRIVEE  = "entry.1099006415"
 FORM_ENTRY_DEPART   = "entry.2013910918"
-
-# ✅ NOUVEAUX CHAMPS (laisser "" tant que tu n'as pas les IDs ; l'app les ignorera)
-FORM_ENTRY_PLATEFORME = "entry.528935650"  
-FORM_ENTRY_NUITEES    = "entry.473651945"  
-FORM_ENTRY_RESID      = "entry.2071395456"  
+FORM_ENTRY_PLATEFORME = "entry.528935650"     # Plateforme
+FORM_ENTRY_NUITEES    = "entry.473651945"     # Nuitées
+FORM_ENTRY_RESID      = "entry.2071395456"    # ID interne (res_id)
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -215,7 +209,6 @@ def _ensure_res_id_on_row(df, idx):
     if (cur is None) or (str(cur).strip() == "") or (str(cur).lower() == "nan"):
         new_id = str(uuid.uuid4())
         df.at[idx, 'res_id'] = new_id
-        # On persiste discrètement
         try:
             sauvegarder_donnees_csv(ensure_schema(df))
         except Exception:
@@ -238,8 +231,6 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
     if email: params[FORM_ENTRY_EMAIL] = str(email)
     if date_arrivee: params[FORM_ENTRY_ARRIVEE] = to_ymd(date_arrivee)
     if date_depart:  params[FORM_ENTRY_DEPART]  = to_ymd(date_depart)
-
-    # ✅ Nouveaux champs — uniquement si les entry IDs sont renseignés
     if FORM_ENTRY_PLATEFORME and plateforme:
         params[FORM_ENTRY_PLATEFORME] = str(plateforme)
     if FORM_ENTRY_NUITEES and (nuitees is not None):
@@ -249,7 +240,6 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
             params[FORM_ENTRY_NUITEES] = str(nuitees)
     if FORM_ENTRY_RESID and res_id:
         params[FORM_ENTRY_RESID] = str(res_id)
-
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
 
 # ==============================  VUES  ==============================
@@ -285,7 +275,7 @@ def vue_reservations(df):
         if bcol in df_sorted.columns:
             df_sorted[bcol] = _to_bool_series(df_sorted[bcol]).fillna(False).astype(bool)
 
-    # --- Casts robustes AVANT data_editor ---
+    # Casts robustes avant data_editor
     df_edit = df_sorted.copy()
     for c in ['date_arrivee', 'date_depart']:
         if c in df_edit.columns:
@@ -301,7 +291,7 @@ def vue_reservations(df):
     if "_rowid" in df_edit.columns:
         df_edit["_rowid"] = df_edit["_rowid"].astype(str)
 
-    # ---------- Configuration DYNAMIQUE ----------
+    # Configuration dynamique
     col_order = list(df_edit.columns)
     if "_rowid" in col_order:
         col_order = [c for c in col_order if c != "_rowid"] + ["_rowid"]
@@ -716,6 +706,7 @@ def vue_sms(df):
         df['sms_envoye'] = _to_bool_series(df['sms_envoye']).fillna(False).astype(bool)
     else:
         df['sms_envoye'] = False
+
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     mask_valid_phone = df_tel['tel_clean'].str.len().between(9,15)
@@ -747,7 +738,7 @@ def vue_sms(df):
         resa = df_sorted.loc[idx]
         original_rowid = resa["_rowid"]
 
-        # ✅ s'assurer d'avoir un res_id persistant
+        # s'assurer d'avoir un res_id persistant
         res_id_val = _ensure_res_id_on_row(df, original_rowid)
 
         email_val = resa.get('email') if 'email' in df_tel.columns else None
@@ -798,10 +789,42 @@ Annick & Charley
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
 {prefill_link}"""
 
-        message_area = st.text_area("Message à envoyer", value=message_body, height=420)
-        encoded_message = quote(message_area)
-        sms_link = f"sms:{resa['telephone']}?&body={encoded_message}"
-        st.link_button("📲 Envoyer via Smartphone", sms_link)
+        # --- Encodage du message
+        encoded_message = quote(message_body)
+
+        # --- Normalisation du numéro (France) -> format E.164
+        raw_phone = str(resa['telephone'])
+        clean = re.sub(r"\D", "", raw_phone)
+        if raw_phone.strip().startswith("+"):
+            e164_phone = raw_phone.strip()
+        elif clean.startswith("0") and len(clean) == 10:
+            e164_phone = "+33" + clean[1:]
+        elif clean:
+            e164_phone = "+33" + clean
+        else:
+            e164_phone = raw_phone.strip()
+
+        # --- Liens SMS & WhatsApp
+        sms_link_ios = f"sms:&body={encoded_message}"                  # iOS
+        sms_link_android = f"sms:{e164_phone}?body={encoded_message}"  # Android
+        wa_number = re.sub(r"\D", "", e164_phone)                      # chiffres only
+        wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"  # WhatsApp
+
+        c_ios, c_and, c_wa, c_copy = st.columns([1,1,1,1])
+        with c_ios:
+            st.link_button("📲 iPhone SMS", sms_link_ios)
+        with c_and:
+            st.link_button("🤖 Android SMS", sms_link_android)
+        with c_wa:
+            st.link_button("🟢 WhatsApp", wa_link)
+
+        # Bouton copier
+        st.components.v1.html(f"""
+            <button onclick="navigator.clipboard.writeText({json.dumps(message_body)})"
+                    style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                📋 Copier le message
+            </button>
+        """, height=50)
 
         if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
             try:
@@ -930,7 +953,7 @@ def vue_google_sheet(df, palette):
                                   format_func=lambda i: options[i], index=0)
             sel = df_ok.loc[choice]
 
-            # ✅ s'assurer d'avoir un res_id persistant aussi depuis cet onglet
+            # s'assurer d'avoir un res_id persistant aussi depuis cet onglet
             res_id_val = _ensure_res_id_on_row(df, sel['index'])
 
             email_val = sel.get('email') if 'email' in df_ok.columns else None
