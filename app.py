@@ -1,4 +1,4 @@
-# app.py — Villa Tobias (COMPLET) - Checkboxes éditables pour SMS
+# app.py — Villa Tobias (COMPLET) - Checkboxes éditables Payé / SMS envoyé
 
 import streamlit as st
 import pandas as pd
@@ -46,14 +46,11 @@ def sauvegarder_donnees_csv(df, file_path=CSV_RESERVATIONS):
     """Sauvegarde le DataFrame dans le fichier CSV spécifié."""
     try:
         df_to_save = df.copy()
-        # Garder uniquement les colonnes du schéma
         colonnes_a_sauvegarder = [col for col in BASE_COLS if col in df_to_save.columns]
         df_to_save = df_to_save[colonnes_a_sauvegarder]
-
         for col in ['date_arrivee', 'date_depart']:
             if col in df_to_save.columns:
                 df_to_save[col] = pd.to_datetime(df_to_save[col]).dt.strftime('%d/%m/%Y')
-
         df_to_save.to_csv(file_path, sep=';', index=False)
         st.cache_data.clear()
         return True
@@ -69,61 +66,61 @@ BASE_COLS = [
     'AAAA', 'MM', 'ical_uid'
 ]
 
+def _to_bool_series(s):
+    # Convertit proprement en bool (gère Oui/Vrai/True/1, None/NaN -> False)
+    return (
+        s.astype(str)
+         .str.strip()
+         .str.upper()
+         .isin(['OUI','VRAI','TRUE','1','YES','Y'])
+    ) if s.dtype == 'object' else s.fillna(False).astype(bool)
+
 def ensure_schema(df):
-    if df.empty:
+    if df.empty: 
         out = pd.DataFrame(columns=BASE_COLS)
-        # valeurs par défaut booleans
-        out['paye'] = out.get('paye', False)
-        out['sms_envoye'] = out.get('sms_envoye', False)
+        out['paye'] = False
+        out['sms_envoye'] = False
         return out
 
     df_res = df.copy()
-    rename_map = {
-        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme',
+    rename_map = { 
+        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme', 
         'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
         'Brut (€)': 'prix_brut'
     }
     df_res.rename(columns=rename_map, inplace=True)
 
     for col in BASE_COLS:
-        if col not in df_res.columns:
+        if col not in df_res.columns: 
             df_res[col] = None
 
     # Dates
     for col in ["date_arrivee", "date_depart"]:
         df_res[col] = pd.to_datetime(df_res[col], dayfirst=True, errors='coerce')
-
     mask_dates = pd.notna(df_res["date_arrivee"]) & pd.notna(df_res["date_depart"])
     df_res.loc[mask_dates, "nuitees"] = (df_res.loc[mask_dates, "date_depart"] - df_res.loc[mask_dates, "date_arrivee"]).dt.days
-
     for col in ["date_arrivee", "date_depart"]:
         df_res[col] = df_res[col].dt.date
 
-    # Booléens
-    if df_res['paye'].dtype == 'object':
-        df_res['paye'] = df_res['paye'].astype(str).str.strip().str.upper().isin(['VRAI','TRUE','OUI','1'])
-    df_res['paye'] = df_res['paye'].fillna(False).astype(bool)
-
-    if df_res['sms_envoye'].dtype == 'object':
-        df_res['sms_envoye'] = df_res['sms_envoye'].astype(str).str.strip().str.upper().isin(['VRAI','TRUE','OUI','1'])
-    df_res['sms_envoye'] = df_res['sms_envoye'].fillna(False).astype(bool)
+    # Booléens (normalisation stricte)
+    df_res['paye'] = _to_bool_series(df_res['paye']).fillna(False).astype(bool)
+    df_res['sms_envoye'] = _to_bool_series(df_res['sms_envoye']).fillna(False).astype(bool)
 
     # Numériques
-    numeric_cols = ['prix_brut','commissions','frais_cb','menage','taxes_sejour']
-    for col in numeric_cols:
+    for col in ['prix_brut', 'commissions', 'frais_cb', 'menage', 'taxes_sejour']:
         if df_res[col].dtype == 'object':
             df_res[col] = (df_res[col].astype(str)
-                           .str.replace('€','',regex=False)
-                           .str.replace(',','.',regex=False)
-                           .str.replace(' ','',regex=False)
-                           .str.strip())
+                .str.replace('€', '', regex=False)
+                .str.replace(',', '.', regex=False)
+                .str.replace(' ', '', regex=False)
+                .str.strip()
+            )
         df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0)
 
     # Calculs
     df_res['prix_net'] = df_res['prix_brut'].fillna(0) - df_res['commissions'].fillna(0) - df_res['frais_cb'].fillna(0)
     df_res['charges'] = df_res['prix_brut'].fillna(0) - df_res['prix_net'].fillna(0)
     df_res['base'] = df_res['prix_net'].fillna(0) - df_res['menage'].fillna(0) - df_res['taxes_sejour'].fillna(0)
-
     with np.errstate(divide='ignore', invalid='ignore'):
         df_res['%'] = np.where(df_res['prix_brut'] > 0, (df_res['charges'] / df_res['prix_brut'] * 100), 0)
 
@@ -131,7 +128,7 @@ def ensure_schema(df):
     date_arrivee_dt = pd.to_datetime(df_res["date_arrivee"], errors='coerce')
     df_res.loc[pd.notna(date_arrivee_dt), 'AAAA'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.year
     df_res.loc[pd.notna(date_arrivee_dt), 'MM'] = date_arrivee_dt[pd.notna(date_arrivee_dt)].dt.month
-
+    
     return df_res
 
 # ============================== UTILITIES & HELPERS ==============================
@@ -141,7 +138,7 @@ def is_dark_color(hex_color):
         rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
         luminance = (0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2]) / 255
         return luminance < 0.5
-    except (ValueError, TypeError):
+    except (ValueError, TypeError): 
         return True
 
 def kpi_chips(df, title="Indicateurs Clés"):
@@ -179,9 +176,9 @@ def vue_reservations(df):
     if df.empty:
         st.info("Aucune réservation trouvée.")
         return
-
+    
     df_dates_valides = df.dropna(subset=['AAAA', 'MM'])
-
+    
     c1, c2, c3 = st.columns(3)
     annees = ["Toutes"] + sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
     annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
@@ -200,12 +197,15 @@ def vue_reservations(df):
 
     kpi_chips(data_filtree, title="Totaux pour la Sélection")
     st.markdown("---")
-
-    # Garder l'index d'origine pour savoir quelle ligne sauvegarder
+    
     df_sorted = data_filtree.sort_values(by="date_arrivee", ascending=False, na_position='last').copy()
-    df_sorted["_rowid"] = df_sorted.index  # identifiant caché
+    df_sorted["_rowid"] = df_sorted.index  # identifiant pour sauvegarde
 
-    # Éditeur avec cases à cocher
+    # >>> FORÇAGE DU TYPE BOOL (clé pour l'affichage en cases à cocher)
+    for bcol in ["paye", "sms_envoye"]:
+        if bcol in df_sorted.columns:
+            df_sorted[bcol] = _to_bool_series(df_sorted[bcol]).fillna(False).astype(bool)
+
     column_config = {
         "paye": st.column_config.CheckboxColumn("Payé"),
         "sms_envoye": st.column_config.CheckboxColumn("SMS envoyé"),
@@ -220,38 +220,40 @@ def vue_reservations(df):
         "MM": st.column_config.NumberColumn("Mois", format="%d"),
         "date_arrivee": st.column_config.DateColumn("Arrivée", format="DD/MM/YYYY"),
         "date_depart": st.column_config.DateColumn("Départ", format="DD/MM/YYYY"),
-        "_rowid": st.column_config.TextColumn("_rowid", help="ID interne", disabled=True)
+        "_rowid": st.column_config.TextColumn("", help="ID interne", disabled=True),
     }
 
-    # On affiche l'éditeur (éditable) — on laisse toutes colonnes visibles,
-    # mais on peut masquer _rowid via column_order si tu préfères.
+    # Masquer _rowid visuellement
+    col_order = [c for c in df_sorted.columns if c != "_rowid"] + ["_rowid"]
+
     edited = st.data_editor(
         df_sorted,
         column_config=column_config,
+        column_order=col_order,
         use_container_width=True,
         num_rows="fixed",
         hide_index=True,
         key="editor_reservations"
     )
 
-    # Bouton de sauvegarde : on pousse seulement paye & sms_envoye vers le DF d'origine
     if st.button("💾 Enregistrer les modifications"):
         try:
-            # S'assurer des types
-            edited["paye"] = edited["paye"].fillna(False).astype(bool)
-            edited["sms_envoye"] = edited["sms_envoye"].fillna(False).astype(bool)
+            # Types sûrs après édition
+            for bcol in ["paye","sms_envoye"]:
+                if bcol in edited.columns:
+                    edited[bcol] = edited[bcol].fillna(False).astype(bool)
 
-            # Mise à jour ciblée via l'index d'origine
+            # Repercute seulement les 2 colonnes bool sur le DF original via _rowid
             for _, row in edited.iterrows():
                 rid = row["_rowid"]
-                if pd.isna(rid):  # sécurité
+                if pd.isna(rid):
                     continue
                 df.loc[rid, "paye"] = bool(row["paye"])
                 df.loc[rid, "sms_envoye"] = bool(row["sms_envoye"])
 
             df_final = ensure_schema(df)
             if sauvegarder_donnees_csv(df_final):
-                st.success("Statuts mis à jour et sauvegardés ✅")
+                st.success("Statuts Payé / SMS mis à jour ✅")
                 st.rerun()
         except Exception as e:
             st.error(f"Impossible de sauvegarder : {e}")
