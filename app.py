@@ -8,9 +8,10 @@
 #   * UID stables (v5) basés sur res_id + nom + téléphone
 #   * Toggle "Créer et sauvegarder les UID manquants"
 #   * OPTION B : Toggle "Ignorer les filtres et créer pour toute la base"
-# - Google Sheet (Option 2) :
-#   * Onglet avec feuille intégrée (iframe)
-#   * Onglet avec lecture du CSV publié (Publier sur le Web)
+# - Google Sheet / Form (Option 2) :
+#   * Onglet Formulaire (iframe Google Form)
+#   * Onglet Feuille intégrée (iframe)
+#   * Onglet Réponses (CSV publié)
 
 import streamlit as st
 import pandas as pd
@@ -26,7 +27,8 @@ import uuid, re, unicodedata  # pour res_id/UID stables
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES = "reservations.xlsx - Plateformes.csv"
 
-# --- Google Sheet (Option 2 - fourni par toi) ---
+# --- Google Form / Sheet (Option 2 - fournis) ---
+GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pubhtml?gid=1915058425&single=true"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
@@ -405,7 +407,7 @@ def vue_calendrier(df, palette):
     st.subheader("Détails des réservations du mois")
     start_of_month = date(selected_year, selected_month, 1)
     end_of_month = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
-    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & (df_dates_valides['date_depart'] > start_of_month)].sort_values(by="date_arrivee").reset_index()
+    reservations_du_mois = df_dates_valides[(df_dates_valides['date_arrivee'] <= end_of_month) & df_dates_valides['date_depart'].gt(start_of_month)].sort_values(by="date_arrivee").reset_index()
     if not reservations_du_mois.empty:
         options = {f"{row['nom_client']} ({row['date_arrivee'].strftime('%d/%m')})": idx for idx, row in reservations_du_mois.iterrows()}
         selection_str = st.selectbox("Voir les détails :", options=options.keys(), index=None, placeholder="Choisissez une réservation...")
@@ -811,17 +813,21 @@ def vue_export_ics(df, palette):
 - Pour une synchro directe (création/màj/suppression), utiliser l’**API Google Calendar** (OAuth).
         """)
 
-# ==============================  GOOGLE SHEET (Option 2) ==============================
+# ==============================  GOOGLE SHEET / FORM (Option 2) ==============================
 def vue_google_sheet(df, palette):
-    st.header("📝 Fiche d'arrivée — Google Sheet")
+    st.header("📝 Fiche d'arrivée — Google Form & Sheet")
 
-    tab1, tab2 = st.tabs(["Feuille intégrée", "Réponses (CSV)"])
+    tab_form, tab_sheet, tab_csv = st.tabs(["Formulaire (intégré)", "Feuille intégrée", "Réponses (CSV)"])
 
-    with tab1:
+    with tab_form:
+        st.caption("Formulaire Google intégré (les réponses vont directement dans la Google Sheet).")
+        st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
+
+    with tab_sheet:
         st.caption("Affichage intégré (lecture seule) de la feuille publiée.")
         st.components.v1.iframe(GOOGLE_SHEET_EMBED_URL, height=900, scrolling=True)
 
-    with tab2:
+    with tab_csv:
         st.caption("Lecture directe via l’URL 'Publier sur le Web' (CSV).")
         try:
             reponses = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
