@@ -602,7 +602,7 @@ def vue_rapport(df, palette):
     domain_sel = list(color_map.keys())
     range_sel = [color_map[p] for p in domain_sel]
 
-    if avg_per_night && chart_type == "Barres empilées (total mensuel)":
+    if avg_per_night and chart_type == "Barres empilées (total mensuel)":
         st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
         chart_type = "Barres groupées"
 
