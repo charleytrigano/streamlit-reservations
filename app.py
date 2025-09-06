@@ -29,7 +29,7 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
-GOOGLE_SHEET_EMBED_URL = "GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
+GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
 # IDs des champs (préremplissage)
