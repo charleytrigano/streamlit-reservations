@@ -1,7 +1,8 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde)
 # - SMS : filtre "non cochés", nettoyage téléphone, debug, bouton "Marquer comme envoyé"
-# - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes + total mensuel empilé + export
+# - Rapport : métrique au choix, année/plateformes, barres groupées, empilées, courbes
+#             + option Total mensuel + option Cumuler (YTD) + option Moyenne par nuitée
 
 import streamlit as st
 import pandas as pd
@@ -360,6 +361,9 @@ def vue_calendrier(df, palette):
     else:
         st.info("Aucune réservation pour ce mois.")
 
+def _safe_div(num, den):
+    return np.where(den > 0, num / den, np.nan)
+
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance")
 
@@ -388,10 +392,18 @@ def vue_rapport(df, palette):
     metric_label = c3.selectbox("Métrique", list(metrics.keys()), index=0)
     metric = metrics[metric_label]
 
-    # Type de graphique
-    c4, c5 = st.columns([1,1])
+    c4, c5, c6 = st.columns([1,1,1])
     chart_type = c4.selectbox("Type de graphique", ["Barres groupées", "Barres empilées (total mensuel)", "Courbes"], index=0)
-    show_totals = c5.toggle("Afficher aussi le total mensuel toutes plateformes (empilé)", value=False)
+    show_totals = c5.toggle("Afficher aussi le total mensuel", value=False)
+    avg_per_night = c6.toggle("Moyenne par nuitée", value=False)
+
+    c7 = st.columns(1)[0]
+    cumulate = c7.toggle("Cumuler (YTD)", value=False)
+
+    # Rappel : "Moyenne par nuitée" ne s'applique pas à la métrique "Nuitées"
+    if avg_per_night and metric == "nuitees":
+        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à la métrique 'Nuitées'. Option ignorée.")
+        avg_per_night = False
 
     # Filtrage
     data = data[(data['AAAA'].astype(int) == int(annee)) & (data['plateforme'].isin(plateformes_sel))].copy()
@@ -402,23 +414,51 @@ def vue_rapport(df, palette):
     # Clé temps = 1er du mois
     data['date_mois'] = pd.to_datetime(dict(year=data['AAAA'].astype(int), month=data['MM'].astype(int), day=1))
 
-    # Agrégation mensuelle par plateforme
-    grp = (data.groupby(['plateforme','date_mois'], as_index=False).agg({metric:'sum'}))
+    # Agrégation mensuelle par plateforme (somme de la métrique + somme nuitées pour moyenne)
+    grp = (data.groupby(['plateforme','date_mois'], as_index=False)
+               .agg({metric:'sum', 'nuitees':'sum'}))
 
     # Forcer 12 mois pour chaque plateforme sélectionnée
     all_months = pd.date_range(f"{annee}-01-01", f"{annee}-12-01", freq='MS')
     frames = []
     for p in plateformes_sel:
-        g = grp[grp['plateforme']==p].set_index('date_mois').reindex(all_months).fillna({metric:0.0})
+        g = grp[grp['plateforme']==p].set_index('date_mois').reindex(all_months).fillna({metric:0.0,'nuitees':0.0})
         g['plateforme'] = p
         g = g.reset_index().rename(columns={'index':'date_mois'})
         frames.append(g)
     grp_full = pd.concat(frames, ignore_index=True)
 
+    # ----- Valeur à tracer : somme ou moyenne / nuit, puis éventuellement cumul (YTD)
+    # On crée une colonne 'value' et un label adapté
+    if avg_per_night:
+        # moyenne pondérée par nuitées
+        if cumulate:
+            grp_full = grp_full.sort_values(['plateforme','date_mois'])
+            grp_full['num_cum'] = grp_full.groupby('plateforme')[metric].cumsum()
+            grp_full['den_cum'] = grp_full.groupby('plateforme')['nuitees'].cumsum()
+            grp_full['value'] = _safe_div(grp_full['num_cum'], grp_full['den_cum'])
+            metric_label_plot = f"{metric_label} / nuit (cumul YTD)"
+        else:
+            grp_full['value'] = _safe_div(grp_full[metric], grp_full['nuitees'])
+            metric_label_plot = f"{metric_label} / nuit"
+    else:
+        if cumulate:
+            grp_full = grp_full.sort_values(['plateforme','date_mois'])
+            grp_full['value'] = grp_full.groupby('plateforme')[metric].cumsum()
+            metric_label_plot = f"{metric_label} (cumul YTD)"
+        else:
+            grp_full['value'] = grp_full[metric]
+            metric_label_plot = metric_label
+
     # Couleurs conformes à la palette
     color_map = {p: palette.get(p, '#888') for p in plateformes_sel}
     domain_sel = list(color_map.keys())
     range_sel = [color_map[p] for p in domain_sel]
+
+    # Si moyenne/nuit + "empilées" => on force en groupées (empiler des moyennes n'a pas de sens)
+    if avg_per_night and chart_type == "Barres empilées (total mensuel)":
+        st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
+        chart_type = "Barres groupées"
 
     base = alt.Chart(grp_full).encode(
         x=alt.X('yearmonth(date_mois):T', title='Mois'),
@@ -426,51 +466,98 @@ def vue_rapport(df, palette):
         tooltip=[
             alt.Tooltip('plateforme:N', title='Plateforme'),
             alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-            alt.Tooltip(f'{metric}:Q', title=metric_label, format='.2f' if metric != 'nuitees' else '.0f')
+            alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')
         ]
     )
 
     if chart_type == "Barres groupées":
         chart = base.mark_bar().encode(
-            y=alt.Y(f'{metric}:Q', title=metric_label),
+            y=alt.Y('value:Q', title=metric_label_plot),
             xOffset=alt.X('plateforme:N', title=None),
         )
     elif chart_type == "Barres empilées (total mensuel)":
         chart = base.mark_bar().encode(
-            y=alt.Y(f'{metric}:Q', title=metric_label, stack='zero'),
+            y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
         )
     else:  # Courbes
         chart = base.mark_line(point=True).encode(
-            y=alt.Y(f'{metric}:Q', title=metric_label),
+            y=alt.Y('value:Q', title=metric_label_plot),
         )
 
     st.altair_chart(chart.properties(height=420).interactive(), use_container_width=True)
 
-    # Optionnel : total mensuel toutes plateformes (empilé)
-    if show_totals and chart_type != "Barres empilées (total mensuel)":
-        st.markdown("**Total mensuel (toutes plateformes, barres empilées)**")
-        chart_tot = alt.Chart(grp_full).mark_bar().encode(
-            x=alt.X('yearmonth(date_mois):T', title='Mois'),
-            y=alt.Y(f'{metric}:Q', title=metric_label, stack='zero'),
-            color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
-            tooltip=[
-                alt.Tooltip('plateforme:N', title='Plateforme'),
-                alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                alt.Tooltip(f'{metric}:Q', title=metric_label, format='.2f' if metric != 'nuitees' else '.0f')
-            ],
-        )
-        st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+    # ----- Total mensuel additionnel
+    if show_totals:
+        if avg_per_night:
+            # moyenne pondérée toutes plateformes : somme(metric) / somme(nuitées)
+            tot = (grp_full.groupby('date_mois', as_index=False)
+                          .agg(num=('value','sum') if not cumulate else ('value','last')))  # placeholder, on recalcule proprement
+            # Recalcule proprement à partir de num/den (selon cumulate)
+            if cumulate:
+                # Repartons de grp_full original avec num_cum/den_cum : last par mois = total cumulé toutes plateformes → moyenne cumulative globale
+                # On refait un calcul clair :
+                if avg_per_night:
+                    # on doit repartir des sommes simples par mois puis cumuler globalement :
+                    month_sums = (grp.groupby('date_mois', as_index=False)
+                                     .agg(num=(''+metric,'sum'), den=('nuitees','sum')))
+                    month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
+                    month_sums['num_cum'] = month_sums['num'].cumsum()
+                    month_sums['den_cum'] = month_sums['den'].cumsum()
+                    month_sums['avg'] = _safe_div(month_sums['num_cum'], month_sums['den_cum'])
+                    chart_tot = (alt.Chart(month_sums)
+                                 .mark_line(point=True)
+                                 .encode(
+                                     x=alt.X('yearmonth(date_mois):T', title='Mois'),
+                                     y=alt.Y('avg:Q', title=f"{metric_label} / nuit (cumul YTD - total)"),
+                                     tooltip=[
+                                         alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                                         alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')
+                                     ]
+                                 ))
+                    st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+            else:
+                # moyenne mensuelle pondérée toutes plateformes (non cumulée)
+                month_sums = (grp.groupby('date_mois', as_index=False)
+                                 .agg(num=(metric,'sum'), den=('nuitees','sum')))
+                month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
+                month_sums['avg'] = _safe_div(month_sums['num'], month_sums['den'])
+                chart_tot = (alt.Chart(month_sums)
+                             .mark_line(point=True)
+                             .encode(
+                                 x=alt.X('yearmonth(date_mois):T', title='Mois'),
+                                 y=alt.Y('avg:Q', title=f"{metric_label} / nuit (total)"),
+                                 tooltip=[
+                                     alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                                     alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')
+                                 ]
+                             ))
+                st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+        else:
+            # somme toutes plateformes (empilé) — comme avant
+            st.markdown("**Total mensuel (toutes plateformes)**")
+            chart_tot = alt.Chart(grp_full).mark_bar().encode(
+                x=alt.X('yearmonth(date_mois):T', title='Mois'),
+                y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
+                color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
+                tooltip=[
+                    alt.Tooltip('plateforme:N', title='Plateforme'),
+                    alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
+                    alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' else '.0f')
+                ],
+            )
+            st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
 
     # Tableau + export
     with st.expander("Afficher les données agrégées et exporter"):
         display = grp_full.copy()
         display['Année'] = display['date_mois'].dt.year
         display['Mois'] = display['date_mois'].dt.month
-        display = display[['Année','Mois','plateforme',metric]]
-        display = display.sort_values(['Année','Mois','plateforme'])
-        st.dataframe(display.rename(columns={'plateforme':'Plateforme', metric:metric_label}), use_container_width=True)
-        csv = display.to_csv(index=False, sep=';').encode('utf-8')
-        st.download_button("⬇️ Télécharger CSV agrégé", data=csv, file_name=f"rapport_{annee}_{metric}.csv", mime="text/csv")
+        out = display[['Année','Mois','plateforme','value']].sort_values(['Année','Mois','plateforme'])
+        st.dataframe(out.rename(columns={'plateforme':'Plateforme','value':metric_label_plot}), use_container_width=True)
+        csv = out.to_csv(index=False, sep=';').encode('utf-8')
+        fname_metric = (metric_label_plot.replace(' ', '_').replace('/', '-')).lower()
+        st.download_button("⬇️ Télécharger CSV agrégé", data=csv,
+                           file_name=f"rapport_{annee}_{fname_metric}.csv", mime="text/csv")
 
 def vue_liste_clients(df):
     st.header("👥 Liste des Clients")
