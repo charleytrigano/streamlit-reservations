@@ -44,9 +44,9 @@ FORM_ENTRY_ARRIVEE  = "entry.1099006415"
 FORM_ENTRY_DEPART   = "entry.2013910918"
 
 # ✅ NOUVEAUX CHAMPS (laisser "" tant que tu n'as pas les IDs ; l'app les ignorera)
-FORM_ENTRY_PLATEFORME = ""   # ex: "entry.528935650"
-FORM_ENTRY_NUITEES    = ""   # ex: "entry.473651945"
-FORM_ENTRY_RESID      = ""   # ex: "entry.2071395456"
+FORM_ENTRY_PLATEFORME = "entry.528935650"  
+FORM_ENTRY_NUITEES    = "entry.473651945"  
+FORM_ENTRY_RESID      = "entry.2071395456"  
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
