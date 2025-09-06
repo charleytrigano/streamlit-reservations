@@ -311,7 +311,10 @@ def vue_reservations(df):
         if c in df_edit.columns:
             df_edit[c] = pd.to_numeric(df_edit[c], errors='coerce')
 
-    # --- Appel éditeur sur df_edit (pas df_sorted) ---
+    # 🔑 Correction : forcer _rowid en str pour TextColumn
+    df_edit["_rowid"] = df_edit["_rowid"].astype(str)
+
+    # --- Appel éditeur sur df_edit ---
     edited = st.data_editor(
         df_edit,
         column_config=column_config,
@@ -330,8 +333,13 @@ def vue_reservations(df):
                     edited[bcol] = edited[bcol].fillna(False).astype(bool)
 
             for _, row in edited.iterrows():
-                rid = row["_rowid"]
-                if pd.isna(rid):
+                # _rowid est str -> repasser en int
+                rid_str = row["_rowid"]
+                if pd.isna(rid_str):
+                    continue
+                try:
+                    rid = int(rid_str)
+                except Exception:
                     continue
 
                 # simples
