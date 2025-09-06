@@ -1,13 +1,10 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé (éditables + sauvegarde) + email
-#   -> data_editor robuste : colonnes et formats générés dynamiquement selon les dtypes
-# - SMS : clients non cochés (sms_envoye=False), nettoyage tél, debug, marquage envoyé
-#         + Liens iPhone/Android/WhatsApp + bouton Copier
-#         + Lien Google Form PRÉREMPLI (nom, téléphone, email, arrivée, départ, plateforme, nuitées, res_id)
-# - Rapport : métrique au choix, année/plateformes, barres groupées/empilées/courbes,
-#             total mensuel optionnel, cumul (YTD), moyenne / nuitée, export CSV (sans None/NaN)
-# - Export ICS (Google Calendar) : UID stables (v5) basés sur res_id + nom + téléphone
-# - Google Form/Sheet : Form intégré PRÉREMPLI, Feuille intégrée (iframe), lecture CSV publié
+# - SMS : clients non cochés, iPhone/Android/WhatsApp, Copier, LIEN RACCOURCI FORM si dispo
+# - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
+# - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
+# - Export ICS : UID stables (v5)
+# - Google Form/Sheet : Form intégré, Feuille intégrée, lecture CSV
 
 import streamlit as st
 import pandas as pd
@@ -26,10 +23,13 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 
-# Feuille intégrée : URL raccourcie fournie
+# 👉 Lien raccourci utilisé dans les SMS et WhatsApp
+FORM_SHORT_URL = "https://urlr.me/kZuH94"
+
+# Feuille intégrée : même lien raccourci
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
 
-# Réponses publiées (CSV) : garder l'URL publish-to-web CSV
+# Réponses publiées (CSV)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
 # IDs des champs (préremplissage) — de ton lien fourni
@@ -201,7 +201,6 @@ def kpi_chips(df, title="Indicateurs Clés"):
     st.markdown(html, unsafe_allow_html=True)
 
 def _ensure_res_id_on_row(df, idx):
-    """Si res_id manquant sur une ligne, on le crée et on sauvegarde."""
     try:
         cur = str(df.at[idx, 'res_id']) if 'res_id' in df.columns else ""
     except Exception:
@@ -275,7 +274,6 @@ def vue_reservations(df):
         if bcol in df_sorted.columns:
             df_sorted[bcol] = _to_bool_series(df_sorted[bcol]).fillna(False).astype(bool)
 
-    # Casts robustes avant data_editor
     df_edit = df_sorted.copy()
     for c in ['date_arrivee', 'date_depart']:
         if c in df_edit.columns:
@@ -291,7 +289,6 @@ def vue_reservations(df):
     if "_rowid" in df_edit.columns:
         df_edit["_rowid"] = df_edit["_rowid"].astype(str)
 
-    # Configuration dynamique
     col_order = list(df_edit.columns)
     if "_rowid" in col_order:
         col_order = [c for c in col_order if c != "_rowid"] + ["_rowid"]
@@ -753,6 +750,9 @@ def vue_sms(df):
             res_id      = res_id_val
         )
 
+        # 👉 Utilise le lien raccourci si fourni, sinon le lien prérempli complet
+        link_for_message = FORM_SHORT_URL.strip() or prefill_link
+
         message_body = f"""VILLA TOBIAS
 Plateforme : {resa.get('plateforme', 'N/A')}
 Arrivée : {resa.get('date_arrivee').strftime('%d/%m/%Y')} Départ : {resa.get('date_depart').strftime('%d/%m/%Y')} Nuitées : {resa.get('nuitees', 0):.0f}
@@ -787,7 +787,7 @@ We wish you a wonderful trip and look forward to meeting you very soon.
 Annick & Charley 
 
 Merci de remplir la fiche d'arrivee / Please fill out the arrival form : 
-{prefill_link}"https://urlr.me/kZuH94""
+{link_for_message}"""
 
         # --- Encodage du message
         encoded_message = quote(message_body)
@@ -953,7 +953,6 @@ def vue_google_sheet(df, palette):
                                   format_func=lambda i: options[i], index=0)
             sel = df_ok.loc[choice]
 
-            # s'assurer d'avoir un res_id persistant aussi depuis cet onglet
             res_id_val = _ensure_res_id_on_row(df, sel['index'])
 
             email_val = sel.get('email') if 'email' in df_ok.columns else None
@@ -1030,4 +1029,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
