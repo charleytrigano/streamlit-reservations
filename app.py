@@ -3,7 +3,7 @@
 # - SMS pré-arrivée : par défaut Arrivées de J+1 (iPhone/Android/WhatsApp), Copier, lien court formulaire
 # - SMS post-départ : par défaut Départs du jour (individuel + groupé WhatsApp / iPhone / Android)
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
-# - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
+# - Rapport **MAXI** : KPI annuels (occupation, ADR, RevPAR, panier), tendances, mix plateformes, heatmap d’occupation, distributions, export CSV
 # - Export ICS manuel : UID stables (v5)
 # - 🔗 Flux ICS public (BETA) : URL à copier (endpoint ?feed=ics&token=...)
 # - Google Form/Sheet : Form intégré (lien court), Feuille intégrée (lien court), lecture CSV
@@ -17,18 +17,19 @@ from datetime import date, timedelta, datetime
 from urllib.parse import quote, urlencode, quote_plus
 import altair as alt
 import uuid, re, unicodedata, json
+import hashlib
 
-# --- Fichiers ---
+# ==============================  FICHIERS  ==============================
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 
-# --- Google Form / Sheet ---
+# ==============================  GOOGLE FORM / SHEET  ==============================
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
-FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager (formulaire)
-GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
+FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager (formulaire) — utilisé partout
+GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"  # intégration
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs (préremplissage du form)
+# IDs (préremplissage du form) — ceux que tu avais fournis
 FORM_ENTRY_NOM        = "entry.937556468"
 FORM_ENTRY_TEL        = "entry.702324920"
 FORM_ENTRY_EMAIL      = "entry.1712365042"
@@ -44,7 +45,7 @@ st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
 # ==============================  PALETTE  ==============================
 DEFAULT_PALETTE = {"Booking": "#1e90ff", "Airbnb": "#e74c3c", "Autre": "#f59e0b"}
 
-# ============================== CORE DATA ==============================
+# ==============================  CORE DATA  ==============================
 @st.cache_data
 def charger_donnees_csv():
     df = pd.DataFrame()
@@ -56,11 +57,13 @@ def charger_donnees_csv():
         st.warning(f"Fichier '{CSV_RESERVATIONS}' introuvable.")
     except Exception as e:
         st.error(f"Erreur de lecture de {CSV_RESERVATIONS}: {e}")
+
     try:
         df_palette = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
         palette = dict(zip(df_palette['plateforme'], df_palette['couleur']))
     except:
         pass
+
     df = ensure_schema(df)
     return df, palette
 
@@ -139,8 +142,7 @@ def ensure_schema(df):
     df_res.loc[pd.notna(dt),'MM']   = dt[pd.notna(dt)].dt.month
     return df_res
 
-# ============================== UID STABLE ==============================
-import hashlib
+# ==============================  UID STABLE  ==============================
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://villa-tobias.fr/reservations")
 PROPERTY_ID = "villa-tobias"
 
@@ -160,7 +162,7 @@ def build_stable_uid(row) -> str:
     canonical = "|".join([PROPERTY_ID, res_id, _canonize_text(row.get('nom_client','')), _canonize_phone(row.get('telephone',''))])
     return str(uuid.uuid5(NAMESPACE, canonical))
 
-# ============================== HELPERS ==============================
+# ==============================  HELPERS GÉNÉRAUX  ==============================
 def is_dark_color(hex_color):
     try:
         hex_color = hex_color.lstrip('#')
@@ -222,6 +224,18 @@ def _null_like(v):
         return True
     return False
 
+def _format_phone_e164(raw_phone: str) -> str:
+    raw_phone = str(raw_phone or "")
+    clean = re.sub(r"\D", "", raw_phone)
+    if raw_phone.strip().startswith("+"):
+        return raw_phone.strip()
+    if clean.startswith("0") and len(clean) == 10:
+        return "+33" + clean[1:]
+    if clean:
+        return "+33" + clean
+    return raw_phone.strip()
+
+# ==============================  PREFILL FORM URL  ==============================
 def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None,
                      plateforme=None, nuitees=None, res_id=None):
     base = GOOGLE_FORM_URL.split("?")[0]
@@ -248,18 +262,7 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
         params[FORM_ENTRY_RESID] = str(res_id)
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
 
-def _format_phone_e164(raw_phone: str) -> str:
-    raw_phone = str(raw_phone or "")
-    clean = re.sub(r"\D", "", raw_phone)
-    if raw_phone.strip().startswith("+"):
-        return raw_phone.strip()
-    if clean.startswith("0") and len(clean) == 10:
-        return "+33" + clean[1:]
-    if clean:
-        return "+33" + clean
-    return raw_phone.strip()
-
-# ============ ICS CORE ============
+# ==============================  ICS CORE  ==============================
 def _fmt_ics_date(d: date) -> str:
     return f"{d.year:04d}{d.month:02d}{d.day:02d}"
 
@@ -311,6 +314,45 @@ def build_ics_from_df(df_src: pd.DataFrame) -> str:
         ]
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
+
+# ==============================  HELPERS RAPPORTS (NOUVEAU)  ==============================
+from calendar import monthrange
+
+def _month_start(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+def _month_end(d: date) -> date:
+    last = monthrange(d.year, d.month)[1]
+    return date(d.year, d.month, last)
+
+def _month_span(year: int):
+    return [date(year, m, 1) for m in range(1, 13)]
+
+def _available_nights_by_month(year: int):
+    return {date(year, m, 1): monthrange(year, m)[1] for m in range(1, 13)}
+
+def _expand_to_daily(df):
+    rows = []
+    for _, r in df.iterrows():
+        da, dd = r.get('date_arrivee'), r.get('date_depart')
+        if isinstance(da, date) and isinstance(dd, date) and dd > da:
+            cur = da
+            while cur < dd:
+                rows.append({
+                    "day": cur,
+                    "plateforme": r.get("plateforme"),
+                    "prix_brut": float(r.get("prix_brut") or 0),
+                    "prix_net": float(r.get("prix_net") or 0),
+                    "res_id": r.get("res_id"),
+                })
+                cur = cur + timedelta(days=1)
+    return pd.DataFrame(rows)
+
+def _safe_div2(a, b):
+    return (a / b) if (b and b != 0) else float("nan")
+
+def _fmt_eur(x):
+    return f"{x:,.2f} €".replace(",", " ").replace(".", ",")
 
 # ==============================  VUES  ==============================
 def vue_reservations(df):
@@ -542,8 +584,12 @@ def vue_plateformes(df, palette):
     if st.button("💾 Enregistrer les modifications"):
         nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
         df_plateformes_save = pd.DataFrame(list(nouvelle_palette.items()), columns=['plateforme','couleur'])
-        if sauvegarder_donnees_csv(df_plateformes_save, file_path=CSV_PLATEFORMES):
+        try:
+            df_plateformes_save.to_csv(CSV_PLATEFORMES, sep=';', index=False)
+            st.cache_data.clear()
             st.success("Palette de couleurs mise à jour !"); st.rerun()
+        except Exception as e:
+            st.error(f"Erreur de sauvegarde de la palette : {e}")
 
 def vue_calendrier(df, palette):
     st.header("📅 Calendrier des Réservations")
@@ -603,162 +649,200 @@ def vue_calendrier(df, palette):
     else:
         st.info("Aucune réservation pour ce mois.")
 
-# -------- Rapport --------
-def _safe_div(num, den):
-    return np.where(den > 0, num / den, np.nan)
-
+# ==============================  RAPPORT MAXI (NOUVEAU)  ==============================
 def vue_rapport(df, palette):
-    st.header("📊 Rapport de Performance")
-    data = df.dropna(subset=['AAAA','MM','plateforme']).copy()
+    st.header("📊 Rapport de Performance — complet")
+
+    base = df.dropna(subset=['date_arrivee','date_depart']).copy()
+    if base.empty:
+        st.info("Aucune donnée pour générer un rapport."); 
+        return
+
+    # Filtres principaux
+    c0, c1, c2, c3 = st.columns([1,1,1,2])
+    years = sorted({d.year for d in base['date_arrivee'] if isinstance(d, date)}, reverse=True)
+    annee = c0.selectbox("Année", years, index=0)
+
+    plateformes = sorted([p for p in base['plateforme'].dropna().unique()])
+    plats = c1.multiselect("Plateformes", plateformes, default=plateformes)
+
+    paid_only = c2.toggle("Uniquement réservations payées", value=False)
+    metric_mode = c3.radio("Mode de revenu", ["Brut", "Net"], index=0, horizontal=True)
+
+    mcol = "prix_brut" if metric_mode == "Brut" else "prix_net"
+
+    data = base[(pd.Series([isinstance(d, date) and d.year == annee for d in base['date_arrivee']]))].copy()
+    if plats:
+        data = data[data['plateforme'].isin(plats)]
+    if paid_only:
+        data = data[data['paye'] == True]
+
     if data.empty:
-        st.info("Aucune donnée pour générer un rapport."); return
+        st.warning("Aucune donnée après filtres."); 
+        return
 
-    c1, c2, c3 = st.columns([1,1,2])
-    annees = sorted(data['AAAA'].astype(int).unique(), reverse=True)
-    annee = c1.selectbox("Année", annees, index=0)
+    # ==== KPI Année ====
+    nb_res = len(data)
+    nuits = int(data['nuitees'].fillna(0).sum())
+    rev_total = float(data[mcol].fillna(0).sum())
+    adr = _safe_div2(rev_total, nuits)
+    # Occupation & RevPAR (sur l'année complète, 1 logement)
+    avail_year = 366 if calendar.isleap(annee) else 365
+    occ = _safe_div2(nuits, avail_year)
+    revpar = _safe_div2(rev_total, avail_year)
+    panier = _safe_div2(rev_total, nb_res)  # panier moyen par séjour
 
-    plateformes = sorted(data['plateforme'].dropna().unique())
-    plateformes_sel = c2.multiselect("Plateformes", plateformes, default=plateformes)
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Réservations", f"{nb_res}")
+    k2.metric("Nuitées vendues", f"{nuits}")
+    k3.metric(f"Revenu {metric_mode.lower()}", _fmt_eur(rev_total))
+    k4.metric(f"ADR {metric_mode.lower()}", _fmt_eur(adr) if pd.notna(adr) else "—")
+    k5.metric("Taux d’occupation", f"{occ*100:,.1f} %".replace(",", " ") if pd.notna(occ) else "—")
+    k6.metric(f"RevPAR {metric_mode.lower()}", _fmt_eur(revpar) if pd.notna(revpar) else "—")
 
-    metrics = {
-        "Prix brut (€)": "prix_brut",
-        "Prix net (€)": "prix_net",
-        "Ménage (€)": "menage",
-        "Commissions (€)": "commissions",
-        "Frais CB (€)": "frais_cb",
-        "Base (€)": "base",
-        "Charges (€)": "charges",
-        "Nuitées": "nuitees",
-    }
-    metric_label = c3.selectbox("Métrique", list(metrics.keys()), index=0)
-    metric = metrics[metric_label]
+    st.markdown("---")
 
-    c4, c5, c6 = st.columns([1,1,1])
-    chart_type   = c4.selectbox("Type de graphique", ["Barres groupées", "Barres empilées (total mensuel)", "Courbes"], index=0)
-    show_totals  = c5.toggle("Afficher aussi le total mensuel", value=False)
-    avg_per_night= c6.toggle("Moyenne par nuitée", value=False)
-    c7 = st.columns(1)[0]
-    cumulate = c7.toggle("Cumuler (YTD)", value=False)
+    # ==== Agrégats mensuels par plateforme ====
+    data['mois'] = data['date_arrivee'].apply(lambda d: date(d.year, d.month, 1))
+    grp = (data.groupby(['plateforme','mois'], as_index=False)
+               .agg({mcol:'sum', 'nuitees':'sum'}))
 
-    if avg_per_night and metric == "nuitees":
-        st.info("ℹ️ La moyenne par nuitée n'est pas applicable à 'Nuitées'. Option ignorée.")
-        avg_per_night = False
-
-    data = data[(data['AAAA'].astype(int) == int(annee)) & (data['plateforme'].isin(plateformes_sel))].copy()
-    if data.empty:
-        st.warning("Aucune donnée pour les filtres sélectionnés."); return
-
-    data['date_mois'] = pd.to_datetime(dict(year=data['AAAA'].astype(int), month=data['MM'].astype(int), day=1))
-    grp = (data.groupby(['plateforme','date_mois'], as_index=False).agg({metric:'sum', 'nuitees':'sum'}))
-
-    all_months = pd.date_range(f"{annee}-01-01", f"{annee}-12-01", freq='MS')
+    months_all = _month_span(annee)
     frames = []
-    for p in plateformes_sel:
-        g = grp[grp['plateforme']==p].set_index('date_mois').reindex(all_months).fillna({metric:0.0,'nuitees':0.0})
+    for p in (plats if plats else plateformes):
+        g = grp[grp['plateforme']==p].set_index('mois').reindex(months_all).fillna({mcol:0.0,'nuitees':0.0})
         g['plateforme'] = p
-        g = g.reset_index().rename(columns={'index':'date_mois'})
+        g = g.reset_index().rename(columns={'index':'mois'})
         frames.append(g)
     grp_full = pd.concat(frames, ignore_index=True)
 
-    if avg_per_night:
-        if cumulate:
-            grp_full = grp_full.sort_values(['plateforme','date_mois'])
-            grp_full['num_cum'] = grp_full.groupby('plateforme')[metric].cumsum()
-            grp_full['den_cum'] = grp_full.groupby('plateforme')['nuitees'].cumsum()
-            grp_full['value']   = _safe_div(grp_full['num_cum'], grp_full['den_cum'])
-            metric_label_plot = f"{metric_label} / nuit (cumul YTD)"
-        else:
-            grp_full['value'] = _safe_div(grp_full[metric], grp_full['nuitees'])
-            metric_label_plot = f"{metric_label} / nuit"
-    else:
-        if cumulate:
-            grp_full = grp_full.sort_values(['plateforme','date_mois'])
-            grp_full['value'] = grp_full.groupby('plateforme')[metric].cumsum()
-            metric_label_plot = f"{metric_label} (cumul YTD)"
-        else:
-            grp_full['value'] = grp_full[metric]
-            metric_label_plot = metric_label
+    # dérivés: ADR, Occ, RevPAR par mois
+    avail_map = _available_nights_by_month(annee)
+    grp_full['available'] = grp_full['mois'].map(avail_map)
+    grp_full['adr'] = grp_full.apply(lambda r: _safe_div2(r[mcol], r['nuitees']), axis=1)
+    grp_full['occ'] = grp_full.apply(lambda r: _safe_div2(r['nuitees'], r['available']), axis=1)
+    grp_full['revpar'] = grp_full.apply(lambda r: _safe_div2(r[mcol], r['available']), axis=1)
 
-    color_map = {p: palette.get(p, '#888') for p in plateformes_sel}
+    st.subheader("Tendances par mois")
+    colA, colB = st.columns(2)
+    choix_serie = colA.selectbox("Série", [f"Revenu {metric_mode.lower()}", "Nuitées", f"ADR {metric_mode.lower()}", "Occupation", f"RevPAR {metric_mode.lower()}"])
+    stack = colB.toggle("Empiler (total mensuel)", value=False)
+
+    serie_map = {
+        f"Revenu {metric_mode.lower()}": ("value", mcol, ".2f"),
+        "Nuitées": ("nuitees", "nuitees", ".0f"),
+        f"ADR {metric_mode.lower()}": ("adr", "adr", ".2f"),
+        "Occupation": ("occ", "occ", ".1%"),
+        f"RevPAR {metric_mode.lower()}": ("revpar", "revpar", ".2f"),
+    }
+    yfield, realfield, fmt = serie_map[choix_serie]
+    grp_full[yfield] = grp_full[realfield]
+
+    color_map = {p: palette.get(p, '#888') for p in (plats if plats else plateformes)}
     domain_sel = list(color_map.keys())
     range_sel  = [color_map[p] for p in domain_sel]
 
-    if avg_per_night and chart_type == "Barres empilées (total mensuel)":
-        st.info("ℹ️ Les barres empilées ne sont pas pertinentes pour une moyenne. Affichage en barres groupées.")
-        chart_type = "Barres groupées"
-
-    base = alt.Chart(grp_full).encode(
-        x=alt.X('yearmonth(date_mois):T', title='Mois'),
-        color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
+    base_chart = alt.Chart(grp_full).encode(
+        x=alt.X('yearmonth(mois):T', title='Mois'),
+        color=alt.Color('plateforme:N', scale=alt.Scale(domain=domain_sel, range=range_sel), title="Plateforme"),
         tooltip=[
             alt.Tooltip('plateforme:N', title='Plateforme'),
-            alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-            alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' or avg_per_night else '.0f')
+            alt.Tooltip('yearmonth(mois):T', title='Mois'),
+            alt.Tooltip(f'{yfield}:Q', title=choix_serie, format=fmt),
         ]
     )
-
-    if chart_type == "Barres groupées":
-        chart = base.mark_bar().encode(
-            y=alt.Y('value:Q', title=metric_label_plot),
-            xOffset=alt.X('plateforme:N', title=None),
-        )
-    elif chart_type == "Barres empilées (total mensuel)":
-        chart = base.mark_bar().encode(
-            y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
-        )
+    if choix_serie in [f"Revenu {metric_mode.lower()}", "Nuitées"] and stack:
+        chart = base_chart.mark_bar().encode(y=alt.Y(f'{yfield}:Q', title=choix_serie, stack='zero'))
     else:
-        chart = base.mark_line(point=True).encode(
-            y=alt.Y('value:Q', title=metric_label_plot),
-        )
+        if choix_serie in [f"Revenu {metric_mode.lower()}", "Nuitées"]:
+            chart = base_chart.mark_bar().encode(
+                y=alt.Y(f'{yfield}:Q', title=choix_serie),
+                xOffset=alt.X('plateforme:N', title=None),
+            )
+        else:
+            chart = base_chart.mark_line(point=True).encode(y=alt.Y(f'{yfield}:Q', title=choix_serie))
 
     st.altair_chart(chart.properties(height=420).interactive(), use_container_width=True)
 
-    if show_totals:
-        if avg_per_night:
-            month_sums = (grp.groupby('date_mois', as_index=False).agg(num=(metric,'sum'), den=('nuitees','sum')))
-            month_sums = month_sums.set_index('date_mois').reindex(all_months, fill_value=0).reset_index()
-            if cumulate:
-                month_sums['num_cum'] = month_sums['num'].cumsum()
-                month_sums['den_cum'] = month_sums['den'].cumsum()
-                month_sums['avg'] = _safe_div(month_sums['num_cum'], month_sums['den_cum'])
-                ytitle = f"{metric_label} / nuit (cumul YTD - total)"
-            else:
-                month_sums['avg'] = _safe_div(month_sums['num'], month_sums['den'])
-                ytitle = f"{metric_label} / nuit (total)"
-            chart_tot = (alt.Chart(month_sums).mark_line(point=True).encode(
-                x=alt.X('yearmonth(date_mois):T', title='Mois'),
-                y=alt.Y('avg:Q', title=ytitle),
-                tooltip=[alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                         alt.Tooltip('avg:Q', title='Moyenne / nuit', format='.2f')]
-            ))
-            st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
-        else:
-            st.markdown("**Total mensuel (toutes plateformes)**")
-            chart_tot = alt.Chart(grp_full).mark_bar().encode(
-                x=alt.X('yearmonth(date_mois):T', title='Mois'),
-                y=alt.Y('value:Q', title=metric_label_plot, stack='zero'),
-                color=alt.Color('plateforme:N', title="Plateforme", scale=alt.Scale(domain=domain_sel, range=range_sel)),
-                tooltip=[alt.Tooltip('plateforme:N', title='Plateforme'),
-                         alt.Tooltip('yearmonth(date_mois):T', title='Mois'),
-                         alt.Tooltip('value:Q', title=metric_label_plot, format='.2f' if metric != 'nuitees' else '.0f')]
-            )
-            st.altair_chart(chart_tot.properties(height=320).interactive(), use_container_width=True)
+    st.markdown("---")
 
-    with st.expander("Afficher les données agrégées et exporter"):
-        display = grp_full.copy()
-        display['Année'] = display['date_mois'].dt.year
-        display['Mois']  = display['date_mois'].dt.month
-        out = display[['Année','Mois','plateforme','value']].sort_values(['Année','Mois','plateforme'])
-        out = out[out['value'].notna()]
-        out = out[out['plateforme'].notna() & (out['plateforme'].astype(str).str.strip() != "")]
-        hide_zeros = st.toggle("Masquer les zéros", value=True)
-        if hide_zeros:
-            out = out[np.abs(out['value']) > 1e-9]
-        st.dataframe(out.rename(columns={'plateforme':'Plateforme','value':metric_label_plot}), use_container_width=True)
-        csv = out.to_csv(index=False, sep=';').encode('utf-8')
-        fname_metric = (metric_label_plot.replace(' ', '_').replace('/', '-')).lower()
-        st.download_button("⬇️ Télécharger CSV agrégé", data=csv,
-                           file_name=f"rapport_{annee}_{fname_metric}.csv", mime="text/csv")
+    # ==== Mix plateformes ====
+    st.subheader("Répartition par plateforme (année)")
+    mix = (data.groupby("plateforme", as_index=False)
+              .agg(revenu=(mcol,'sum'), nuitées=('nuitees','sum'), sejours=('res_id','count')))
+    c1, c2 = st.columns([2,1])
+    chart_mix = alt.Chart(mix).mark_bar().encode(
+        x=alt.X('plateforme:N', title='Plateforme'),
+        y=alt.Y('revenu:Q', title=f'Revenu {metric_mode.lower()}'),
+        color=alt.Color('plateforme:N', legend=None, scale=alt.Scale(domain=domain_sel, range=range_sel)),
+        tooltip=[alt.Tooltip('plateforme:N'), alt.Tooltip('revenu:Q', format='.2f'), alt.Tooltip('nuitées:Q'), alt.Tooltip('sejours:Q')]
+    )
+    c1.altair_chart(chart_mix.properties(height=320), use_container_width=True)
+    c2.dataframe(mix.sort_values('revenu', ascending=False), use_container_width=True)
+
+    st.markdown("---")
+
+    # ==== Heatmap d’occupation (12 x jours) ====
+    st.subheader("Heatmap d’occupation")
+    daily = _expand_to_daily(data)
+    if daily.empty:
+        st.info("Pas assez de données pour la heatmap.")
+    else:
+        daily['mois'] = daily['day'].apply(lambda d: date(d.year, d.month, 1))
+        occ_days = (daily.groupby('day', as_index=False).agg(occ=('res_id','nunique')))
+        occ_days['occ'] = occ_days['occ'].clip(0,1)
+
+        all_days = pd.DataFrame({"day": pd.date_range(f"{annee}-01-01", f"{annee}-12-31", freq="D").date})
+        all_days = all_days.merge(occ_days[['day','occ']], on='day', how='left').fillna({'occ': 0})
+        all_days['mois'] = all_days['day'].apply(lambda d: date(d.year, d.month, 1))
+        all_days['jour'] = all_days['day'].apply(lambda d: d.day)
+
+        heat = alt.Chart(all_days).mark_rect().encode(
+            x=alt.X('jour:O', title='Jour'),
+            y=alt.Y('month(mois):O', title='Mois'),
+            color=alt.Color('occ:Q', title='Occupation', scale=alt.Scale(domain=[0,1], range=['#111', '#26a269'])),
+            tooltip=[alt.Tooltip('day:T', title='Date'), alt.Tooltip('occ:Q', title='Occupé', format='.0f')]
+        )
+        st.altair_chart(heat.properties(height=320), use_container_width=True)
+
+    st.markdown("---")
+
+    # ==== Distributions ====
+    st.subheader("Distributions")
+    colD1, colD2 = st.columns(2)
+
+    dist_nuitees = alt.Chart(data).mark_bar().encode(
+        x=alt.X('nuitees:Q', bin=alt.Bin(maxbins=15), title='Nuitées (par séjour)'),
+        y=alt.Y('count()', title='Nombre de séjours'),
+        tooltip=[alt.Tooltip('count():Q', title='Séjours')]
+    )
+    colD1.altair_chart(dist_nuitees.properties(height=280), use_container_width=True)
+
+    adr_per_resa = data.assign(adr_res=lambda x: x.apply(lambda r: _safe_div2(r[mcol], r['nuitees']), axis=1))
+    box = alt.Chart(adr_per_resa.dropna(subset=['adr_res'])).mark_boxplot().encode(
+        x=alt.X('plateforme:N', title='Plateforme'),
+        y=alt.Y('adr_res:Q', title=f'ADR {metric_mode.lower()} par séjour'),
+        color=alt.Color('plateforme:N', legend=None, scale=alt.Scale(domain=domain_sel, range=range_sel)),
+    )
+    colD2.altair_chart(box.properties(height=280), use_container_width=True)
+
+    # ==== Export ====
+    with st.expander("Données mensuelles et export CSV"):
+        export = grp_full[['mois','plateforme', mcol, 'nuitees', 'adr', 'occ', 'revpar']].copy()
+        export = export.rename(columns={
+            'mois': 'Mois', 'plateforme': 'Plateforme',
+            mcol: f"Revenu_{metric_mode.lower()}",
+            'nuitees': 'Nuitées',
+            'adr': f"ADR_{metric_mode.lower()}",
+            'occ': 'Occupation',
+            'revpar': f"RevPAR_{metric_mode.lower()}",
+        })
+        export = export[export['Plateforme'].notna() & (export['Plateforme'].astype(str).str.strip() != "")]
+        st.dataframe(export.sort_values(['Mois','Plateforme']), use_container_width=True)
+        st.download_button("⬇️ Télécharger CSV mensuel",
+                           data=export.to_csv(index=False, sep=';').encode('utf-8'),
+                           file_name=f"rapport_{annee}_{metric_mode.lower()}_mensuel.csv",
+                           mime="text/csv")
 
 def vue_liste_clients(df):
     st.header("👥 Liste des Clients")
@@ -786,12 +870,12 @@ def vue_sms(df):
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
-    st.components.v1.html(f"""
-        <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+    st.components.v1.html("""
+        <button onclick="navigator.clipboard.writeText('%s')"
                 style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
             📋 Copier le lien (formulaire)
         </button>
-    """, height=48)
+    """ % FORM_SHORT_URL, height=48)
 
     if df_tel.empty:
         st.info("Aucun client à contacter pour la date choisie (ou déjà marqué 'SMS envoyé').")
@@ -865,18 +949,18 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
             with c_and: st.link_button("🤖 Android SMS", sms_link_android)
             with c_wa:  st.link_button("🟢 WhatsApp", wa_link)
 
-            st.components.v1.html(f"""
+            st.components.v1.html("""
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-                  <button onclick="navigator.clipboard.writeText({json.dumps(message_body)})"
+                  <button onclick="navigator.clipboard.writeText(%s)"
                           style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                       📋 Copier le message
                   </button>
-                  <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+                  <button onclick="navigator.clipboard.writeText('%s')"
                           style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                       📋 Copier le lien (formulaire)
                   </button>
                 </div>
-            """, height=60)
+            """ % (json.dumps(message_body), FORM_SHORT_URL), height=60)
 
             if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
                 try:
@@ -950,12 +1034,12 @@ Annick & Charley"""
             with c_ios2: st.link_button("📲 iPhone SMS", sms_link_ios2)
             with c_and2: st.link_button("🤖 Android SMS", sms_link_android2)
 
-            st.components.v1.html(f"""
-                <button onclick="navigator.clipboard.writeText({json.dumps(message_post)})"
+            st.components.v1.html("""
+                <button onclick="navigator.clipboard.writeText(%s)"
                         style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                     📋 Copier le message post-départ
                 </button>
-            """, height=50)
+            """ % (json.dumps(message_post),), height=50)
 
             if st.button("✅ Marquer 'post-départ envoyé'"):
                 try:
@@ -1117,7 +1201,6 @@ def vue_export_ics(df, palette):
 
 # ==============================  FLUX ICS PUBLIC (BETA)  ==============================
 def _get_query_params():
-    # Support both new and legacy API
     try:
         return st.query_params
     except Exception:
@@ -1132,16 +1215,13 @@ def _as_list(v):
     return [v]
 
 def icspublic_endpoint(df):
-    """Si l'URL contient ?feed=ics&token=..., on affiche l'ICS brut selon les filtres."""
     params = _get_query_params()
     feed = params.get("feed", [""])[0] if isinstance(params.get("feed"), list) else params.get("feed", "")
     if str(feed).lower() != "ics":
-        return False  # ne gère pas
-    # (Simple "token" partagé pour éviter l'indexation publique accidentelle)
+        return False
     token = params.get("token", [""])[0] if isinstance(params.get("token"), list) else params.get("token", "")
     if not token:
         st.write("Missing token."); st.stop()
-    # Filtres optionnels
     annee  = params.get("year", [""])[0] if isinstance(params.get("year"), list) else params.get("year", "")
     plats  = _as_list(params.get("plats")) if "plats" in params else _as_list(params.get("platform"))
     inc_np = params.get("incl_np", ["1"])[0] if isinstance(params.get("incl_np"), list) else params.get("incl_np", "1")
@@ -1164,7 +1244,6 @@ def icspublic_endpoint(df):
         data = data[data['sms_envoye'] == False]
 
     ics = build_ics_from_df(data)
-    # On affiche le texte ; certains clients accepteront quand même.
     st.text(ics)
     st.stop()
 
@@ -1173,7 +1252,6 @@ def vue_flux_ics_public(df, palette):
     st.caption("Copie cette URL dans Google Calendar → *Ajouter un agenda* → *À partir de l’URL*. "
                "Si Google refuse, on posera un petit proxy qui renvoie le bon en-tête `text/calendar`.")
 
-    # Paramétrage
     base_url = st.text_input("URL de base de l'app (tel qu'affichée dans ton navigateur)", value=st.request.url if hasattr(st, "request") and hasattr(st.request, "url") else "")
     if not base_url:
         st.info("Renseigne l’URL de l’app telle qu’elle s’affiche dans la barre d’adresse pour générer le lien.")
@@ -1187,11 +1265,15 @@ def vue_flux_ics_public(df, palette):
     incl_np  = c3.toggle("Inclure réservations non payées", value=True)
     incl_sms = c4.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
 
-    # Petit "token" (clé partagée) pour éviter l’indexation publique
     token_default = hashlib.sha256(f"villa-tobias-{year}".encode()).hexdigest()[:16]
     token = st.text_input("Token (clé simple, à partager seulement avec Google Calendar)", value=token_default)
 
-    # Construction de l’URL
+    def build_url(base, params):
+        if not base:
+            return ""
+        base_clean = base.split("?")[0]
+        return base_clean + "?" + urlencode(params, doseq=True)
+
     query = {
         "feed": "ics",
         "token": token,
@@ -1202,19 +1284,11 @@ def vue_flux_ics_public(df, palette):
     for p in plats:
         query.setdefault("plats", []).append(p)
 
-    def build_url(base, params):
-        if not base:
-            return ""
-        # Nettoyage basique (supprime les anciens query params)
-        base_clean = base.split("?")[0]
-        return base_clean + "?" + urlencode(params, doseq=True)
-
     flux_url = build_url(base_url, query)
     if flux_url:
         st.code(flux_url, language="text")
         st.link_button("📋 Copier / Ouvrir l’URL de flux", flux_url)
 
-    # Aperçu du contenu ICS (pour vérifier)
     with st.expander("Aperçu du contenu ICS (généré avec ces filtres)"):
         data = df.dropna(subset=['date_arrivee','date_depart']).copy()
         data = data[data['date_arrivee'].apply(lambda d: isinstance(d, date) and d.year == year)]
@@ -1238,19 +1312,18 @@ def vue_google_sheet(df, palette):
             st.info("Aucune réservation exploitable pour préremplir le formulaire.")
             st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
-            st.components.v1.html(f"""
-                <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+            st.components.v1.html("""
+                <button onclick="navigator.clipboard.writeText('%s')"
                         style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
-            """, height=50)
+            """ % FORM_SHORT_URL, height=50)
         else:
             df_ok = df_ok.sort_values('date_arrivee', ascending=False).reset_index()
             options = {i: f"{row['nom_client']} — arrivée {row['date_arrivee']}" for i, row in df_ok.iterrows()}
             choice = st.selectbox("Préremplir pour :", options=list(options.keys()),
                                   format_func=lambda i: options[i], index=0)
             sel = df_ok.loc[choice]
-
             res_id_val = _ensure_res_id_on_row(df, sel['index'])
             email_val = sel.get('email') if 'email' in df_ok.columns else None
             url_prefill = form_prefill_url(
@@ -1263,15 +1336,13 @@ def vue_google_sheet(df, palette):
                 nuitees      = sel.get('nuitees'),
                 res_id       = res_id_val
             )
-
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
-            st.components.v1.html(f"""
-                <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+            st.components.v1.html("""
+                <button onclick="navigator.clipboard.writeText('%s')"
                         style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
-            """, height=50)
-
+            """ % FORM_SHORT_URL, height=50)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
@@ -1324,7 +1395,7 @@ def main():
         "✏️ Modifier / Supprimer": vue_modifier,
         "🎨 Plateformes": vue_plateformes,
         "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
+        "📊 Rapport": vue_rapport,  # <- NOUVELLE VERSION
         "👥 Liste des Clients": vue_liste_clients,
         "✉️ SMS": vue_sms,
         "📆 Export ICS (Google Calendar)": vue_export_ics,
