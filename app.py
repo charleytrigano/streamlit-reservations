@@ -790,66 +790,81 @@ def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
     card("Aide", "Pré-arrivée (**arrivées J+1**) et **post-départ** (départs du jour). Le lien formulaire est **court**.")
 
-    # Sécurisation d'entrée
+    # --- Sécurisation d'entrée ---
     if not isinstance(df, pd.DataFrame):
-        try: df = pd.DataFrame(df if df is not None else [])
-        except Exception: df = pd.DataFrame()
+        try:
+            df = pd.DataFrame(df if df is not None else [])
+        except Exception:
+            df = pd.DataFrame()
     df = ensure_schema(df)
 
-    for colb in ('sms_envoye','post_depart_envoye'):
+    # Colonnes bool assurées
+    for colb in ('sms_envoye', 'post_depart_envoye'):
         if colb not in df.columns:
             df[colb] = False
         df[colb] = df[colb].fillna(False).astype(bool)
 
-    # ---- Pré-arrivée ----
+    # =====================  PRÉ-ARRIVÉE (J+1)  =====================
     st.subheader("🛬 Messages pré-arrivée (J+1)")
-    target_arrivee = st.date_input("Cibler les arrivées du", date.today()+timedelta(days=1), key="prearrivee_date")
+    target_arrivee = st.date_input("Cibler les arrivées du", date.today() + timedelta(days=1), key="prearrivee_date")
 
-    df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
-    for c in ('date_arrivee','date_depart'):
+    df_tel = df.dropna(subset=['telephone', 'nom_client', 'date_arrivee']).copy()
+    for c in ('date_arrivee', 'date_depart'):
         if c in df_tel.columns:
             df_tel[c] = pd.to_datetime(df_tel[c], errors='coerce').dt.date
 
     df_tel = df_tel[(df_tel['date_arrivee'] == target_arrivee) & (~df_tel['sms_envoye'])].copy()
     if not df_tel.empty:
-        df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
-        df_tel = df_tel[df_tel['tel_clean'].str.len().between(9,15)].copy()
+        df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+        df_tel = df_tel[df_tel['tel_clean'].str.len().between(9, 15)].copy()
         df_tel["_rowid"] = df_tel.index
 
-    st.components.v1.html(f"""
+    st.components.v1.html(
+        f"""
         <button onclick="navigator.clipboard.writeText('{FORM_SHORT_URL}')"
                 style="margin-bottom:10px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
             📋 Copier le lien (formulaire)
         </button>
-    """, height=48)
+        """,
+        height=48
+    )
 
     if df_tel.empty:
         st.info("Aucun client à contacter (ou déjà marqué 'SMS envoyé').")
     else:
         df_sorted = df_tel.sort_values(by="date_arrivee").reset_index(drop=True)
         options = [f"{i}: {r['nom_client']} ({r['telephone']})" for i, r in df_sorted.iterrows()]
-        selection = st.selectbox("Sélectionnez un client (pré-arrivée)", options=options, index=None, key="prearrival_select")
+        selection = st.selectbox(
+            "Sélectionnez un client (pré-arrivée)",
+            options=options,
+            index=None,
+            key="prearrival_select"
+        )
         if selection:
             idx = int(selection.split(":")[0])
             resa = df_sorted.loc[idx]
             lang = str(resa.get('lang') or 'FR').upper()
             tpl = LANG_TEMPLATES.get(lang, LANG_TEMPLATES['FR'])["pre_arrivee"]
             message_body = tpl.format(
-                plateforme = resa.get('plateforme','N/A'),
-                arrivee = resa.get('date_arrivee').strftime('%d/%m/%Y') if pd.notna(resa.get('date_arrivee')) else '',
-                depart  = resa.get('date_depart').strftime('%d/%m/%Y') if pd.notna(resa.get('date_depart')) else '',
-                nuitees = int(resa.get('nuitees') or 0),
-                nom     = resa.get('nom_client') or '',
-                tel     = resa.get('telephone') or '',
-                form_link = FORM_SHORT_URL
+                plateforme=resa.get('plateforme', 'N/A'),
+                arrivee=resa.get('date_arrivee').strftime('%d/%m/%Y') if pd.notna(resa.get('date_arrivee')) else '',
+                depart=resa.get('date_depart').strftime('%d/%m/%Y') if pd.notna(resa.get('date_depart')) else '',
+                nuitees=int(resa.get('nuitees') or 0),
+                nom=resa.get('nom_client') or '',
+                tel=resa.get('telephone') or '',
+                form_link=FORM_SHORT_URL
             )
             enc = quote(message_body)
-            e164 = _format_phone_e164(resa['telephone']); wa_num = re.sub(r"\D","", e164)
+            e164 = _format_phone_e164(resa['telephone'])
+            wa_num = re.sub(r"\D", "", e164)
+
             c1, c2, c3 = st.columns(3)
             c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
             c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
             c3.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
-            st.components.v1.html(f"""
+
+            st.components.v1.html(
+                f"""
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                   <button onclick="navigator.clipboard.writeText({json.dumps(message_body)})"
                           style="padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
@@ -860,41 +875,44 @@ def vue_sms(df, palette):
                       📋 Copier le lien (formulaire)
                   </button>
                 </div>
-            """, height=60)
+                """,
+                height=60
+            )
+
             if st.button("✅ Marquer 'SMS envoyé'"):
                 try:
                     df.loc[resa["_rowid"], 'sms_envoye'] = True
                     df_final = ensure_schema(df)
                     if sauvegarder_donnees(df_final):
-                        st.success("Marqué 'SMS envoyé' ✅"); st.rerun()
+                        st.success("Marqué 'SMS envoyé' ✅")
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
 
-    # ---- Post-départ (départs du jour) ----
+    # =====================  POST-DÉPART (J)  =====================
     st.markdown("---")
     st.subheader("📤 Post-départ (départs du jour)")
-
     target_depart = st.date_input("Départs du", date.today(), key="postdepart_date")
 
     df_safe = ensure_schema(df.copy())
-    for col in ('date_arrivee','date_depart'):
+    for col in ('date_arrivee', 'date_depart'):
         if col in df_safe.columns:
             df_safe[col] = pd.to_datetime(df_safe[col], errors='coerce').dt.date
     if 'post_depart_envoye' not in df_safe.columns:
         df_safe['post_depart_envoye'] = False
     df_safe['post_depart_envoye'] = df_safe['post_depart_envoye'].fillna(False).astype(bool)
 
-    needed = [c for c in ['telephone','nom_client','date_depart'] if c in df_safe.columns]
-    if 'date_depart' not in df_safe.columns or len(needed) < 3:
+    needed_cols = ['telephone', 'nom_client', 'date_depart']
+    if not all(c in df_safe.columns for c in needed_cols):
         st.warning("Colonnes indispensables manquantes (telephone/nom_client/date_depart).")
         df_post = pd.DataFrame()
     else:
-        df_post = df_safe.dropna(subset=needed).copy()
+        df_post = df_safe.dropna(subset=needed_cols).copy()
         df_post = df_post[(df_post['date_depart'] == target_depart) & (~df_post['post_depart_envoye'])].copy()
 
     if not df_post.empty:
-        df_post['tel_clean'] = df_post['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
-        df_post = df_post[df_post['tel_clean'].str.len().between(9,15)].copy()
+        df_post['tel_clean'] = df_post['telephone'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+        df_post = df_post[df_post['tel_clean'].str.len().between(9, 15)].copy()
         df_post["_rowid"] = df_post.index
 
     if df_post.empty:
@@ -904,19 +922,32 @@ def vue_sms(df, palette):
             df_sorted2 = df_post.sort_values(by="date_depart").reset_index(drop=True)
         except Exception:
             df_sorted2 = df_post.reset_index(drop=True)
-        options_post = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i, r in df_sorted2.iterrows()]
-        selection2 = st.selectbox("Sélectionnez un client (post-départ)", options=options_post, index=None, key="post_select")
+
+        options_post = [
+            f"{i}: {r['nom_client']} — départ {r['date_depart']}"
+            for i, r in df_sorted2.iterrows()
+        ]
+        selection2 = st.selectbox(
+            "Sélectionnez un client (post-départ)",
+            options=options_post,
+            index=None,
+            key="post_select"
+        )
+
         if selection2:
             idx2 = int(selection2.split(":")[0])
             resa2 = df_sorted2.loc[idx2]
             lang = str(resa2.get('lang') or 'FR').upper()
             msg = _post_depart_message(resa2.get('nom_client'), lang)
             enc = quote(msg)
-            e164 = _format_phone_e164(resa2['telephone']); wa_num = re.sub(r"\D","", e164)
+            e164 = _format_phone_e164(resa2['telephone'])
+            wa_num = re.sub(r"\D", "", e164)
+
             cwa, cios, cand = st.columns(3)
             cwa.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
             cios.link_button("📲 iPhone SMS", f"sms:&body={enc}")
             cand.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+
             st.components.v1.html(
                 f"""
                 <button onclick="navigator.clipboard.writeText({json.dumps(msg)})"
@@ -926,12 +957,14 @@ def vue_sms(df, palette):
                 """,
                 height=50
             )
+
             if st.button("✅ Marquer 'post-départ envoyé'"):
                 try:
                     df.loc[resa2["_rowid"], 'post_depart_envoye'] = True
                     df_final = ensure_schema(df)
                     if sauvegarder_donnees(df_final):
-                        st.success("Marqué 'post-départ envoyé' ✅"); st.rerun()
+                        st.success("Marqué 'post-départ envoyé' ✅")
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
 
