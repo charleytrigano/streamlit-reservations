@@ -8,6 +8,27 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange
 from urllib.parse import quote
 
+# === DEBUG RUNTIME INFO ===
+import os, pathlib, time, sys
+try:
+    THIS_FILE = __file__
+except NameError:
+    THIS_FILE = "unknown"
+try:
+    p = pathlib.Path(THIS_FILE)
+    _contents = ""
+    try:
+        _contents = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+    st.sidebar.markdown(f"**[DEBUG] Fichier en cours :** `{p.resolve()}`")
+    st.sidebar.markdown(f"**[DEBUG] Taille :** {len(_contents.splitlines())} lignes")
+    st.sidebar.markdown(f"**[DEBUG] mtime :** {time.ctime(p.stat().st_mtime)}")
+    st.sidebar.markdown(f"**[DEBUG] CWD :** `{os.getcwd()}`")
+    st.sidebar.markdown(f"**[DEBUG] sys.path[0] :** `{sys.path[0]}`")
+except Exception as _e:
+    st.sidebar.markdown(f"[DEBUG] Impossible de lire le fichier courant: {_e}")
+
 # ============================== CONFIG ==============================
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
