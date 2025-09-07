@@ -134,35 +134,29 @@ BASE_COLS = [
 ]
 
 def ensure_schema(df):
-    if df is None or df.empty: 
+    if not isinstance(df, pd.DataFrame) or df is None or df.empty:
         return pd.DataFrame(columns=BASE_COLS)
     df_res = df.copy()
 
-    # Colonnes manquantes
     for col in BASE_COLS:
         if col not in df_res.columns: df_res[col] = None
 
-    # Dates
     for col in ["date_arrivee","date_depart"]:
         df_res[col] = pd.to_datetime(df_res[col], dayfirst=True, errors='coerce').dt.date
 
-    # Nuitées
     mask = df_res['date_arrivee'].notna() & df_res['date_depart'].notna()
     df_res.loc[mask,'nuitees'] = (
         pd.to_datetime(df_res.loc[mask,'date_depart']) - pd.to_datetime(df_res.loc[mask,'date_arrivee'])
     ).dt.days
 
-    # Année/Mois
     df_res['AAAA'] = pd.to_datetime(df_res['date_arrivee'], errors='coerce').dt.year
     df_res['MM']   = pd.to_datetime(df_res['date_arrivee'], errors='coerce').dt.month
 
-    # Booléens
-    def _to_bool(s): 
+    def _to_bool(s):
         return s.astype(str).str.strip().str.lower().isin(['true','vrai','1','oui','yes'])
     for bcol in ['paye','sms_envoye','post_depart_envoye']:
         df_res[bcol] = _to_bool(df_res[bcol]).fillna(False).astype(bool)
 
-    # Numériques
     for col in ['prix_brut','commissions','frais_cb','menage','taxes_sejour','prix_net']:
         df_res[col] = pd.to_numeric(df_res[col], errors='coerce').fillna(0.0)
     df_res['prix_net'] = df_res['prix_brut'] - df_res['commissions'] - df_res['frais_cb']
@@ -171,10 +165,8 @@ def ensure_schema(df):
     with np.errstate(divide='ignore', invalid='ignore'):
         df_res['%'] = np.where(df_res['prix_brut']>0, df_res['charges']/df_res['prix_brut']*100, 0)
 
-    # Langue
     df_res['lang'] = (df_res['lang'].fillna('FR').astype(str).str.upper()).replace({'NAN':'FR'})
 
-    # IDs
     if 'res_id' in df_res.columns:
         missing = df_res['res_id'].isna() | (df_res['res_id'].astype(str).str.strip()=="")
         df_res.loc[missing,'res_id'] = [str(uuid.uuid4()) for _ in range(int(missing.sum()))]
@@ -186,7 +178,6 @@ def ensure_schema(df):
 def charger_donnees():
     mode = _get_storage_mode()
 
-    # Proxy Apps Script
     if mode == "sheets_proxy":
         try:
             _, _, res_ws, plat_ws = _proxy_conf()
@@ -200,7 +191,6 @@ def charger_donnees():
         except Exception as e:
             st.error(f"Lecture Google Sheets impossible : {e}. Bascule CSV local.")
 
-    # Fallback CSV
     try:
         df_res = pd.read_csv(CSV_RESERVATIONS, delimiter=";")
         df_res.columns = df_res.columns.str.strip()
@@ -214,7 +204,6 @@ def charger_donnees():
     return ensure_schema(df_res), palette
 
 def sauvegarder_donnees(df, palette=None):
-    # backup CSV local (précaution)
     try:
         if os.path.exists(CSV_RESERVATIONS):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -224,11 +213,10 @@ def sauvegarder_donnees(df, palette=None):
 
     mode = _get_storage_mode()
 
-    # Proxy Apps Script
     if mode == "sheets_proxy":
         try:
             _, _, res_ws, plat_ws = _proxy_conf()
-            df_to_save = df.copy()
+            df_to_save = ensure_schema(df.copy())
             cols = [c for c in BASE_COLS if c in df_to_save.columns] or list(df_to_save.columns)
             ok1 = proxy_replace_ws(res_ws, df_to_save[cols])
             ok2 = True
@@ -244,7 +232,6 @@ def sauvegarder_donnees(df, palette=None):
             st.error(f"Erreur de sauvegarde via proxy : {e}")
             return False
 
-    # CSV local
     try:
         df.to_csv(CSV_RESERVATIONS, sep=";", index=False)
         if palette is not None:
@@ -415,7 +402,6 @@ def vue_reservations(df, palette):
     )
     if not edited.equals(df_sorted):
         df_copy = df.copy()
-        # Mise à jour par res_id si dispo (sinon fallback heuristique)
         for i, row in edited.iterrows():
             mask = df_copy['res_id'] == row.get('res_id')
             if not (mask.any()):
@@ -562,9 +548,7 @@ def vue_calendrier(df, palette):
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
 
-# === FIN PARTIE 1 ===
-
-# ==============================  RAPPORT (modernisé) ==============================
+# ==============================  RAPPORT ==============================
 def _available_nights_by_month(year: int):
     return {date(year, m, 1): monthrange(year, m)[1] for m in range(1,13)}
 
@@ -805,24 +789,32 @@ def _post_depart_message(name: str, lang: str="FR") -> str:
 def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
     card("Aide", "Pré-arrivée (**arrivées J+1**) et **post-départ** (départs du jour). Le lien formulaire est **court**.")
+
+    # Sécurisation d'entrée
+    if not isinstance(df, pd.DataFrame):
+        try: df = pd.DataFrame(df if df is not None else [])
+        except Exception: df = pd.DataFrame()
+    df = ensure_schema(df)
+
     for colb in ('sms_envoye','post_depart_envoye'):
-        if colb in df.columns: df[colb] = df[colb].fillna(False).astype(bool)
-        else: df[colb] = False
+        if colb not in df.columns:
+            df[colb] = False
+        df[colb] = df[colb].fillna(False).astype(bool)
 
     # ---- Pré-arrivée ----
     st.subheader("🛬 Messages pré-arrivée (J+1)")
     target_arrivee = st.date_input("Cibler les arrivées du", date.today()+timedelta(days=1), key="prearrivee_date")
-    df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
 
-    # Dates robustes
+    df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
     for c in ('date_arrivee','date_depart'):
         if c in df_tel.columns:
             df_tel[c] = pd.to_datetime(df_tel[c], errors='coerce').dt.date
 
-    df_tel = df_tel[(df_tel['date_arrivee']==target_arrivee) & (~df_tel['sms_envoye'])]
-    df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
-    df_tel = df_tel[df_tel['tel_clean'].str.len().between(9,15)].copy()
-    df_tel["_rowid"] = df_tel.index
+    df_tel = df_tel[(df_tel['date_arrivee'] == target_arrivee) & (~df_tel['sms_envoye'])].copy()
+    if not df_tel.empty:
+        df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
+        df_tel = df_tel[df_tel['tel_clean'].str.len().between(9,15)].copy()
+        df_tel["_rowid"] = df_tel.index
 
     st.components.v1.html(f"""
         <button onclick="navigator.clipboard.writeText('{FORM_SHORT_URL}')"
@@ -851,15 +843,12 @@ def vue_sms(df, palette):
                 tel     = resa.get('telephone') or '',
                 form_link = FORM_SHORT_URL
             )
-            encoded_message = quote(message_body)
-            e164_phone = _format_phone_e164(resa['telephone'])
-            sms_link_ios = f"sms:&body={encoded_message}"
-            sms_link_android = f"sms:{e164_phone}?body={encoded_message}"
-            wa_number = re.sub(r"\D", "", e164_phone); wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"
-            c_ios, c_and, c_wa = st.columns([1,1,1])
-            c_ios.link_button("📲 iPhone SMS", sms_link_ios)
-            c_and.link_button("🤖 Android SMS", sms_link_android)
-            c_wa.link_button("🟢 WhatsApp", wa_link)
+            enc = quote(message_body)
+            e164 = _format_phone_e164(resa['telephone']); wa_num = re.sub(r"\D","", e164)
+            c1, c2, c3 = st.columns(3)
+            c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
+            c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+            c3.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
             st.components.v1.html(f"""
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                   <button onclick="navigator.clipboard.writeText({json.dumps(message_body)})"
@@ -874,34 +863,33 @@ def vue_sms(df, palette):
             """, height=60)
             if st.button("✅ Marquer 'SMS envoyé'"):
                 try:
-                    df.loc[resa["_rowid"],'sms_envoye'] = True
+                    df.loc[resa["_rowid"], 'sms_envoye'] = True
                     df_final = ensure_schema(df)
                     if sauvegarder_donnees(df_final):
                         st.success("Marqué 'SMS envoyé' ✅"); st.rerun()
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
 
-    # --- Post-départ (départs du jour) avec sécurisation robuste ---
+    # ---- Post-départ (départs du jour) ----
     st.markdown("---")
     st.subheader("📤 Post-départ (départs du jour)")
 
     target_depart = st.date_input("Départs du", date.today(), key="postdepart_date")
 
-    df_safe = df.copy()
-    if 'post_depart_envoye' not in df_safe.columns:
-        df_safe['post_depart_envoye'] = False
-
+    df_safe = ensure_schema(df.copy())
     for col in ('date_arrivee','date_depart'):
         if col in df_safe.columns:
             df_safe[col] = pd.to_datetime(df_safe[col], errors='coerce').dt.date
+    if 'post_depart_envoye' not in df_safe.columns:
+        df_safe['post_depart_envoye'] = False
+    df_safe['post_depart_envoye'] = df_safe['post_depart_envoye'].fillna(False).astype(bool)
 
-    need_cols = ['telephone','nom_client','date_depart']
-    present_cols = [c for c in need_cols if c in df_safe.columns]
-    if not set(['telephone','nom_client']).issubset(df_safe.columns) or 'date_depart' not in df_safe.columns:
+    needed = [c for c in ['telephone','nom_client','date_depart'] if c in df_safe.columns]
+    if 'date_depart' not in df_safe.columns or len(needed) < 3:
         st.warning("Colonnes indispensables manquantes (telephone/nom_client/date_depart).")
         df_post = pd.DataFrame()
     else:
-        df_post = df_safe.dropna(subset=present_cols).copy()
+        df_post = df_safe.dropna(subset=needed).copy()
         df_post = df_post[(df_post['date_depart'] == target_depart) & (~df_post['post_depart_envoye'])].copy()
 
     if not df_post.empty:
@@ -916,18 +904,19 @@ def vue_sms(df, palette):
             df_sorted2 = df_post.sort_values(by="date_depart").reset_index(drop=True)
         except Exception:
             df_sorted2 = df_post.reset_index(drop=True)
-        options_post = [f"{idx}: {row['nom_client']} — départ {row['date_depart']}" for idx, row in df_sorted2.iterrows()]
+        options_post = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i, r in df_sorted2.iterrows()]
         selection2 = st.selectbox("Sélectionnez un client (post-départ)", options=options_post, index=None, key="post_select")
         if selection2:
             idx2 = int(selection2.split(":")[0])
             resa2 = df_sorted2.loc[idx2]
             lang = str(resa2.get('lang') or 'FR').upper()
             msg = _post_depart_message(resa2.get('nom_client'), lang)
-            enc = quote(msg); e164 = _format_phone_e164(resa2['telephone']); wa_num=re.sub(r"\D","",e164)
-            c_wa2, c_ios2, c_and2 = st.columns([1,1,1])
-            c_wa2.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
-            c_ios2.link_button("📲 iPhone SMS", f"sms:&body={enc}")
-            c_and2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+            enc = quote(msg)
+            e164 = _format_phone_e164(resa2['telephone']); wa_num = re.sub(r"\D","", e164)
+            cwa, cios, cand = st.columns(3)
+            cwa.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
+            cios.link_button("📲 iPhone SMS", f"sms:&body={enc}")
+            cand.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
             st.components.v1.html(
                 f"""
                 <button onclick="navigator.clipboard.writeText({json.dumps(msg)})"
@@ -939,7 +928,7 @@ def vue_sms(df, palette):
             )
             if st.button("✅ Marquer 'post-départ envoyé'"):
                 try:
-                    df.loc[resa2["_rowid"],'post_depart_envoye'] = True
+                    df.loc[resa2["_rowid"], 'post_depart_envoye'] = True
                     df_final = ensure_schema(df)
                     if sauvegarder_donnees(df_final):
                         st.success("Marqué 'post-départ envoyé' ✅"); st.rerun()
@@ -1121,7 +1110,6 @@ def admin_sidebar(df):
 
 # ==============================  MAIN  ==============================
 def main():
-    # Toggle thème dans la sidebar
     with st.sidebar:
         mode_clair = st.toggle("🌓 Mode clair (PC)", value=False)
 
@@ -1130,7 +1118,6 @@ def main():
 
     df, palette_loaded = charger_donnees()
 
-    # Endpoint ICS public via query params
     params = _get_query_params()
     if str(params.get("feed", [""])[0]).lower() == "ics":
         icspublic_endpoint(df); return
@@ -1138,7 +1125,6 @@ def main():
     st.title("✨ Villa Tobias — Gestion des Réservations")
     st.sidebar.title("🧭 Navigation")
 
-    # Palette effective (défaut + overrides éventuels)
     palette_eff = DEFAULT_PALETTE.copy()
     try:
         df_pal = pd.read_csv(CSV_PLATEFORMES, delimiter=';')
@@ -1161,7 +1147,6 @@ def main():
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
     page_function(df, palette_eff)
-
     admin_sidebar(df)
 
 if __name__ == "__main__":
