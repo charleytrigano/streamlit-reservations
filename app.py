@@ -3,7 +3,7 @@
 # - SMS pré-arrivée : par défaut Arrivées de J+1 (iPhone/Android/WhatsApp), Copier, lien court formulaire
 # - SMS post-départ : par défaut Départs du jour (individuel + groupé WhatsApp / iPhone / Android)
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
-# - Rapport **MAXI** : KPI annuels (occupation, ADR, RevPAR, panier), tendances, mix plateformes, heatmap, distributions, export CSV
+# - Rapport : KPI + filtres Année/Mois/Plateformes + tendances, mix plateformes, heatmap, distributions, export CSV
 # - Export ICS manuel : UID stables (v5)
 # - 🔗 Flux ICS public (BETA) : URL à copier (endpoint ?feed=ics&token=...)
 # - Google Form/Sheet : Form intégré (lien court), Feuille intégrée (lien court), lecture CSV
@@ -27,7 +27,7 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 # ==============================  GOOGLE FORM / SHEET  ==============================
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager (formulaire)
-GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"  # intégration lecture seule
+GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"  # intégration lecture seule (raccourci)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
 # IDs (préremplissage du form)
@@ -333,7 +333,7 @@ def _available_nights_by_month(year: int):
 def _expand_to_daily(df):
     rows = []
     for _, r in df.iterrows():
-        da, dd = r.get('date_arrivee'), r.get('date_depart')
+        da, dd = r.get("date_arrivee"), r.get("date_depart")
         if isinstance(da, date) and isinstance(dd, date) and dd > da:
             cur = da
             while cur < dd:
@@ -537,43 +537,91 @@ def vue_modifier(df, palette):
     if df.empty:
         st.warning("Aucune réservation à modifier.")
         return
-    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
-    options_resa = [f"{idx}: {row['nom_client']} ({row['date_arrivee']})"
-                    for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
-    selection = st.selectbox("Sélectionnez une réservation", options=options_resa, index=None)
+
+    # Filtres
+    base = df.dropna(subset=['date_arrivee']).copy()
+    if 'AAAA' not in base.columns or 'MM' not in base.columns or base['AAAA'].isna().any() or base['MM'].isna().any():
+        dt = pd.to_datetime(base['date_arrivee'], errors='coerce')
+        base.loc[pd.notna(dt), 'AAAA'] = dt[pd.notna(dt)].dt.year
+        base.loc[pd.notna(dt), 'MM']   = dt[pd.notna(dt)].dt.month
+
+    c1, c2, c3 = st.columns(3)
+    annees = ["Toutes"] + sorted(base['AAAA'].dropna().astype(int).unique(), reverse=True)
+    annee_sel = c1.selectbox("Filtrer par Année", annees, index=0)
+    mois_opts = ["Tous"] + list(range(1, 13))
+    mois_sel = c2.selectbox("Filtrer par Mois", mois_opts, index=0)
+    plats_all = sorted(base['plateforme'].dropna().unique())
+    plats_opts = ["Toutes"] + plats_all
+    plat_sel = c3.selectbox("Filtrer par Plateforme", plats_opts, index=0)
+
+    data = base.copy()
+    if annee_sel != "Toutes":
+        data = data[data['AAAA'] == annee_sel]
+    if mois_sel != "Tous":
+        data = data[data['MM'] == mois_sel]
+    if plat_sel != "Toutes":
+        data = data[data['plateforme'] == plat_sel]
+
+    if data.empty:
+        st.info("Aucune réservation ne correspond aux filtres choisis.")
+        return
+
+    df_sorted = data.sort_values(by="date_arrivee", ascending=False).reset_index()
+    options_resa = [
+        f"{idx}: {row.get('nom_client','(sans nom)')} ({row['date_arrivee']})"
+        for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])
+    ]
+    selection = st.selectbox("Sélectionnez une réservation", options=options_resa, index=None,
+                             placeholder="Choisissez une réservation...")
+
     if selection:
         idx_selection = int(selection.split(":")[0])
         original_index = df_sorted.loc[idx_selection, 'index']
-        resa = df.loc[original_index].copy()
+        resa_selectionnee = df.loc[original_index].copy()
+
         with st.form(f"form_modif_{original_index}"):
             c1, c2 = st.columns(2)
             with c1:
-                nom_client = st.text_input("**Nom du Client**", value=resa.get('nom_client',''))
-                telephone  = st.text_input("Téléphone", value=resa.get('telephone',''))
-                email      = st.text_input("Email (optionnel)", value=resa.get('email','') if 'email' in resa else '')
-                date_arrivee = st.date_input("**Date d'arrivée**", value=resa.get('date_arrivee'))
-                date_depart  = st.date_input("**Date de départ**", value=resa.get('date_depart'))
+                nom_client   = st.text_input("**Nom du Client**", value=resa_selectionnee.get('nom_client', ''))
+                telephone    = st.text_input("Téléphone", value=resa_selectionnee.get('telephone', ''))
+                email        = st.text_input("Email (optionnel)", value=resa_selectionnee.get('email', '') if 'email' in resa_selectionnee else '')
+                date_arrivee = st.date_input("**Date d'arrivée**", value=resa_selectionnee.get('date_arrivee'))
+                date_depart  = st.date_input("**Date de départ**", value=resa_selectionnee.get('date_depart'))
             with c2:
                 p_opts = list(palette.keys())
-                p_cur  = resa.get('plateforme')
+                p_cur  = resa_selectionnee.get('plateforme')
                 p_idx  = p_opts.index(p_cur) if p_cur in p_opts else 0
                 plateforme  = st.selectbox("**Plateforme**", options=p_opts, index=p_idx)
-                prix_brut   = st.number_input("Prix Brut (€)", min_value=0.0, value=resa.get('prix_brut',0.0), step=0.01, format="%.2f")
-                commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa.get('commissions',0.0), step=0.01, format="%.2f")
-                paye        = st.checkbox("Payé", value=bool(resa.get('paye', False)))
+                prix_brut   = st.number_input("Prix Brut (€)", min_value=0.0, value=resa_selectionnee.get('prix_brut',0.0), step=0.01, format="%.2f")
+                commissions = st.number_input("Commissions (€)", min_value=0.0, value=resa_selectionnee.get('commissions',0.0), step=0.01, format="%.2f")
+                paye        = st.checkbox("Payé", value=bool(resa_selectionnee.get('paye', False)))
+
             btn_enregistrer, btn_supprimer = st.columns([.8, .2])
+
             if btn_enregistrer.form_submit_button("💾 Enregistrer"):
-                updates = {'nom_client': nom_client,'telephone': telephone,'email': email,
-                           'date_arrivee': date_arrivee,'date_depart': date_depart,
-                           'plateforme': plateforme,'prix_brut': prix_brut,'commissions': commissions,'paye': paye}
-                for k,v in updates.items(): df.loc[original_index, k] = v
+                updates = {
+                    'nom_client': nom_client,
+                    'telephone': telephone,
+                    'email': email,
+                    'date_arrivee': date_arrivee,
+                    'date_depart': date_depart,
+                    'plateforme': plateforme,
+                    'prix_brut': prix_brut,
+                    'commissions': commissions,
+                    'paye': paye
+                }
+                for key, value in updates.items():
+                    df.loc[original_index, key] = value
                 df_final = ensure_schema(df)
                 if sauvegarder_donnees_csv(df_final):
-                    st.success("Modifications enregistrées !"); st.rerun()
+                    st.success("Modifications enregistrées !")
+                    st.rerun()
+
             if btn_supprimer.form_submit_button("🗑️ Supprimer"):
                 df_final = df.drop(index=original_index)
                 if sauvegarder_donnees_csv(df_final):
-                    st.warning("Réservation supprimée."); st.rerun()
+                    st.warning("Réservation supprimée.")
+                    st.rerun()
 
 def vue_plateformes(df, palette):
     st.header("🎨 Gestion des Plateformes")
@@ -648,47 +696,64 @@ def vue_calendrier(df, palette):
     else:
         st.info("Aucune réservation pour ce mois.")
 
-# ==============================  RAPPORT MAXI (avec multi-sélection 'Tous')  ==============================
+# ==============================  RAPPORT (avec filtre Mois)  ==============================
 def vue_rapport(df, palette):
     st.header("📊 Rapport de Performance — complet")
 
     base = df.dropna(subset=['date_arrivee','date_depart']).copy()
     if base.empty:
-        st.info("Aucune donnée pour générer un rapport."); 
+        st.info("Aucune donnée pour générer un rapport.")
         return
 
-    c0, c1, c2, c3 = st.columns([1,1,1,2])
+    # === Filtres Année / Mois / Plateformes ===
+    c0, c1, c2, c3 = st.columns([1,1.2,1.2,1.8])
     years = sorted({d.year for d in base['date_arrivee'] if isinstance(d, date)}, reverse=True)
     annee = c0.selectbox("Année", years, index=0)
 
-    # Plateformes — zone à défilement + "Tous"
+    mois_labels = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Aoû", "Sep", "Oct", "Nov", "Déc"]
+    mois_opts = ["Tous"] + [f"{i:02d} — {mois_labels[i-1]}" for i in range(1,13)]
+    mois_sel = c1.multiselect("Mois", mois_opts, default=["Tous"])
+
     all_plats = sorted([p for p in base['plateforme'].dropna().unique()])
     plat_options = ["Tous"] + all_plats
-    plats_sel = c1.multiselect("Plateformes (déroulant)", plat_options, default=["Tous"])
+    plats_sel = c2.multiselect("Plateformes (déroulant)", plat_options, default=["Tous"])
     plats_effectifs = all_plats if ("Tous" in plats_sel or not plats_sel) else [p for p in plats_sel if p != "Tous"]
 
-    paid_only = c2.toggle("Uniquement réservations payées", value=False)
-    metric_mode = c3.radio("Mode de revenu", ["Brut", "Net"], index=0, horizontal=True)
+    paid_only  = c3.toggle("Uniquement réservations payées", value=False)
+
+    metric_mode = st.radio("Mode de revenu", ["Brut", "Net"], index=0, horizontal=True)
     mcol = "prix_brut" if metric_mode == "Brut" else "prix_net"
 
+    # Appliquer filtres
     data = base[(pd.Series([isinstance(d, date) and d.year == annee for d in base['date_arrivee']]))].copy()
+
+    # Mois sélectionnés -> liste d'entiers
+    if ("Tous" in mois_sel) or (len(mois_sel) == 0):
+        mois_int = list(range(1,13))
+    else:
+        mois_int = [int(s.split(" — ")[0]) for s in mois_sel]
+
+    data = data[data['date_arrivee'].apply(lambda d: d.month in mois_int)]
     if plats_effectifs:
         data = data[data['plateforme'].isin(plats_effectifs)]
     if paid_only:
         data = data[data['paye'] == True]
 
     if data.empty:
-        st.warning("Aucune donnée après filtres."); 
+        st.warning("Aucune donnée après filtres.")
         return
 
-    # KPI
-    nb_res = len(data)
-    nuits = int(data['nuitees'].fillna(0).sum())
+    # === KPI (sur la plage mois sélectionnée) ===
+    nb_res   = len(data)
+    nuits    = int(data['nuitees'].fillna(0).sum())
     rev_total = float(data[mcol].fillna(0).sum())
-    adr = _safe_div2(rev_total, nuits)
-    avail_year = 366 if calendar.isleap(annee) else 365
-    occ = _safe_div2(nuits, avail_year)
-    revpar = _safe_div2(rev_total, avail_year)
+    adr      = _safe_div2(rev_total, nuits)
+
+    # nuits disponibles = somme des jours des mois sélectionnés
+    avail_by_month = _available_nights_by_month(annee)
+    avail_year = sum(avail_by_month[date(annee, m, 1)] for m in mois_int)
+    occ     = _safe_div2(nuits, avail_year)
+    revpar  = _safe_div2(rev_total, avail_year)
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("Réservations", f"{nb_res}")
@@ -700,12 +765,12 @@ def vue_rapport(df, palette):
 
     st.markdown("---")
 
-    # Agrégats mensuels
+    # === Agrégats mensuels (seulement sur les mois sélectionnés) ===
     data['mois'] = data['date_arrivee'].apply(lambda d: date(d.year, d.month, 1))
     grp = (data.groupby(['plateforme','mois'], as_index=False)
                .agg({mcol:'sum', 'nuitees':'sum'}))
 
-    months_all = _month_span(annee)
+    months_all = [date(annee, m, 1) for m in mois_int]  # seulement les mois filtrés
     frames = []
     for p in (plats_effectifs if plats_effectifs else all_plats):
         g = grp[grp['plateforme']==p].set_index('mois').reindex(months_all).fillna({mcol:0.0,'nuitees':0.0})
@@ -714,10 +779,10 @@ def vue_rapport(df, palette):
         frames.append(g)
     grp_full = pd.concat(frames, ignore_index=True)
 
-    avail_map = _available_nights_by_month(annee)
+    avail_map = {date(annee, m, 1): _available_nights_by_month(annee)[date(annee, m, 1)] for m in mois_int}
     grp_full['available'] = grp_full['mois'].map(avail_map)
-    grp_full['adr'] = grp_full.apply(lambda r: _safe_div2(r[mcol], r['nuitees']), axis=1)
-    grp_full['occ'] = grp_full.apply(lambda r: _safe_div2(r['nuitees'], r['available']), axis=1)
+    grp_full['adr']    = grp_full.apply(lambda r: _safe_div2(r[mcol], r['nuitees']), axis=1)
+    grp_full['occ']    = grp_full.apply(lambda r: _safe_div2(r['nuitees'], r['available']), axis=1)
     grp_full['revpar'] = grp_full.apply(lambda r: _safe_div2(r[mcol], r['available']), axis=1)
 
     st.subheader("Tendances par mois")
@@ -763,7 +828,7 @@ def vue_rapport(df, palette):
 
     st.markdown("---")
 
-    st.subheader("Répartition par plateforme (année)")
+    st.subheader("Répartition par plateforme (plage mois choisie)")
     mix = (data.groupby("plateforme", as_index=False)
               .agg(revenu=(mcol,'sum'), nuitées=('nuitees','sum'), sejours=('res_id','count')))
     c1, c2 = st.columns([2,1])
@@ -788,12 +853,15 @@ def vue_rapport(df, palette):
         daily['mois'] = daily['day'].apply(lambda d: date(d.year, d.month, 1))
         occ_days = (daily.groupby('day', as_index=False).agg(occ=('res_id','nunique')))
         occ_days['occ'] = occ_days['occ'].clip(0,1)
-
-        all_days = pd.DataFrame({"day": pd.date_range(f"{annee}-01-01", f"{annee}-12-31", freq="D").date})
+        # Construit seulement les jours des mois sélectionnés
+        all_days = []
+        for m in mois_int:
+            rng = pd.date_range(f"{annee}-{m:02d}-01", f"{annee}-{m:02d}-{monthrange(annee, m)[1]}", freq="D").date
+            all_days.extend(list(rng))
+        all_days = pd.DataFrame({"day": all_days})
         all_days = all_days.merge(occ_days[['day','occ']], on='day', how='left').fillna({'occ': 0})
         all_days['mois'] = all_days['day'].apply(lambda d: date(d.year, d.month, 1))
         all_days['jour'] = all_days['day'].apply(lambda d: d.day)
-
         heat = alt.Chart(all_days).mark_rect().encode(
             x=alt.X('jour:O', title='Jour'),
             y=alt.Y('month(mois):O', title='Mois'),
@@ -839,7 +907,7 @@ def vue_rapport(df, palette):
         st.dataframe(export.sort_values(['Mois','Plateforme']), use_container_width=True)
         st.download_button("⬇️ Télécharger CSV mensuel",
                            data=export.to_csv(index=False, sep=';').encode('utf-8'),
-                           file_name=f"rapport_{annee}_{metric_mode.lower()}_mensuel.csv",
+                           file_name=f"rapport_{annee}_{metric_mode.lower()}_mois_{'-'.join([f'{m:02d}' for m in mois_int])}.csv",
                            mime="text/csv")
 
 def vue_liste_clients(df):
@@ -868,12 +936,13 @@ def vue_sms(df):
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
+    # Bouton "copier lien court"
     st.components.v1.html("""
-        <button onclick="navigator.clipboard.writeText('%s')"
+        <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
                 style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
             📋 Copier le lien (formulaire)
         </button>
-    """ % FORM_SHORT_URL, height=48)
+    """, height=48)
 
     if df_tel.empty:
         st.info("Aucun client à contacter pour la date choisie (ou déjà marqué 'SMS envoyé').")
@@ -953,12 +1022,12 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
                           style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                       📋 Copier le message
                   </button>
-                  <button onclick="navigator.clipboard.writeText('%s')"
+                  <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
                           style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                       📋 Copier le lien (formulaire)
                   </button>
                 </div>
-            """ % (json.dumps(message_body), FORM_SHORT_URL), height=60)
+            """ % (json.dumps(message_body),), height=60)
 
             if st.button("✅ Marquer ce client comme 'SMS envoyé'"):
                 try:
@@ -1139,7 +1208,7 @@ Annick & Charley"""
                 c3.link_button("📲 iPhone SMS", row["sms_ios"])
                 c4.link_button("🤖 Android SMS", row["sms_android"])
 
-# ==============================  EXPORT ICS MANUEL (avec 'Tous')  ==============================
+# ==============================  EXPORT ICS MANUEL  ==============================
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
     st.info("Génère un fichier .ics à importer dans Google Calendar.")
@@ -1257,12 +1326,11 @@ def vue_flux_ics_public(df, palette):
     st.header("🔗 Flux ICS public (BETA)")
     st.caption("Copie cette URL dans Google Calendar → *Ajouter un agenda* → *À partir de l’URL*.")
 
-    base_url = st.text_input("URL de base de l'app (tel qu'affichée dans ton navigateur)", value=st.request.url if hasattr(st, "request") and hasattr(st.request, "url") else "")
+    base_url = st.text_input("URL de base de l'app (tel qu'affichée dans ton navigateur)", value="")
 
     years = sorted([d.year for d in df['date_arrivee'].dropna().unique()]) if 'date_arrivee' in df.columns else []
     year = st.selectbox("Année (arrivées)", options=years if years else [date.today().year], index=len(years)-1 if years else 0)
 
-    # Plateformes — zone à défilement + "Tous"
     all_plats = sorted(df['plateforme'].dropna().unique()) if 'plateforme' in df.columns else []
     plat_options = ["Tous"] + all_plats
     plats_sel = st.multiselect("Plateformes (déroulant)", plat_options, default=["Tous"])
@@ -1288,7 +1356,6 @@ def vue_flux_ics_public(df, palette):
         "incl_np": "1" if incl_np else "0",
         "incl_sms": "1" if incl_sms else "0",
     }
-    # N'ajouter plats que si ≠ Tous (sinon toutes plateformes)
     if plats_effectifs and len(plats_effectifs) != len(all_plats):
         for p in plats_effectifs:
             query.setdefault("plats", []).append(p)
@@ -1322,11 +1389,11 @@ def vue_google_sheet(df, palette):
             st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
             st.components.v1.html("""
-                <button onclick="navigator.clipboard.writeText('%s')"
+                <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
                         style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
-            """ % FORM_SHORT_URL, height=50)
+            """, height=50)
         else:
             df_ok = df_ok.sort_values('date_arrivee', ascending=False).reset_index()
             options = {i: f"{row['nom_client']} — arrivée {row['date_arrivee']}" for i, row in df_ok.iterrows()}
@@ -1347,11 +1414,11 @@ def vue_google_sheet(df, palette):
             )
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
             st.components.v1.html("""
-                <button onclick="navigator.clipboard.writeText('%s')"
+                <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
                         style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
-            """ % FORM_SHORT_URL, height=50)
+            """, height=50)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
@@ -1361,10 +1428,10 @@ def vue_google_sheet(df, palette):
     with tab_csv:
         st.caption("Lecture directe via l’URL 'Publier sur le Web' (CSV).")
         try:
-            reponses = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
-            st.dataframe(reponses, use_container_width=True)
+            reposes = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+            st.dataframe(reposes, use_container_width=True)
             st.download_button("⬇️ Télécharger les réponses (CSV)",
-                               data=reponses.to_csv(index=False).encode("utf-8"),
+                               data=reposes.to_csv(index=False).encode("utf-8"),
                                file_name="reponses_formulaire.csv", mime="text/csv")
         except Exception as e:
             st.error(f"Impossible de charger les réponses : {e}")
