@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import hashlib, uuid, json, re, io, os, unicodedata, shutil
+import hashlib, uuid, json, re, io, os, unicodedata, shutil, requests
 from datetime import date, datetime, timedelta
 from calendar import monthrange
 from urllib.parse import quote, urlencode
@@ -64,55 +64,84 @@ def enable_altair_theme():
 def card(title, body_md):
     st.markdown(f"<div class='glass'><div style='font-weight:700'>{title}</div><div>{body_md}</div></div>", unsafe_allow_html=True)
 
-# ==============================  STORAGE (Sheets <-> CSV) ==============================
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    from googleapiclient.discovery import build
-except Exception:
-    gspread = None
-    Credentials = None
-    build = None
-
+# ==============================  STORAGE MODE & PROXY  ==============================
 def _get_storage_mode():
     try: return st.secrets["storage"]["mode"]
     except Exception: return "csv"
 
-def _gspread_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/calendar",
-    ]
-    info = dict(st.secrets.get("gcp_service_account", {}))
-    if not info or "token_uri" not in info:
-        raise RuntimeError("Service account info missing fields (ex: token_uri).")
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    return gspread.authorize(creds), creds
+def _proxy_conf():
+    try:
+        conf = st.secrets["sheets_proxy"]
+        base = conf["base_url"].rstrip("/")
+        token = conf["token"]
+        res_ws = conf.get("reservations_ws", "Reservations")
+        plat_ws = conf.get("plateformes_ws", "Plateformes")
+        return base, token, res_ws, plat_ws
+    except Exception as e:
+        raise RuntimeError(f"Configuration sheets_proxy manquante: {e}")
 
-def _open_sheets():
-    gc, _ = _gspread_client()
-    ss = gc.open_by_key(st.secrets["sheets"]["spreadsheet_id"])
-    ws_res = ss.worksheet(st.secrets["sheets"]["reservations_worksheet"])
-    ws_pal = ss.worksheet(st.secrets["sheets"]["plateformes_worksheet"])
-    return ws_res, ws_pal
+def proxy_read_ws(ws_name: str) -> pd.DataFrame:
+    base, token, _, _ = _proxy_conf()
+    try:
+        r = requests.get(base, params={"token": token, "ws": ws_name}, timeout=20)
+        r.raise_for_status()
+        payload = r.json()
+        headers = payload.get("headers", [])
+        rows = payload.get("rows", [])
+        if not headers:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=headers)
+        return df
+    except Exception as e:
+        st.error(f"Proxy GET échec ({ws_name}) : {e}")
+        return pd.DataFrame()
 
+def _df_to_rows(df: pd.DataFrame, date_cols=("date_arrivee","date_depart")):
+    df2 = df.copy()
+    for col in date_cols:
+        if col in df2.columns:
+            df2[col] = pd.to_datetime(df2[col], errors="coerce").dt.strftime("%d/%m/%Y")
+    df2 = df2.astype(object).where(pd.notna(df2), "")
+    headers = list(df2.columns)
+    rows = df2.values.tolist()
+    return headers, rows
+
+def proxy_replace_ws(ws_name: str, df: pd.DataFrame) -> bool:
+    base, token, _, _ = _proxy_conf()
+    try:
+        headers, rows = _df_to_rows(df)
+        r = requests.post(
+            base,
+            json={"token": token, "action": "replace", "ws": ws_name, "headers": headers, "rows": rows},
+            timeout=30
+        )
+        r.raise_for_status()
+        ok = r.json().get("ok", False)
+        return bool(ok)
+    except Exception as e:
+        st.error(f"Proxy REPLACE échec ({ws_name}) : {e}")
+        return False
+
+# ==============================  CHARGEMENT / SAUVEGARDE ==============================
 @st.cache_data
 def charger_donnees():
     mode = _get_storage_mode()
-    if mode == "sheets" and gspread is not None:
+
+    # Proxy Apps Script
+    if mode == "sheets_proxy":
         try:
-            ws_res, ws_pal = _open_sheets()
-            df_res = pd.DataFrame(ws_res.get_all_records(numericise_ignore=['all']))
-            df_pal = pd.DataFrame(ws_pal.get_all_records(numericise_ignore=['all']))
+            _, _, res_ws, plat_ws = _proxy_conf()
+            df_res = proxy_read_ws(res_ws)
+            df_pal = proxy_read_ws(plat_ws)
             df_res = ensure_schema(df_res)
             palette = DEFAULT_PALETTE.copy()
             if not df_pal.empty and {"plateforme","couleur"} <= set(df_pal.columns):
                 palette.update(dict(zip(df_pal["plateforme"], df_pal["couleur"])))
             return df_res, palette
         except Exception as e:
-            st.error(f"Lecture Google Sheets impossible : {e}. Bascule CSV local.")
-    # fallback CSV
+            st.error(f"Lecture Proxy impossible : {e}. Bascule CSV local.")
+
+    # Fallback CSV
     try:
         df_res = pd.read_csv(CSV_RESERVATIONS, delimiter=";")
         df_res.columns = df_res.columns.str.strip()
@@ -125,42 +154,46 @@ def charger_donnees():
         palette = DEFAULT_PALETTE.copy()
     return ensure_schema(df_res), palette
 
-def _overwrite_ws(ws, df: pd.DataFrame):
-    ws.clear()
-    if df.empty:
-        ws.update([[]]); return
-    ws.update([df.columns.tolist()] + df.astype(object).where(pd.notna(df), "").values.tolist())
-
 def sauvegarder_donnees(df, palette=None):
-    """Sauvegarde vers Sheets ou CSV (fallback)."""
-    # backup CSV local avant toute chose (sécurité)
+    # backup CSV local (précaution)
     try:
         if os.path.exists(CSV_RESERVATIONS):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             shutil.copyfile(CSV_RESERVATIONS, f"{CSV_RESERVATIONS}.backup_{stamp}")
     except Exception:
         pass
+
     mode = _get_storage_mode()
-    try:
-        if mode == "sheets" and gspread is not None:
-            ws_res, ws_pal = _open_sheets()
+
+    # Proxy Apps Script
+    if mode == "sheets_proxy":
+        try:
+            _, _, res_ws, plat_ws = _proxy_conf()
             df_to_save = df.copy()
-            for col in ["date_arrivee","date_depart"]:
-                if col in df_to_save.columns:
-                    df_to_save[col] = pd.to_datetime(df_to_save[col], errors="coerce").dt.strftime("%d/%m/%Y")
-            cols = BASE_COLS if set(BASE_COLS) <= set(df_to_save.columns) else df_to_save.columns
-            _overwrite_ws(ws_res, df_to_save[cols])
+            cols = [c for c in BASE_COLS if c in df_to_save.columns] or list(df_to_save.columns)
+            ok1 = proxy_replace_ws(res_ws, df_to_save[cols])
+            ok2 = True
             if palette is not None:
                 df_p = pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"])
-                _overwrite_ws(ws_pal, df_p)
-        else:
-            df.to_csv(CSV_RESERVATIONS, sep=";", index=False)
-            if palette is not None:
-                pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"]).to_csv(CSV_PLATEFORMES, sep=";", index=False)
+                ok2 = proxy_replace_ws(plat_ws, df_p)
+            if ok1 and ok2:
+                st.cache_data.clear()
+                return True
+            st.error("Écriture proxy incomplète (Reservations/Plateformes).")
+            return False
+        except Exception as e:
+            st.error(f"Erreur de sauvegarde via proxy : {e}")
+            return False
+
+    # CSV local
+    try:
+        df.to_csv(CSV_RESERVATIONS, sep=";", index=False)
+        if palette is not None:
+            pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"]).to_csv(CSV_PLATEFORMES, sep=";", index=False)
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Erreur de sauvegarde : {e}")
+        st.error(f"Erreur de sauvegarde (CSV) : {e}")
         return False
 
 # ==============================  SCHEMA & CLEAN ==============================
@@ -315,112 +348,6 @@ def build_ics_from_df(df_src: pd.DataFrame) -> str:
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
-# ==============================  GOOGLE CALENDAR API  ==============================
-def _calendar_service():
-    if build is None or Credentials is None:
-        raise RuntimeError("google-api-python-client non disponible")
-    scopes = ["https://www.googleapis.com/auth/calendar"]
-    info = dict(st.secrets["gcp_service_account"])
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    return build("calendar", "v3", credentials=creds)
-
-def _event_body_from_row(r):
-    da, dd = r['date_arrivee'], r['date_depart']
-    if not (isinstance(da, date) and isinstance(dd, date)): return None
-    summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
-    if r.get('plateforme'): summary += f" ({r['plateforme']})"
-    desc = "\n".join([
-        f"Client: {r.get('nom_client','')}",
-        f"Téléphone: {r.get('telephone','')}",
-        f"Email: {r.get('email','')}",
-        f"Plateforme: {r.get('plateforme','')}",
-        f"Nuitées: {int(r.get('nuitees') or 0)}",
-        f"Prix brut: {float(r.get('prix_brut') or 0):.2f} €",
-        f"Prix net: {float(r.get('prix_net') or 0):.2f} €",
-        f"Payé: {'Oui' if bool(r.get('paye')) else 'Non'}",
-        f"res_id: {r.get('res_id','')}",
-    ])
-    return {
-        "summary": summary,
-        "description": desc,
-        "start": {"date": da.strftime("%Y-%m-%d")},
-        "end":   {"date": dd.strftime("%Y-%m-%d")},
-    }
-
-def push_to_calendar(df):
-    try:
-        service = _calendar_service()
-        cal_id = st.secrets["google_calendar"]["calendar_id"]
-    except Exception as e:
-        st.error(f"Google Calendar non configuré : {e}")
-        return 0,0
-
-    created, updated = 0, 0
-    for _, r in df.iterrows():
-        body = _event_body_from_row(r)
-        if not body: 
-            continue
-        uid = _compute_uid(r)
-        body.setdefault("extendedProperties", {}).setdefault("private", {})["uid"] = uid
-
-        # recherche par propriété privée "uid"
-        exists = None
-        try:
-            evs = service.events().list(
-                calendarId=cal_id, privateExtendedProperty=f"uid={uid}", maxResults=2
-            ).execute()
-            items = evs.get("items", [])
-            exists = items[0] if items else None
-        except Exception:
-            exists = None
-
-        if exists:
-            event_id = exists["id"]
-            service.events().patch(calendarId=cal_id, eventId=event_id, body=body).execute()
-            updated += 1
-        else:
-            service.events().insert(calendarId=cal_id, body=body).execute()
-            created += 1
-    return created, updated
-
-def pull_from_calendar(annee: int):
-    try:
-        service = _calendar_service()
-        cal_id = st.secrets["google_calendar"]["calendar_id"]
-    except Exception as e:
-        st.error(f"Google Calendar non configuré : {e}")
-        return pd.DataFrame()
-
-    time_min = f"{annee}-01-01T00:00:00Z"
-    time_max = f"{annee}-12-31T23:59:59Z"
-    events, page_token = [], None
-    while True:
-        resp = service.events().list(calendarId=cal_id, timeMin=time_min, timeMax=time_max,
-                                     singleEvents=True, pageToken=page_token).execute()
-        events.extend(resp.get("items", []))
-        page_token = resp.get("nextPageToken")
-        if not page_token: break
-
-    rows = []
-    for ev in events:
-        try:
-            priv = ev.get("extendedProperties", {}).get("private", {})
-            uid = priv.get("uid") or ev.get("iCalUID")
-            start_d = ev["start"].get("date")
-            end_d   = ev["end"].get("date")
-            if not (uid and start_d and end_d): 
-                continue
-            rows.append({
-                "ical_uid": uid,
-                "date_arrivee": pd.to_datetime(start_d).date(),
-                "date_depart": pd.to_datetime(end_d).date(),
-                "summary": ev.get("summary",""),
-                "event_id": ev.get("id",""),
-            })
-        except Exception:
-            pass
-    return pd.DataFrame(rows)
-
 # ==============================  TEMPLATES MULTILINGUES ==============================
 LANG_TEMPLATES = {
     "FR": {
@@ -515,7 +442,6 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation."); return
     df_valid = df.dropna(subset=['AAAA','MM'])
     c1, c2, c3 = st.columns(3)
-    # FIX: pas de .tolist() après sorted(...)
     annees = ["Toutes"] + sorted(df_valid['AAAA'].dropna().astype(int).unique(), reverse=True)
     mois_options = ["Tous"] + list(range(1,13))
     mois_selectionne = c2.selectbox("Filtrer par Mois", mois_options)
@@ -555,7 +481,6 @@ def vue_reservations(df, palette):
         disabled=[],
         hide_index=True
     )
-    # si modifié, on répercute
     if not edited.equals(df_sorted):
         df_copy = df.copy()
         for i, row in edited.iterrows():
@@ -682,7 +607,6 @@ def vue_calendrier(df, palette):
     noms_mois = [calendar.month_name[i] for i in range(1,13)]
     selected_month_name = c1.selectbox("Mois", options=noms_mois, index=today.month-1)
     selected_month = noms_mois.index(selected_month_name) + 1
-    # FIX: pas de .tolist() après sorted(...)
     years = sorted(dfv['AAAA'].dropna().astype(int).unique())
     default_year_index = years.index(today.year) if today.year in years else len(years)-1
     selected_year = c2.selectbox("Année", options=years, index=default_year_index)
@@ -1113,7 +1037,7 @@ def vue_flux_ics_public(df, palette):
         if not incl_sms: data = data[data['sms_envoye']==False]
         st.text(build_ics_from_df(data))
 
-# ==============================  GOOGLE FORM / SHEET ==============================
+# ==============================  GOOGLE FORM / SHEET (intégré & CSV public) ==============================
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée & Feuille Google")
     card("Infos", "Le bouton **Copier le lien** insère l’URL **courte** du formulaire.")
@@ -1146,23 +1070,6 @@ def vue_google_sheet(df, palette):
         except Exception as e:
             st.error(f"Impossible de charger les réponses : {e}")
             st.info("Vérifie que la feuille est bien publiée en CSV et accessible.")
-
-# ==============================  CALENDAR SYNC (PUSH/PULL) ==============================
-def vue_calendar_sync(df, palette):
-    st.header("🔄 Google Calendar — Synchronisation bidirectionnelle")
-    if df.empty:
-        st.info("Aucune donnée."); return
-    annee = st.selectbox("Année", sorted(df['AAAA'].dropna().unique())[::-1])
-    c1, c2 = st.columns(2)
-    if c1.button("⬆️ Pousser vers Google Calendar (upsert)"):
-        subset = df.dropna(subset=['date_arrivee','date_depart']).copy()
-        subset = subset[subset['AAAA'] == annee]
-        c,u = push_to_calendar(subset)
-        st.success(f"Synchronisation terminée : {c} créé(s), {u} mis à jour.")
-    if c2.button("⬇️ Tirer depuis Google Calendar (aperçu)"):
-        pulled = pull_from_calendar(int(annee))
-        if pulled.empty: st.info("Aucun événement récupéré.")
-        else: st.dataframe(pulled, use_container_width=True)
 
 # ==============================  SIDEBAR ADMIN ==============================
 def admin_sidebar(df):
@@ -1219,7 +1126,6 @@ def main():
         "📆 Export ICS": vue_export_ics,
         "🔗 Flux ICS public": vue_flux_ics_public,
         "📝 Fiche d'arrivée / Google Sheet": vue_google_sheet,
-        "🔄 Google Calendar Sync": vue_calendar_sync,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
