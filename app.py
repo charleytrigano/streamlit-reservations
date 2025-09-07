@@ -1,24 +1,19 @@
-# app.py — Villa Tobias (COMPLET)
-# - Réservations : cases à cocher Payé / SMS envoyé / Post-départ envoyé (éditables + sauvegarde) + email
-# - SMS pré-arrivée : par défaut Arrivées de J+1 (iPhone/Android/WhatsApp), Copier, lien court formulaire
-# - SMS post-départ : par défaut Départs du jour (individuel + groupé WhatsApp / iPhone / Android)
-# - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
-# - Rapport : KPI + filtres Année/Mois/Plateformes + tendances, mix plateformes, heatmap, distributions, export CSV
-# - Export ICS manuel : UID stables (v5)
-# - 🔗 Flux ICS public (BETA) : URL à copier (endpoint ?feed=ics&token=...)
-# - Google Form/Sheet : Form intégré (lien court), Feuille intégrée (lien court), lecture CSV
+# app.py — Villa Tobias (COMPLET + Modern UI)
+# UI modernisée: thème sombre, cards “glass”, KPI revus, thème Altair
+# Fonctionnel: réservations (cases à cocher), SMS/WhatsApp pré-arrivée & post-départ,
+# Google Form prérempli (lien court), Google Sheet intégré, Rapport avancé, Export ICS, Flux ICS public
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import calendar
+import os, calendar, re, json, uuid, unicodedata, hashlib
 from datetime import date, timedelta, datetime
 from urllib.parse import quote, urlencode, quote_plus
-import altair as alt
-import uuid, re, unicodedata, json
-import hashlib
 from calendar import monthrange
+import altair as alt
+
+# ==============================  CONFIG  ==============================
+st.set_page_config(page_title="📖 Réservations Villa Tobias", page_icon="✨", layout="wide")
 
 # ==============================  FICHIERS  ==============================
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -30,7 +25,7 @@ FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager (formulaire)
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"  # intégration lecture seule (raccourci)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs (préremplissage du form)
+# IDs de champs pour préremplir le Google Form
 FORM_ENTRY_NOM        = "entry.937556468"
 FORM_ENTRY_TEL        = "entry.702324920"
 FORM_ENTRY_EMAIL      = "entry.1712365042"
@@ -40,11 +35,80 @@ FORM_ENTRY_PLATEFORME = "entry.528935650"
 FORM_ENTRY_NUITEES    = "entry.473651945"
 FORM_ENTRY_RESID      = "entry.2071395456"
 
-# ==============================  PAGE CONFIG  ==============================
-st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
-
 # ==============================  PALETTE  ==============================
 DEFAULT_PALETTE = {"Booking": "#1e90ff", "Airbnb": "#e74c3c", "Autre": "#f59e0b"}
+
+# ==============================  MODERN UI TOOLKIT  ==============================
+def apply_modern_style():
+    st.markdown("""
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+      :root{
+        --bg:#0f1115; --panel:#171923; --muted:#a0aec0; --text:#eaeef6;
+        --accent:#7c5cff; --accent-2:#22c55e; --danger:#ef4444; --chip:#1f2230;
+      }
+      html, body, [data-testid="stAppViewContainer"]{
+        background: radial-gradient(1200px 800px at 5% 0%, #151827 0%, var(--bg) 60%) fixed;
+      }
+      * { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      h1, h2, h3 { letter-spacing: .2px; }
+      h1 { font-weight: 700; } h2 { font-weight: 700; } h3 { font-weight: 600; }
+
+      [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, rgba(23,25,35,.9), rgba(23,25,35,.75));
+        backdrop-filter: blur(8px); border-right: 1px solid rgba(124,92,255,.15);
+      }
+      .glass {
+        background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+        border: 1px solid rgba(124,92,255,.16);
+        box-shadow: 0 10px 30px rgba(2,8,23,.35);
+        border-radius: 16px; padding: 16px;
+      }
+      .chips { display:flex; flex-wrap:wrap; gap:12px; }
+      .chip {
+        background: linear-gradient(180deg, var(--chip), #161928);
+        border: 1px solid rgba(255,255,255,.06);
+        border-radius: 12px; padding:10px 14px; min-width:200px;
+      }
+      .chip .lbl { color: var(--muted); font-size:.85rem; }
+      .chip .val { color: var(--text); font-weight:700; font-size:1.05rem; }
+
+      .btn-row{display:flex; gap:10px; flex-wrap:wrap}
+      .btn {
+        display:inline-flex; align-items:center; gap:8px;
+        padding:10px 14px; border-radius:12px; text-decoration:none!important;
+        background: linear-gradient(180deg, #2a2f45, #202437);
+        border:1px solid rgba(255,255,255,.08);
+        color:#fff!important; font-weight:600; transition: all .2s ease;
+      }
+      .btn:hover{ transform: translateY(-1px); box-shadow: 0 8px 22px rgba(0,0,0,.25); }
+      .stDataFrame, .stDataEditor { border-radius: 12px; overflow:hidden; }
+      .streamlit-expanderHeader{ font-weight:600; }
+      pre, code { border-radius: 10px !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+def card(title: str, body_md: str):
+    st.markdown(f"""
+    <div class="glass">
+      <div style="font-weight:700; color:#cbd5e1; margin-bottom:8px">{title}</div>
+      <div style="color:#eaeef6">{body_md}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def enable_altair_theme():
+    def _theme():
+        return {
+            "config": {
+                "view": {"stroke": "transparent"},
+                "axis": {"labelColor": "#cbd5e1", "titleColor": "#eaeef6", "gridColor": "#2a2f45"},
+                "legend": {"labelColor": "#cbd5e1", "titleColor": "#eaeef6"},
+                "title": {"color": "#eaeef6", "font": "Inter", "fontWeight": 700},
+                "font": "Inter",
+            }
+        }
+    alt.themes.register("tobias", _theme)
+    alt.themes.enable("tobias")
 
 # ==============================  CORE DATA  ==============================
 @st.cache_data
@@ -163,7 +227,7 @@ def build_stable_uid(row) -> str:
     canonical = "|".join([PROPERTY_ID, res_id, _canonize_text(row.get('nom_client','')), _canonize_phone(row.get('telephone',''))])
     return str(uuid.uuid5(NAMESPACE, canonical))
 
-# ==============================  HELPERS  ==============================
+# ==============================  HELPERS GÉNÉRAUX  ==============================
 def is_dark_color(hex_color):
     try:
         hex_color = hex_color.lstrip('#')
@@ -180,25 +244,19 @@ def kpi_chips(df, title="Indicateurs Clés"):
     totals = {
         "Total Brut": df["prix_brut"].sum(),
         "Total Net": df["prix_net"].sum(),
-        "Total Commissions": df["commissions"].sum(),
-        "Total Frais CB": df["frais_cb"].sum(),
-        "Total Ménage": df["menage"].sum(),
-        "Total Base": df["base"].sum(),
+        "Commissions": df["commissions"].sum(),
+        "Frais CB": df["frais_cb"].sum(),
+        "Ménage": df["menage"].sum(),
+        "Base": df["base"].sum(),
         "Nuitées": df["nuitees"].sum(),
     }
-    html = f"""
-    <style>
-      .chips-container {{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px; }}
-      .chip {{ background-color:#333; padding:8px 12px; border-radius:16px; font-size:.9rem; text-align:center; }}
-      .chip-label {{ display:block; font-size:.8rem; color:#aaa; margin-bottom:4px; }}
-      .chip-value {{ font-weight:bold; color:#eee; }}
-    </style>
-    <div class="chips-container">
-      {"".join([f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{value:,.2f} €</span></div>'
-        if "Nuitées" not in label else f'<div class="chip"><span class="chip-label">{label}</span><span class="chip-value">{int(value)}</span></div>'
-        for label, value in totals.items()])}
-    </div>
-    """
+    html = "<div class='chips'>"
+    for label, value in totals.items():
+        if "Nuitées" in label:
+            html += f"<div class='chip'><div class='lbl'>{label}</div><div class='val'>{int(value)}</div></div>"
+        else:
+            html += f"<div class='chip'><div class='lbl'>{label}</div><div class='val'>{value:,.2f} €</div></div>"
+    html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
 def _ensure_res_id_on_row(df, idx):
@@ -217,12 +275,9 @@ def _ensure_res_id_on_row(df, idx):
     return cur
 
 def _null_like(v):
-    if v is None:
-        return True
-    if isinstance(v, float) and np.isnan(v):
-        return True
-    if isinstance(v, str) and v.strip().lower() in ("", "nan", "none"):
-        return True
+    if v is None: return True
+    if isinstance(v, float) and np.isnan(v): return True
+    if isinstance(v, str) and v.strip().lower() in ("", "nan", "none"): return True
     return False
 
 def _format_phone_e164(raw_phone: str) -> str:
@@ -236,7 +291,13 @@ def _format_phone_e164(raw_phone: str) -> str:
         return "+33" + clean
     return raw_phone.strip()
 
-# ==============================  PREFILL FORM URL  ==============================
+def _safe_div2(a, b):
+    return (a / b) if (b and b != 0) else float("nan")
+
+def _fmt_eur(x):
+    return f"{x:,.2f} €".replace(",", " ").replace(".", ",")
+
+# ==============================  GOOGLE FORM PREFILL  ==============================
 def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None,
                      plateforme=None, nuitees=None, res_id=None):
     base = GOOGLE_FORM_URL.split("?")[0]
@@ -255,10 +316,8 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
     if FORM_ENTRY_PLATEFORME and not _null_like(plateforme):
         params[FORM_ENTRY_PLATEFORME] = str(plateforme)
     if FORM_ENTRY_NUITEES and not _null_like(nuitees):
-        try:
-            params[FORM_ENTRY_NUITEES] = str(int(nuitees))
-        except Exception:
-            params[FORM_ENTRY_NUITEES] = str(nuitees)
+        try: params[FORM_ENTRY_NUITEES] = str(int(nuitees))
+        except Exception: params[FORM_ENTRY_NUITEES] = str(nuitees)
     if FORM_ENTRY_RESID and not _null_like(res_id):
         params[FORM_ENTRY_RESID] = str(res_id)
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
@@ -316,17 +375,7 @@ def build_ics_from_df(df_src: pd.DataFrame) -> str:
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
-# ==============================  HELPERS RAPPORTS  ==============================
-def _month_start(d: date) -> date:
-    return date(d.year, d.month, 1)
-
-def _month_end(d: date) -> date:
-    last = monthrange(d.year, d.month)[1]
-    return date(d.year, d.month, last)
-
-def _month_span(year: int):
-    return [date(year, m, 1) for m in range(1, 13)]
-
+# ==============================  RAPPORT HELPERS  ==============================
 def _available_nights_by_month(year: int):
     return {date(year, m, 1): monthrange(year, m)[1] for m in range(1, 13)}
 
@@ -347,15 +396,10 @@ def _expand_to_daily(df):
                 cur = cur + timedelta(days=1)
     return pd.DataFrame(rows)
 
-def _safe_div2(a, b):
-    return (a / b) if (b and b != 0) else float("nan")
-
-def _fmt_eur(x):
-    return f"{x:,.2f} €".replace(",", " ").replace(".", ",")
-
-# ==============================  VUES  ==============================
+# ==============================  VUES (1/2)  ==============================
 def vue_reservations(df):
-    st.header("📋 Liste des Réservations")
+    st.header("📋 Réservations")
+    card("Astuce", "Utilisez les **filtres** puis éditez directement la grille. Cliquez **💾 Enregistrer**.")
     if df.empty:
         st.info("Aucune réservation trouvée.")
         return
@@ -363,11 +407,11 @@ def vue_reservations(df):
     df_dates_valides = df.dropna(subset=['AAAA', 'MM'])
     c1, c2, c3 = st.columns(3)
     annees = ["Toutes"] + sorted(df_dates_valides['AAAA'].astype(int).unique(), reverse=True)
-    annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
+    annee_selectionnee = c1.selectbox("Année", annees)
     mois_options = ["Tous"] + list(range(1, 13))
-    mois_selectionne = c2.selectbox("Filtrer par Mois", mois_options)
+    mois_selectionne = c2.selectbox("Mois", mois_options)
     plateformes_options = ["Toutes"] + sorted(df_dates_valides['plateforme'].dropna().unique())
-    plateforme_selectionnee = c3.selectbox("Filtrer par Plateforme", plateformes_options)
+    plateforme_selectionnee = c3.selectbox("Plateforme", plateformes_options)
 
     data_filtree = df_dates_valides.copy()
     if annee_selectionnee != "Toutes":
@@ -377,7 +421,9 @@ def vue_reservations(df):
     if plateforme_selectionnee != "Toutes":
         data_filtree = data_filtree[data_filtree['plateforme'] == plateforme_selectionnee]
 
-    kpi_chips(data_filtree, title="Totaux pour la Sélection")
+    with st.container():
+        kpi_chips(data_filtree, title="📈 Indicateurs clés de la sélection")
+
     st.markdown("---")
 
     df_sorted = data_filtree.sort_values(by="date_arrivee", ascending=False, na_position='last').copy()
@@ -449,6 +495,7 @@ def vue_reservations(df):
         else:
             column_config[c] = st.column_config.TextColumn(c)
 
+    st.markdown("<div class='glass'>", unsafe_allow_html=True)
     edited = st.data_editor(
         df_edit,
         column_config=column_config,
@@ -458,6 +505,11 @@ def vue_reservations(df):
         hide_index=True,
         key="editor_reservations"
     )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="btn-row" style="margin-top:10px">', unsafe_allow_html=True)
+    st.markdown('<a class="btn" href="#top">⬆️ Retour en haut</a>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("💾 Enregistrer les modifications"):
         try:
@@ -487,7 +539,6 @@ def vue_reservations(df):
                             df.loc[rid, c] = val.date()
                         else:
                             df.loc[rid, c] = val
-
             df_final = ensure_schema(df)
             if sauvegarder_donnees_csv(df_final):
                 st.success("Modifications enregistrées ✅")
@@ -497,6 +548,7 @@ def vue_reservations(df):
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une Réservation")
+    card("Conseil", "Renseignez les **dates**, le **client** et la **plateforme**. Les totaux se recalculent automatiquement.")
     with st.form("form_ajout", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -533,12 +585,12 @@ def vue_ajouter(df, palette):
                     st.rerun()
 
 def vue_modifier(df, palette):
-    st.header("✏️ Modifier / Supprimer une Réservation")
+    st.header("✏️ Modifier / Supprimer")
+    card("Astuce", "Filtrez puis **sélectionnez** une réservation. Enregistrez ou supprimez.")
     if df.empty:
         st.warning("Aucune réservation à modifier.")
         return
 
-    # Filtres
     base = df.dropna(subset=['date_arrivee']).copy()
     if 'AAAA' not in base.columns or 'MM' not in base.columns or base['AAAA'].isna().any() or base['MM'].isna().any():
         dt = pd.to_datetime(base['date_arrivee'], errors='coerce')
@@ -547,20 +599,17 @@ def vue_modifier(df, palette):
 
     c1, c2, c3 = st.columns(3)
     annees = ["Toutes"] + sorted(base['AAAA'].dropna().astype(int).unique(), reverse=True)
-    annee_sel = c1.selectbox("Filtrer par Année", annees, index=0)
+    annee_sel = c1.selectbox("Année", annees, index=0)
     mois_opts = ["Tous"] + list(range(1, 13))
-    mois_sel = c2.selectbox("Filtrer par Mois", mois_opts, index=0)
+    mois_sel = c2.selectbox("Mois", mois_opts, index=0)
     plats_all = sorted(base['plateforme'].dropna().unique())
     plats_opts = ["Toutes"] + plats_all
-    plat_sel = c3.selectbox("Filtrer par Plateforme", plats_opts, index=0)
+    plat_sel = c3.selectbox("Plateforme", plats_opts, index=0)
 
     data = base.copy()
-    if annee_sel != "Toutes":
-        data = data[data['AAAA'] == annee_sel]
-    if mois_sel != "Tous":
-        data = data[data['MM'] == mois_sel]
-    if plat_sel != "Toutes":
-        data = data[data['plateforme'] == plat_sel]
+    if annee_sel != "Toutes": data = data[data['AAAA'] == annee_sel]
+    if mois_sel != "Tous":    data = data[data['MM'] == mois_sel]
+    if plat_sel != "Toutes":  data = data[data['plateforme'] == plat_sel]
 
     if data.empty:
         st.info("Aucune réservation ne correspond aux filtres choisis.")
@@ -624,11 +673,14 @@ def vue_modifier(df, palette):
                     st.rerun()
 
 def vue_plateformes(df, palette):
-    st.header("🎨 Gestion des Plateformes")
+    st.header("🎨 Couleurs & Plateformes")
+    card("Conseil", "Personnalisez les **couleurs** par plateforme. Elles s’appliqueront aux graphiques et au calendrier.")
     df_palette = pd.DataFrame(list(palette.items()), columns=['plateforme','couleur'])
+    st.markdown("<div class='glass'>", unsafe_allow_html=True)
     edited_df = st.data_editor(df_palette, num_rows="dynamic", use_container_width=True, hide_index=True,
         column_config={"plateforme": "Plateforme", "couleur": st.column_config.TextColumn("Couleur (code hex)")})
-    if st.button("💾 Enregistrer les modifications"):
+    st.markdown("</div>", unsafe_allow_html=True)
+    if st.button("💾 Enregistrer la palette"):
         nouvelle_palette = dict(zip(edited_df['plateforme'], edited_df['couleur']))
         df_plateformes_save = pd.DataFrame(list(nouvelle_palette.items()), columns=['plateforme','couleur'])
         try:
@@ -639,7 +691,8 @@ def vue_plateformes(df, palette):
             st.error(f"Erreur de sauvegarde de la palette : {e}")
 
 def vue_calendrier(df, palette):
-    st.header("📅 Calendrier des Réservations")
+    st.header("📅 Calendrier")
+    card("Astuce", "Survolez les barres colorées pour voir le **client**. Changez **mois/année** en haut.")
     df_ok = df.dropna(subset=['date_arrivee','date_depart','AAAA'])
     if df_ok.empty:
         st.info("Aucune réservation à afficher."); return
@@ -655,9 +708,9 @@ def vue_calendrier(df, palette):
     selected_year = c2.selectbox("Année", options=years, index=default_year_index)
     cal = calendar.Calendar()
     month_days = cal.monthdatescalendar(selected_year, selected_month)
-    st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top}.calendar-day.outside-month{background:#2e2e2e}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:5px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
+    st.markdown("""<style>.calendar-day{border:1px solid #444;min-height:120px;padding:5px;vertical-align:top;border-radius:10px;background:rgba(255,255,255,.02)}.calendar-day.outside-month{background:#1a1d2b}.calendar-date{font-weight:700;font-size:1.1em;margin-bottom:5px;text-align:right;color:#eaeef6}.reservation-bar{padding:3px 6px;margin-bottom:3px;border-radius:6px;font-size:.9em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}</style>""", unsafe_allow_html=True)
     headers = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"]
-    st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
+    st.write(f'<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-weight:700;color:#cbd5e1;margin-bottom:6px">{"".join(f"<div>{h}</div>" for h in headers)}</div>', unsafe_allow_html=True)
     for week in month_days:
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -672,8 +725,9 @@ def vue_calendrier(df, palette):
                             day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
+
     st.markdown("---")
-    st.subheader("Détails des réservations du mois")
+    st.subheader("Détails du mois")
     start_of_month = date(selected_year, selected_month, 1)
     end_of_month   = date(selected_year, selected_month, calendar.monthrange(selected_year, selected_month)[1])
     reservations_du_mois = df_ok[(df_ok['date_arrivee'] <= end_of_month) & df_ok['date_depart'].gt(start_of_month)].sort_values(by="date_arrivee").reset_index()
@@ -682,30 +736,35 @@ def vue_calendrier(df, palette):
         selection_str = st.selectbox("Voir les détails :", options=options.keys(), index=None)
         if selection_str:
             details = reservations_du_mois.loc[options[selection_str]]
-            st.markdown(f"**Détails pour {details.get('nom_client')}**")
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown(f"""- **Téléphone :** {details.get('telephone', 'N/A')}
+                card("Client", f"""
+- **Nom :** {details.get('nom_client')}
+- **Téléphone :** {details.get('telephone', 'N/A')}
 - **Arrivée :** {details.get('date_arrivee').strftime('%d/%m/%Y') if pd.notna(details.get('date_arrivee')) else 'N/A'}
 - **Départ :** {details.get('date_depart').strftime('%d/%m/%Y') if pd.notna(details.get('date_depart')) else 'N/A'}
-- **Nuits :** {details.get('nuitees', 0):.0f}""")
+- **Nuits :** {details.get('nuitees', 0):.0f}
+""")
             with col2:
-                st.markdown(f"""- **Prix Net :** {details.get('prix_net', 0):.2f} €
-- **Prix Brut :** {details.get('prix_brut', 0):.2f} €
-- **Statut :** {"Payé" if details.get('paye', False) else "Non Payé"}""")
+                card("Tarifs", f"""
+- **Net :** {details.get('prix_net', 0):.2f} €
+- **Brut :** {details.get('prix_brut', 0):.2f} €
+- **Statut :** {"Payé" if details.get('paye', False) else "Non Payé"}
+""")
     else:
         st.info("Aucune réservation pour ce mois.")
 
-# ==============================  RAPPORT (avec filtre Mois)  ==============================
+# ==============================  VUE RAPPORT (modernisée)  ==============================
 def vue_rapport(df, palette):
-    st.header("📊 Rapport de Performance — complet")
+    enable_altair_theme()
+    st.header("📊 Rapport de Performance")
+    card("Mode d'emploi", "Choisissez **Année/Mois/Plateformes** et la **métrique**. Explorez les tendances et exportez le CSV.")
 
     base = df.dropna(subset=['date_arrivee','date_depart']).copy()
     if base.empty:
         st.info("Aucune donnée pour générer un rapport.")
         return
 
-    # === Filtres Année / Mois / Plateformes ===
     c0, c1, c2, c3 = st.columns([1,1.2,1.2,1.8])
     years = sorted({d.year for d in base['date_arrivee'] if isinstance(d, date)}, reverse=True)
     annee = c0.selectbox("Année", years, index=0)
@@ -724,15 +783,11 @@ def vue_rapport(df, palette):
     metric_mode = st.radio("Mode de revenu", ["Brut", "Net"], index=0, horizontal=True)
     mcol = "prix_brut" if metric_mode == "Brut" else "prix_net"
 
-    # Appliquer filtres
     data = base[(pd.Series([isinstance(d, date) and d.year == annee for d in base['date_arrivee']]))].copy()
-
-    # Mois sélectionnés -> liste d'entiers
     if ("Tous" in mois_sel) or (len(mois_sel) == 0):
         mois_int = list(range(1,13))
     else:
         mois_int = [int(s.split(" — ")[0]) for s in mois_sel]
-
     data = data[data['date_arrivee'].apply(lambda d: d.month in mois_int)]
     if plats_effectifs:
         data = data[data['plateforme'].isin(plats_effectifs)]
@@ -743,34 +798,34 @@ def vue_rapport(df, palette):
         st.warning("Aucune donnée après filtres.")
         return
 
-    # === KPI (sur la plage mois sélectionnée) ===
+    # KPI
     nb_res   = len(data)
     nuits    = int(data['nuitees'].fillna(0).sum())
     rev_total = float(data[mcol].fillna(0).sum())
     adr      = _safe_div2(rev_total, nuits)
-
-    # nuits disponibles = somme des jours des mois sélectionnés
     avail_by_month = _available_nights_by_month(annee)
     avail_year = sum(avail_by_month[date(annee, m, 1)] for m in mois_int)
     occ     = _safe_div2(nuits, avail_year)
     revpar  = _safe_div2(rev_total, avail_year)
 
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("Réservations", f"{nb_res}")
-    k2.metric("Nuitées vendues", f"{nuits}")
-    k3.metric(f"Revenu {metric_mode.lower()}", _fmt_eur(rev_total))
-    k4.metric(f"ADR {metric_mode.lower()}", _fmt_eur(adr) if pd.notna(adr) else "—")
-    k5.metric("Taux d’occupation", f"{occ*100:,.1f} %".replace(",", " ") if pd.notna(occ) else "—")
-    k6.metric(f"RevPAR {metric_mode.lower()}", _fmt_eur(revpar) if pd.notna(revpar) else "—")
+    with st.container():
+        st.markdown("<div class='glass'>", unsafe_allow_html=True)
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        k1.metric("Réservations", f"{nb_res}")
+        k2.metric("Nuitées vendues", f"{nuits}")
+        k3.metric(f"Revenu {metric_mode.lower()}", _fmt_eur(rev_total))
+        k4.metric(f"ADR {metric_mode.lower()}", _fmt_eur(adr) if pd.notna(adr) else "—")
+        k5.metric("Taux d’occupation", f"{occ*100:,.1f} %".replace(",", " ") if pd.notna(occ) else "—")
+        k6.metric(f"RevPAR {metric_mode.lower()}", _fmt_eur(revpar) if pd.notna(revpar) else "—")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # === Agrégats mensuels (seulement sur les mois sélectionnés) ===
+    # Agrégats mensuels
     data['mois'] = data['date_arrivee'].apply(lambda d: date(d.year, d.month, 1))
     grp = (data.groupby(['plateforme','mois'], as_index=False)
                .agg({mcol:'sum', 'nuitees':'sum'}))
-
-    months_all = [date(annee, m, 1) for m in mois_int]  # seulement les mois filtrés
+    months_all = [date(annee, m, 1) for m in mois_int]
     frames = []
     for p in (plats_effectifs if plats_effectifs else all_plats):
         g = grp[grp['plateforme']==p].set_index('mois').reindex(months_all).fillna({mcol:0.0,'nuitees':0.0})
@@ -800,7 +855,7 @@ def vue_rapport(df, palette):
     yfield, realfield, fmt = serie_map[choix_serie]
     grp_full[yfield] = grp_full[realfield]
 
-    color_map = {p: palette.get(p, '#888') for p in (plats_effectifs if plats_effectifs else all_plats)}
+    color_map = {p: DEFAULT_PALETTE.get(p, '#888') for p in (plats_effectifs if plats_effectifs else all_plats)}
     domain_sel = list(color_map.keys())
     range_sel  = [color_map[p] for p in domain_sel]
 
@@ -827,8 +882,7 @@ def vue_rapport(df, palette):
     st.altair_chart(chart.properties(height=420).interactive(), use_container_width=True)
 
     st.markdown("---")
-
-    st.subheader("Répartition par plateforme (plage mois choisie)")
+    st.subheader("Répartition par plateforme")
     mix = (data.groupby("plateforme", as_index=False)
               .agg(revenu=(mcol,'sum'), nuitées=('nuitees','sum'), sejours=('res_id','count')))
     c1, c2 = st.columns([2,1])
@@ -844,7 +898,6 @@ def vue_rapport(df, palette):
     c2.dataframe(mix.sort_values('revenu', ascending=False), use_container_width=True)
 
     st.markdown("---")
-
     st.subheader("Heatmap d’occupation")
     daily = _expand_to_daily(data)
     if daily.empty:
@@ -853,7 +906,6 @@ def vue_rapport(df, palette):
         daily['mois'] = daily['day'].apply(lambda d: date(d.year, d.month, 1))
         occ_days = (daily.groupby('day', as_index=False).agg(occ=('res_id','nunique')))
         occ_days['occ'] = occ_days['occ'].clip(0,1)
-        # Construit seulement les jours des mois sélectionnés
         all_days = []
         for m in mois_int:
             rng = pd.date_range(f"{annee}-{m:02d}-01", f"{annee}-{m:02d}-{monthrange(annee, m)[1]}", freq="D").date
@@ -871,29 +923,8 @@ def vue_rapport(df, palette):
         st.altair_chart(heat.properties(height=320), use_container_width=True)
 
     st.markdown("---")
-
-    st.subheader("Distributions")
-    colD1, colD2 = st.columns(2)
-    dist_nuitees = alt.Chart(data).mark_bar().encode(
-        x=alt.X('nuitees:Q', bin=alt.Bin(maxbins=15), title='Nuitées (par séjour)'),
-        y=alt.Y('count()', title='Nombre de séjours'),
-        tooltip=[alt.Tooltip('count():Q', title='Séjours')]
-    )
-    colD1.altair_chart(dist_nuitees.properties(height=280), use_container_width=True)
-
-    mcol2 = "prix_brut" if metric_mode == "Brut" else "prix_net"
-    adr_per_resa = data.assign(adr_res=lambda x: x.apply(lambda r: _safe_div2(r[mcol2], r['nuitees']), axis=1))
-    color_map2 = {p: palette.get(p, '#888') for p in (plats_effectifs if plats_effectifs else all_plats)}
-    domain_sel2 = list(color_map2.keys())
-    range_sel2  = [color_map2[p] for p in domain_sel2]
-    box = alt.Chart(adr_per_resa.dropna(subset=['adr_res'])).mark_boxplot().encode(
-        x=alt.X('plateforme:N', title='Plateforme'),
-        y=alt.Y('adr_res:Q', title=f'ADR {metric_mode.lower()} par séjour'),
-        color=alt.Color('plateforme:N', legend=None, scale=alt.Scale(domain=domain_sel2, range=range_sel2)),
-    )
-    colD2.altair_chart(box.properties(height=280), use_container_width=True)
-
-    with st.expander("Données mensuelles et export CSV"):
+    st.subheader("Export CSV")
+    with st.expander("Données mensuelles"):
         export = grp_full[['mois','plateforme', mcol, 'nuitees', 'adr', 'occ', 'revpar']].copy()
         export = export.rename(columns={
             'mois': 'Mois', 'plateforme': 'Plateforme',
@@ -911,21 +942,26 @@ def vue_rapport(df, palette):
                            mime="text/csv")
 
 def vue_liste_clients(df):
-    st.header("👥 Liste des Clients")
+    st.header("👥 Clients")
+    card("Info", "Liste des **clients** distincts et leurs coordonnées.")
     if df.empty:
         st.info("Aucun client."); return
-    clients = df[['nom_client','telephone','email','plateforme']].dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client')
+    clients = (df[['nom_client','telephone','email','plateforme']]
+               .dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client'))
+    st.markdown("<div class='glass'>", unsafe_allow_html=True)
     st.dataframe(clients, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 def vue_sms(df):
-    st.header("✉️ Générateur de SMS")
+    st.header("✉️ SMS & WhatsApp")
+    card("Aide", "Pré-arrivée (par défaut **arrivées J+1**) et **post-départ** (départs du jour). Le lien formulaire est **court**.")
     for colb in ('sms_envoye','post_depart_envoye'):
         if colb in df.columns:
             df[colb] = _to_bool_series(df[colb]).fillna(False).astype(bool)
         else:
             df[colb] = False
 
-    # ---------- Pré-arrivée (par défaut J+1) ----------
+    # ---- Pré-arrivée ----
     st.subheader("🛬 Messages pré-arrivée")
     tomorrow_default = date.today() + timedelta(days=1)
     target_arrivee = st.date_input("Cibler les arrivées du", tomorrow_default, key="prearrivee_date")
@@ -936,10 +972,9 @@ def vue_sms(df):
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
-    # Bouton "copier lien court"
     st.components.v1.html("""
         <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
-                style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                style="margin-bottom:10px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
             📋 Copier le lien (formulaire)
         </button>
     """, height=48)
@@ -1019,11 +1054,11 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
             st.components.v1.html("""
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                   <button onclick="navigator.clipboard.writeText(%s)"
-                          style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                          style="padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                       📋 Copier le message
                   </button>
                   <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
-                          style="padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                          style="padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                       📋 Copier le lien (formulaire)
                   </button>
                 </div>
@@ -1038,12 +1073,51 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
                 except Exception as e:
                     st.error(f"Impossible de marquer comme envoyé : {e}")
 
-    st.markdown("---")
+st.markdown("---")
 
-    # ---------- Post-départ (individuel) ----------
-    st.subheader("📤 WhatsApp / SMS post-départ (individuel)")
+# ---- Post-départ (individuel + groupé) ----
+def _post_depart_message(name: str) -> str:
+    return f"""Bonjour {name},
+
+Un grand merci d'avoir choisi notre appartement pour votre sejour. 
+
+Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. 
+
+Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. 
+
+Au plaisir de vous accueillir à nouveau.
+
+Annick & Charley
+
+Hello {name},
+
+Thank you very much for choosing our apartment for your stay. 
+
+We hope you had as enjoyable a time as we did hosting you. 
+
+If you feel like coming back to explore our city a little more, know that our door will always be open to you. 
+
+We look forward to welcoming you back.
+
+Annick & Charley"""
+
+def _row_buttons_post(r):
+    name = str(r.get('nom_client') or "").strip()
+    msg = _post_depart_message(name)
+    e164 = _format_phone_e164(r['telephone'])
+    wa_num = re.sub(r"\D", "", e164)
+    enc = quote(msg)
+    return {
+        "msg": msg,
+        "wa": f"https://wa.me/{wa_num}?text={enc}",
+        "sms_ios": f"sms:&body={enc}",
+        "sms_android": f"sms:{e164}?body={enc}",
+    }
+
+def vue_sms_post_depart(df):
+    st.subheader("📤 Post-départ (individuel & groupé)")
     default_depart = date.today()
-    target_depart = st.date_input("Cibler les départs du", default_depart, key="postdepart_date")
+    target_depart = st.date_input("Départs du", default_depart, key="postdepart_date")
 
     df_post = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
     df_post = df_post[(df_post['date_depart'] == target_depart) & (~df_post['post_depart_envoye'])]
@@ -1063,50 +1137,19 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
             idx2 = int(selection2.split(":")[0])
             resa2 = df_sorted2.loc[idx2]
             original_rowid2 = resa2["_rowid"]
-            name = str(resa2.get('nom_client') or "").strip()
-
-            message_post = f"""Bonjour {name},
-
-Un grand merci d'avoir choisi notre appartement pour votre sejour. 
-
-Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. 
-
-Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. 
-
-Au plaisir de vous accueillir à nouveau.
-
-Annick & Charley
-
-Hello {name},
-
-Thank you very much for choosing our apartment for your stay. 
-
-We hope you had as enjoyable a time as we did hosting you. 
-
-If you feel like coming back to explore our city a little more, know that our door will always be open to you. 
-
-We look forward to welcoming you back.
-
-Annick & Charley"""
-
-            encoded_post = quote(message_post)
-            e164_phone2 = _format_phone_e164(resa2['telephone'])
-            wa_number2 = re.sub(r"\D", "", e164_phone2)
-            wa_link2 = f"https://wa.me/{wa_number2}?text={encoded_post}"
-            sms_link_ios2 = f"sms:&body={encoded_post}"
-            sms_link_android2 = f"sms:{e164_phone2}?body={encoded_post}"
+            links = _row_buttons_post(resa2)
 
             c_wa2, c_ios2, c_and2 = st.columns([1,1,1])
-            with c_wa2:  st.link_button("🟢 WhatsApp", wa_link2)
-            with c_ios2: st.link_button("📲 iPhone SMS", sms_link_ios2)
-            with c_and2: st.link_button("🤖 Android SMS", sms_link_android2)
+            with c_wa2:  st.link_button("🟢 WhatsApp", links["wa"])
+            with c_ios2: st.link_button("📲 iPhone SMS", links["sms_ios"])
+            with c_and2: st.link_button("🤖 Android SMS", links["sms_android"])
 
             st.components.v1.html("""
                 <button onclick="navigator.clipboard.writeText(%s)"
-                        style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                        style="margin-top:8px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                     📋 Copier le message post-départ
                 </button>
-            """ % (json.dumps(message_post),), height=50)
+            """ % (json.dumps(links["msg"]),), height=50)
 
             if st.button("✅ Marquer 'post-départ envoyé'"):
                 try:
@@ -1118,8 +1161,6 @@ Annick & Charley"""
                     st.error(f"Impossible de marquer : {e}")
 
     st.markdown("---")
-
-    # ---------- Post-départ (envoi groupé) ----------
     st.subheader("📦 Envoi groupé post-départ")
     cold1, cold2 = st.columns(2)
     default_end = date.today()
@@ -1134,58 +1175,31 @@ Annick & Charley"""
     if elig.empty:
         st.info("Aucun client dans la plage sélectionnée.")
     else:
-        rows_ui = []
-        all_messages = []
+        rows_ui, all_messages = [], []
         for ridx, r in elig.iterrows():
-            name = str(r.get('nom_client') or "").strip()
-            msg = f"""Bonjour {name},
-
-Un grand merci d'avoir choisi notre appartement pour votre sejour. 
-
-Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. 
-
-Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. 
-
-Au plaisir de vous accueillir à nouveau.
-
-Annick & Charley
-
-Hello {name},
-
-Thank you very much for choosing our apartment for your stay. 
-
-We hope you had as enjoyable a time as we did hosting you. 
-
-If you feel like coming back to explore our city a little more, know that our door will always be open to you. 
-
-We look forward to welcoming you back.
-
-Annick & Charley"""
-            all_messages.append(msg)
-            e164 = _format_phone_e164(r['telephone'])
-            wa_num = re.sub(r"\D", "", e164)
-            enc = quote(msg)
+            links = _row_buttons_post(r)
             rows_ui.append({
                 "index": ridx,
-                "nom": name,
+                "nom": str(r.get('nom_client') or "").strip(),
                 "tel": r['telephone'],
                 "depart": r['date_depart'],
-                "wa": f"https://wa.me/{wa_num}?text={enc}",
-                "sms_ios": f"sms:&body={enc}",
-                "sms_android": f"sms:{e164}?body={enc}",
+                "wa": links["wa"],
+                "sms_ios": links["sms_ios"],
+                "sms_android": links["sms_android"],
+                "msg": links["msg"],
             })
+            all_messages.append(links["msg"])
 
         st.write(f"Clients éligibles : **{len(rows_ui)}**")
         cgb1, cgb2 = st.columns(2)
         if cgb1.button("📋 Tout copier (messages)"):
             clipboard_text = "\n\n---\n".join(all_messages)
-            clipboard_json = json.dumps(clipboard_text)
             st.components.v1.html(
                 f"""
                 <script>
-                  navigator.clipboard.writeText({clipboard_json});
+                  navigator.clipboard.writeText({json.dumps(clipboard_text)});
                 </script>
-                <div style="color:#aaa">Tous les messages ont été copiés dans le presse-papiers.</div>
+                <div style="color:#aaa">Messages copiés dans le presse-papiers.</div>
                 """,
                 height=10
             )
@@ -1208,18 +1222,16 @@ Annick & Charley"""
                 c3.link_button("📲 iPhone SMS", row["sms_ios"])
                 c4.link_button("🤖 Android SMS", row["sms_android"])
 
-# ==============================  EXPORT ICS MANUEL  ==============================
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
-    st.info("Génère un fichier .ics à importer dans Google Calendar.")
-
+    card("Info", "Générez un **fichier .ics** à importer dans Google Calendar. UID stables pour éviter les doublons.")
     base_all = df.dropna(subset=['date_arrivee','date_depart']).copy()
     if base_all.empty:
         st.warning("Aucune réservation avec dates valides."); return
 
     col1, col2 = st.columns(2)
     years = sorted(base_all['date_arrivee'].apply(lambda d: d.year).unique())
-    annee = col1.selectbox("Filtrer Année (arrivée)", years, index=len(years)-1)
+    annee = col1.selectbox("Année (arrivée)", years, index=len(years)-1)
 
     all_plats = sorted(base_all['plateforme'].dropna().unique())
     plat_options = ["Tous"] + all_plats
@@ -1274,7 +1286,6 @@ def vue_export_ics(df, palette):
     st.download_button("📥 Télécharger le fichier ICS", data=ics.encode('utf-8'),
                        file_name=f"villa_tobias_{annee}.ics", mime="text/calendar")
 
-# ==============================  FLUX ICS PUBLIC (BETA) ==============================
 def _get_query_params():
     try:
         return st.query_params
@@ -1324,9 +1335,8 @@ def icspublic_endpoint(df):
 
 def vue_flux_ics_public(df, palette):
     st.header("🔗 Flux ICS public (BETA)")
-    st.caption("Copie cette URL dans Google Calendar → *Ajouter un agenda* → *À partir de l’URL*.")
-
-    base_url = st.text_input("URL de base de l'app (tel qu'affichée dans ton navigateur)", value="")
+    card("Utilisation", "Copiez l’URL générée dans Google Calendar → **Ajouter un agenda** → **À partir de l’URL**.")
+    base_url = st.text_input("URL de base de l'app (telle qu'affichée dans votre navigateur)", value="")
 
     years = sorted([d.year for d in df['date_arrivee'].dropna().unique()]) if 'date_arrivee' in df.columns else []
     year = st.selectbox("Année (arrivées)", options=years if years else [date.today().year], index=len(years)-1 if years else 0)
@@ -1337,25 +1347,19 @@ def vue_flux_ics_public(df, palette):
     plats_effectifs = all_plats if ("Tous" in plats_sel or not plats_sel) else [p for p in plats_sel if p != "Tous"]
 
     c3, c4 = st.columns(2)
-    incl_np  = c3.toggle("Inclure réservations non payées", value=True)
-    incl_sms = c4.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
+    incl_np  = c3.toggle("Inclure non payées", value=True)
+    incl_sms = c4.toggle("Inclure déjà 'SMS envoyé'", value=True)
 
     token_default = hashlib.sha256(f"villa-tobias-{year}".encode()).hexdigest()[:16]
     token = st.text_input("Token (clé simple)", value=token_default)
 
     def build_url(base, params):
-        if not base:
-            return ""
+        if not base: return ""
         base_clean = base.split("?")[0]
         return base_clean + "?" + urlencode(params, doseq=True)
 
-    query = {
-        "feed": "ics",
-        "token": token,
-        "year": str(year),
-        "incl_np": "1" if incl_np else "0",
-        "incl_sms": "1" if incl_sms else "0",
-    }
+    query = {"feed": "ics", "token": token, "year": str(year),
+             "incl_np": "1" if incl_np else "0", "incl_sms": "1" if incl_sms else "0"}
     if plats_effectifs and len(plats_effectifs) != len(all_plats):
         for p in plats_effectifs:
             query.setdefault("plats", []).append(p)
@@ -1365,7 +1369,7 @@ def vue_flux_ics_public(df, palette):
         st.code(flux_url, language="text")
         st.link_button("📋 Copier / Ouvrir l’URL de flux", flux_url)
 
-    with st.expander("Aperçu du contenu ICS"):
+    with st.expander("Aperçu ICS"):
         data = df.dropna(subset=['date_arrivee','date_depart']).copy()
         data = data[data['date_arrivee'].apply(lambda d: isinstance(d, date) and d.year == year)]
         if plats_effectifs and len(plats_effectifs) != len(all_plats):
@@ -1376,13 +1380,12 @@ def vue_flux_ics_public(df, palette):
             data = data[data['sms_envoye'] == False]
         st.text(build_ics_from_df(data))
 
-# ==============================  GOOGLE SHEET / FORM  ==============================
 def vue_google_sheet(df, palette):
-    st.header("📝 Fiche d'arrivée — Google Form & Sheet")
+    st.header("📝 Fiche d'arrivée & Feuille Google")
+    card("Infos", "Le bouton **Copier le lien** insère l’URL **courte** du formulaire.")
     tab_form, tab_sheet, tab_csv = st.tabs(["Formulaire (intégré)", "Feuille intégrée", "Réponses (CSV)"])
 
     with tab_form:
-        st.caption("Formulaire Google intégré (prérempli à partir d'une réservation).")
         df_ok = df.dropna(subset=['nom_client','telephone','date_arrivee']).copy()
         if df_ok.empty:
             st.info("Aucune réservation exploitable pour préremplir le formulaire.")
@@ -1390,7 +1393,7 @@ def vue_google_sheet(df, palette):
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
             st.components.v1.html("""
                 <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
-                        style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                        style="margin-top:6px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
             """, height=50)
@@ -1415,27 +1418,29 @@ def vue_google_sheet(df, palette):
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
             st.components.v1.html("""
                 <button onclick="navigator.clipboard.writeText('https://urlr.me/kZuH94')"
-                        style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                        style="margin-top:6px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                     📋 Copier le lien
                 </button>
             """, height=50)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
-        st.caption("Affichage intégré (lecture seule) de la feuille publiée (lien raccourci).")
+        st.caption("Affichage intégré (lecture seule) — lien raccourci.")
         st.components.v1.iframe(GOOGLE_SHEET_EMBED_URL, height=900, scrolling=True)
 
     with tab_csv:
-        st.caption("Lecture directe via l’URL 'Publier sur le Web' (CSV).")
+        st.caption("Lecture via l’URL publiée (CSV).")
         try:
             reposes = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+            st.markdown("<div class='glass'>", unsafe_allow_html=True)
             st.dataframe(reposes, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
             st.download_button("⬇️ Télécharger les réponses (CSV)",
                                data=reposes.to_csv(index=False).encode("utf-8"),
                                file_name="reponses_formulaire.csv", mime="text/csv")
         except Exception as e:
             st.error(f"Impossible de charger les réponses : {e}")
-            st.info("Vérifie que la feuille est bien 'Publiée sur le Web' au format CSV et accessible.")
+            st.info("Vérifie que la feuille est bien publiée en CSV et accessible.")
 
 def admin_sidebar(df):
     st.sidebar.markdown("---")
@@ -1456,15 +1461,20 @@ def admin_sidebar(df):
 
 # ==============================  MAIN  ==============================
 def main():
+    apply_modern_style()
+    enable_altair_theme()
+
     df, palette = charger_donnees_csv()
 
     # Endpoint ICS public si demandé par query params
-    handled = icspublic_endpoint(df)
-    if handled:
-        return  # st.stop() est déjà appelé dans la fonction
+    params = _get_query_params()
+    if str(params.get("feed", [""])[0]).lower() == "ics":
+        icspublic_endpoint(df)
+        return
 
-    st.title("📖 Gestion des Réservations - Villa Tobias")
+    st.title("✨ Villa Tobias — Gestion des Réservations")
     st.sidebar.title("🧭 Navigation")
+
     pages = {
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
@@ -1481,7 +1491,7 @@ def main():
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
     if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)","🔗 Flux ICS public (BETA)","📝 Fiche d'arrivée / Google Sheet"]:
-        page_function(df, palette)
+        page_function(df, DEFAULT_PALETTE | palette if palette else DEFAULT_PALETTE)
     else:
         page_function(df)
     admin_sidebar(df)
