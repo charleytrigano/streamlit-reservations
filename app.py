@@ -1,7 +1,9 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé / Post-départ envoyé (éditables + sauvegarde) + email
 # - SMS pré-arrivée : iPhone/Android/WhatsApp, Copier, Lien court formulaire + bouton Copier lien
-# - SMS post-départ : envoi individuel ET envoi groupé (WhatsApp + iPhone/Android SMS), suivi post_depart_envoye
+#   -> Par défaut : ARRIVÉES DE J+1 (N-1 avant arrivée), date ajustable
+# - SMS post-départ : envoi individuel (départs du jour par défaut + date ajustable) ET envoi groupé
+#   (WhatsApp + iPhone/Android SMS), suivi post_depart_envoye
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
 # - Export ICS : UID stables (v5)
@@ -722,14 +724,18 @@ def vue_sms(df):
         else:
             df[colb] = False
 
-    # ---------- Bloc A : Pré-arrivée ----------
+    # ---------- Bloc A : Pré-arrivée (filtre par défaut J+1) ----------
     st.subheader("🛬 Messages pré-arrivée")
+    tomorrow_default = date.today() + timedelta(days=1)
+    target_arrivee = st.date_input("Cibler les arrivées du", tomorrow_default, key="prearrivee_date")
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
+    df_tel = df_tel[df_tel['date_arrivee'] == target_arrivee]  # J+1 par défaut (ou date choisie)
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     mask_valid_phone = df_tel['tel_clean'].str.len().between(9,15)
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
+    # Bouton copier lien court
     st.components.v1.html(f"""
         <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
                 style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
@@ -738,11 +744,11 @@ def vue_sms(df):
     """, height=48)
 
     if df_tel.empty:
-        st.success("🎉 Aucun SMS en attente : tous les clients sont cochés 'SMS envoyé' ou numéros invalides.")
+        st.info("Aucun client à contacter pour la date choisie (ou déjà marqué 'SMS envoyé').")
     else:
-        df_sorted = df_tel.sort_values(by="date_arrivee", ascending=False).reset_index(drop=True)
-        options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows() if pd.notna(row['date_arrivee'])]
-        selection = st.selectbox("Sélectionnez un client (SMS non envoyé)", options=options_resa, index=None, key="prearrival_select")
+        df_sorted = df_tel.sort_values(by="date_arrivee", ascending=True).reset_index(drop=True)
+        options_resa = [f"{idx}: {row['nom_client']} ({row['telephone']})" for idx, row in df_sorted.iterrows()]
+        selection = st.selectbox("Sélectionnez un client (pré-arrivée)", options=options_resa, index=None, key="prearrival_select")
         if selection:
             idx = int(selection.split(":")[0])
             resa = df_sorted.loc[idx]
@@ -800,10 +806,10 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
 
             encoded_message = quote(message_body)
             e164_phone = _format_phone_e164(resa['telephone'])
-            sms_link_ios = f"sms:&body={encoded_message}"                  # iOS
+            sms_link_ios = f"sms:&body={encoded_message}"                  # iPhone
             sms_link_android = f"sms:{e164_phone}?body={encoded_message}"  # Android
             wa_number = re.sub(r"\D", "", e164_phone)
-            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"
+            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"  # WhatsApp
 
             c_ios, c_and, c_wa = st.columns([1,1,1])
             with c_ios: st.link_button("📲 iPhone SMS", sms_link_ios)
@@ -834,11 +840,13 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
 
     st.markdown("---")
 
-    # ---------- Bloc B : Post-départ (individuel) ----------
+    # ---------- Bloc B : Post-départ (individuel) — par défaut DÉPARTS DU JOUR ----------
     st.subheader("📤 WhatsApp / SMS post-départ (individuel)")
-    today = date.today()
+    default_depart = date.today()
+    target_depart = st.date_input("Cibler les départs du", default_depart, key="postdepart_date")
+
     df_post = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
-    df_post = df_post[(df_post['date_depart'] <= today) & (~df_post['post_depart_envoye'])]
+    df_post = df_post[(df_post['date_depart'] == target_depart) & (~df_post['post_depart_envoye'])]
 
     df_post['tel_clean'] = df_post['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     mask_valid_phone2 = df_post['tel_clean'].str.len().between(9,15)
@@ -846,11 +854,11 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
     df_post["_rowid"] = df_post.index
 
     if df_post.empty:
-        st.info("Aucun message post-départ à envoyer.")
+        st.info("Aucun message post-départ à envoyer pour la date choisie.")
     else:
-        df_sorted2 = df_post.sort_values(by="date_depart", ascending=False).reset_index(drop=True)
+        df_sorted2 = df_post.sort_values(by="date_depart", ascending=True).reset_index(drop=True)
         options_post = [f"{idx}: {row['nom_client']} — départ {row['date_depart']}" for idx, row in df_sorted2.iterrows()]
-        selection2 = st.selectbox("Sélectionnez un client (post-départ non envoyé)", options=options_post, index=None, key="post_select")
+        selection2 = st.selectbox("Sélectionnez un client (post-départ)", options=options_post, index=None, key="post_select")
         if selection2:
             idx2 = int(selection2.split(":")[0])
             resa2 = df_sorted2.loc[idx2]
@@ -919,7 +927,6 @@ Annick & Charley"""
     d_start = cold1.date_input("Départs à partir de", default_start)
     d_end   = cold2.date_input("Jusqu'au (inclus)", default_end)
 
-    # Filtrer éligibles (dans la plage, non envoyés, tel valide)
     elig = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
     elig = elig[(elig['date_depart'] >= d_start) & (elig['date_depart'] <= d_end) & (~elig['post_depart_envoye'])].copy()
     elig['tel_clean'] = elig['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
@@ -927,7 +934,6 @@ Annick & Charley"""
     if elig.empty:
         st.info("Aucun client dans la plage sélectionnée.")
     else:
-        # Construire messages + liens
         rows_ui = []
         all_messages = []
         for ridx, r in elig.iterrows():
@@ -970,15 +976,19 @@ Annick & Charley"""
             })
 
         st.write(f"Clients éligibles : **{len(rows_ui)}**")
-        # Actions groupées
         cgb1, cgb2 = st.columns(2)
         if cgb1.button("📋 Tout copier (messages)"):
-            st.components.v1.html(f"""
+            clipboard_text = "\n\n---\n".join(all_messages)
+            clipboard_json = json.dumps(clipboard_text)
+            st.components.v1.html(
+                f"""
                 <script>
-                  navigator.clipboard.writeText({json.dumps("\\n\\n---\\n".join(all_messages))});
+                  navigator.clipboard.writeText({clipboard_json});
                 </script>
                 <div style="color:#aaa">Tous les messages ont été copiés dans le presse-papiers.</div>
-            """, height=0)
+                """,
+                height=10
+            )
             st.success("Messages copiés.")
         if cgb2.button("✅ Tout marquer 'post-départ envoyé'"):
             try:
@@ -990,7 +1000,6 @@ Annick & Charley"""
             except Exception as e:
                 st.error(f"Impossible de marquer en masse : {e}")
 
-        # Liste avec boutons par client
         for row in rows_ui:
             with st.container(border=True):
                 c1, c2, c3, c4 = st.columns([2,1,1,1])
@@ -999,6 +1008,7 @@ Annick & Charley"""
                 c3.link_button("📲 iPhone SMS", row["sms_ios"])
                 c4.link_button("🤖 Android SMS", row["sms_android"])
 
+# ==============================  EXPORT ICS  ==============================
 def _fmt_ics_date(d: date) -> str:
     return f"{d.year:04d}{d.month:02d}{d.day:02d}"
 
