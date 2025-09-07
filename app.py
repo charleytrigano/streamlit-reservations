@@ -1,7 +1,7 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé / Post-départ envoyé (éditables + sauvegarde) + email
-# - SMS : clients non cochés, iPhone/Android/WhatsApp, Copier, Lien court formulaire + bouton Copier lien
-# - WhatsApp post-départ : message FR/EN après départ, suivi par case post_depart_envoye
+# - SMS pré-arrivée : iPhone/Android/WhatsApp, Copier, Lien court formulaire + bouton Copier lien
+# - SMS post-départ : envoi individuel ET envoi groupé (WhatsApp + iPhone/Android SMS), suivi post_depart_envoye
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
 # - Export ICS : UID stables (v5)
@@ -15,7 +15,7 @@ import calendar
 from datetime import date, timedelta, datetime
 from urllib.parse import quote, urlencode, quote_plus
 import altair as alt
-import uuid, re, unicodedata, json  # uid stables + nettoyage + copier message
+import uuid, re, unicodedata, json
 
 # --- Fichiers ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -23,25 +23,19 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
-
-# 👉 Lien raccourci utilisé partout (SMS/WhatsApp/onglets)
-FORM_SHORT_URL = "https://urlr.me/kZuH94"
-
-# Feuille intégrée : URL raccourcie fournie
+FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager (formulaire)
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
-
-# Réponses publiées (CSV) (URL “Publier sur le Web”)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs des champs (préremplissage)
+# IDs (préremplissage du form)
 FORM_ENTRY_NOM        = "entry.937556468"
 FORM_ENTRY_TEL        = "entry.702324920"
 FORM_ENTRY_EMAIL      = "entry.1712365042"
 FORM_ENTRY_ARRIVEE    = "entry.1099006415"
 FORM_ENTRY_DEPART     = "entry.2013910918"
-FORM_ENTRY_PLATEFORME = "entry.528935650"     # Plateforme
-FORM_ENTRY_NUITEES    = "entry.473651945"     # Nuitées
-FORM_ENTRY_RESID      = "entry.2071395456"    # ID interne (res_id)
+FORM_ENTRY_PLATEFORME = "entry.528935650"
+FORM_ENTRY_NUITEES    = "entry.473651945"
+FORM_ENTRY_RESID      = "entry.2071395456"
 
 # ==============================  PAGE CONFIG  ==============================
 st.set_page_config(page_title="📖 Réservations Villa Tobias", layout="wide")
@@ -251,6 +245,17 @@ def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_dep
     if FORM_ENTRY_RESID and not _null_like(res_id):
         params[FORM_ENTRY_RESID] = str(res_id)
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
+
+def _format_phone_e164(raw_phone: str) -> str:
+    raw_phone = str(raw_phone or "")
+    clean = re.sub(r"\D", "", raw_phone)
+    if raw_phone.strip().startswith("+"):
+        return raw_phone.strip()
+    if clean.startswith("0") and len(clean) == 10:
+        return "+33" + clean[1:]
+    if clean:
+        return "+33" + clean
+    return raw_phone.strip()
 
 # ==============================  VUES  ==============================
 def vue_reservations(df):
@@ -709,17 +714,6 @@ def vue_liste_clients(df):
     clients = df[['nom_client','telephone','email','plateforme']].dropna(subset=['nom_client']).drop_duplicates().sort_values('nom_client')
     st.dataframe(clients, use_container_width=True)
 
-def _format_phone_e164(raw_phone: str) -> str:
-    raw_phone = str(raw_phone or "")
-    clean = re.sub(r"\D", "", raw_phone)
-    if raw_phone.strip().startswith("+"):
-        return raw_phone.strip()
-    if clean.startswith("0") and len(clean) == 10:
-        return "+33" + clean[1:]
-    if clean:
-        return "+33" + clean
-    return raw_phone.strip()
-
 def vue_sms(df):
     st.header("✉️ Générateur de SMS")
     for colb in ('sms_envoye','post_depart_envoye'):
@@ -728,7 +722,7 @@ def vue_sms(df):
         else:
             df[colb] = False
 
-    # ---------- Bloc A : Pré-arrivée (SMS/WhatsApp + lien formulaire) ----------
+    # ---------- Bloc A : Pré-arrivée ----------
     st.subheader("🛬 Messages pré-arrivée")
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
@@ -736,7 +730,6 @@ def vue_sms(df):
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
-    # Bouton "Copier le lien" (formulaire) demandé
     st.components.v1.html(f"""
         <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
                 style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
@@ -755,9 +748,7 @@ def vue_sms(df):
             resa = df_sorted.loc[idx]
             original_rowid = resa["_rowid"]
 
-            # s'assurer d'avoir un res_id persistant
             res_id_val = _ensure_res_id_on_row(df, original_rowid)
-
             email_val = resa.get('email') if 'email' in df_tel.columns else None
             prefill_link = form_prefill_url(
                 nom         = resa.get('nom_client'),
@@ -769,7 +760,6 @@ def vue_sms(df):
                 nuitees     = resa.get('nuitees'),
                 res_id      = res_id_val
             )
-
             link_for_message = FORM_SHORT_URL.strip() or prefill_link
 
             message_body = f"""VILLA TOBIAS
@@ -813,15 +803,12 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
             sms_link_ios = f"sms:&body={encoded_message}"                  # iOS
             sms_link_android = f"sms:{e164_phone}?body={encoded_message}"  # Android
             wa_number = re.sub(r"\D", "", e164_phone)
-            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"  # WhatsApp
+            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"
 
             c_ios, c_and, c_wa = st.columns([1,1,1])
-            with c_ios:
-                st.link_button("📲 iPhone SMS", sms_link_ios)
-            with c_and:
-                st.link_button("🤖 Android SMS", sms_link_android)
-            with c_wa:
-                st.link_button("🟢 WhatsApp", wa_link)
+            with c_ios: st.link_button("📲 iPhone SMS", sms_link_ios)
+            with c_and: st.link_button("🤖 Android SMS", sms_link_android)
+            with c_wa:  st.link_button("🟢 WhatsApp", wa_link)
 
             st.components.v1.html(f"""
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
@@ -847,8 +834,8 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
 
     st.markdown("---")
 
-    # ---------- Bloc B : Post-départ (WhatsApp) ----------
-    st.subheader("📤 WhatsApp post-départ")
+    # ---------- Bloc B : Post-départ (individuel) ----------
+    st.subheader("📤 WhatsApp / SMS post-départ (individuel)")
     today = date.today()
     df_post = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
     df_post = df_post[(df_post['date_depart'] <= today) & (~df_post['post_depart_envoye'])]
@@ -868,7 +855,6 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
             idx2 = int(selection2.split(":")[0])
             resa2 = df_sorted2.loc[idx2]
             original_rowid2 = resa2["_rowid"]
-
             name = str(resa2.get('nom_client') or "").strip()
 
             message_post = f"""Bonjour {name},
@@ -899,10 +885,14 @@ Annick & Charley"""
             e164_phone2 = _format_phone_e164(resa2['telephone'])
             wa_number2 = re.sub(r"\D", "", e164_phone2)
             wa_link2 = f"https://wa.me/{wa_number2}?text={encoded_post}"
+            sms_link_ios2 = f"sms:&body={encoded_post}"
+            sms_link_android2 = f"sms:{e164_phone2}?body={encoded_post}"
 
-            c_wa2, c_copy2 = st.columns([1,1])
-            with c_wa2:
-                st.link_button("🟢 Envoyer sur WhatsApp", wa_link2)
+            c_wa2, c_ios2, c_and2 = st.columns([1,1,1])
+            with c_wa2:  st.link_button("🟢 WhatsApp", wa_link2)
+            with c_ios2: st.link_button("📲 iPhone SMS", sms_link_ios2)
+            with c_and2: st.link_button("🤖 Android SMS", sms_link_android2)
+
             st.components.v1.html(f"""
                 <button onclick="navigator.clipboard.writeText({json.dumps(message_post)})"
                         style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
@@ -919,7 +909,96 @@ Annick & Charley"""
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
 
-# ==============================  EXPORT ICS  ==============================
+    st.markdown("---")
+
+    # ---------- Bloc C : Post-départ (envoi groupé) ----------
+    st.subheader("📦 Envoi groupé post-départ")
+    cold1, cold2 = st.columns(2)
+    default_end = date.today()
+    default_start = default_end - timedelta(days=7)
+    d_start = cold1.date_input("Départs à partir de", default_start)
+    d_end   = cold2.date_input("Jusqu'au (inclus)", default_end)
+
+    # Filtrer éligibles (dans la plage, non envoyés, tel valide)
+    elig = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
+    elig = elig[(elig['date_depart'] >= d_start) & (elig['date_depart'] <= d_end) & (~elig['post_depart_envoye'])].copy()
+    elig['tel_clean'] = elig['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
+    elig = elig[elig['tel_clean'].str.len().between(9,15)]
+    if elig.empty:
+        st.info("Aucun client dans la plage sélectionnée.")
+    else:
+        # Construire messages + liens
+        rows_ui = []
+        all_messages = []
+        for ridx, r in elig.iterrows():
+            name = str(r.get('nom_client') or "").strip()
+            msg = f"""Bonjour {name},
+
+Un grand merci d'avoir choisi notre appartement pour votre sejour. 
+
+Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. 
+
+Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. 
+
+Au plaisir de vous accueillir à nouveau.
+
+Annick & Charley
+
+Hello {name},
+
+Thank you very much for choosing our apartment for your stay. 
+
+We hope you had as enjoyable a time as we did hosting you. 
+
+If you feel like coming back to explore our city a little more, know that our door will always be open to you. 
+
+We look forward to welcoming you back.
+
+Annick & Charley"""
+            all_messages.append(msg)
+            e164 = _format_phone_e164(r['telephone'])
+            wa_num = re.sub(r"\D", "", e164)
+            enc = quote(msg)
+            rows_ui.append({
+                "index": ridx,
+                "nom": name,
+                "tel": r['telephone'],
+                "depart": r['date_depart'],
+                "wa": f"https://wa.me/{wa_num}?text={enc}",
+                "sms_ios": f"sms:&body={enc}",
+                "sms_android": f"sms:{e164}?body={enc}",
+            })
+
+        st.write(f"Clients éligibles : **{len(rows_ui)}**")
+        # Actions groupées
+        cgb1, cgb2 = st.columns(2)
+        if cgb1.button("📋 Tout copier (messages)"):
+            st.components.v1.html(f"""
+                <script>
+                  navigator.clipboard.writeText({json.dumps("\\n\\n---\\n".join(all_messages))});
+                </script>
+                <div style="color:#aaa">Tous les messages ont été copiés dans le presse-papiers.</div>
+            """, height=0)
+            st.success("Messages copiés.")
+        if cgb2.button("✅ Tout marquer 'post-départ envoyé'"):
+            try:
+                idxs = [row["index"] for row in rows_ui]
+                df.loc[idxs, 'post_depart_envoye'] = True
+                df_final = ensure_schema(df)
+                if sauvegarder_donnees_csv(df_final):
+                    st.success(f"{len(idxs)} réservation(s) marquées comme envoyées."); st.rerun()
+            except Exception as e:
+                st.error(f"Impossible de marquer en masse : {e}")
+
+        # Liste avec boutons par client
+        for row in rows_ui:
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns([2,1,1,1])
+                c1.markdown(f"**{row['nom']}** — départ {row['depart']}  \n📞 {row['tel']}")
+                c2.link_button("🟢 WhatsApp", row["wa"])
+                c3.link_button("📲 iPhone SMS", row["sms_ios"])
+                c4.link_button("🤖 Android SMS", row["sms_android"])
+
 def _fmt_ics_date(d: date) -> str:
     return f"{d.year:04d}{d.month:02d}{d.day:02d}"
 
@@ -1065,7 +1144,6 @@ def vue_google_sheet(df, palette):
                 </button>
             """, height=50)
 
-            # Intégration du formulaire prérempli (URL longue non affichée)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
