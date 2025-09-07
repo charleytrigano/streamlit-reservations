@@ -1261,6 +1261,5 @@ def main():
     page_function = pages[selection]
     page_function(df, palette_eff)
     admin_sidebar(df)
-
 if __name__ == "__main__":
     main()
