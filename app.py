@@ -8,11 +8,11 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange
 from urllib.parse import quote, urlencode
 
-# --- Fichiers CSV (fallback) ---
+# --- Fichiers CSV (fallback local) ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
 CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 
-# --- Liens externes (fourni) ---
+# --- Liens externes fournis ---
 FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court à partager
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pubhtml?gid=1915058425&single=true"
@@ -122,80 +122,6 @@ def proxy_replace_ws(ws_name: str, df: pd.DataFrame) -> bool:
         st.error(f"Proxy REPLACE échec ({ws_name}) : {e}")
         return False
 
-# ==============================  CHARGEMENT / SAUVEGARDE ==============================
-@st.cache_data
-def charger_donnees():
-    mode = _get_storage_mode()
-
-    # Proxy Apps Script
-    if mode == "sheets_proxy":
-        try:
-            _, _, res_ws, plat_ws = _proxy_conf()
-            df_res = proxy_read_ws(res_ws)
-            df_pal = proxy_read_ws(plat_ws)
-            df_res = ensure_schema(df_res)
-            palette = DEFAULT_PALETTE.copy()
-            if not df_pal.empty and {"plateforme","couleur"} <= set(df_pal.columns):
-                palette.update(dict(zip(df_pal["plateforme"], df_pal["couleur"])))
-            return df_res, palette
-        except Exception as e:
-            st.error(f"Lecture Proxy impossible : {e}. Bascule CSV local.")
-
-    # Fallback CSV
-    try:
-        df_res = pd.read_csv(CSV_RESERVATIONS, delimiter=";")
-        df_res.columns = df_res.columns.str.strip()
-    except Exception:
-        df_res = pd.DataFrame()
-    try:
-        df_pal = pd.read_csv(CSV_PLATEFORMES, delimiter=";")
-        palette = DEFAULT_PALETTE | dict(zip(df_pal["plateforme"], df_pal["couleur"]))
-    except Exception:
-        palette = DEFAULT_PALETTE.copy()
-    return ensure_schema(df_res), palette
-
-def sauvegarder_donnees(df, palette=None):
-    # backup CSV local (précaution)
-    try:
-        if os.path.exists(CSV_RESERVATIONS):
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            shutil.copyfile(CSV_RESERVATIONS, f"{CSV_RESERVATIONS}.backup_{stamp}")
-    except Exception:
-        pass
-
-    mode = _get_storage_mode()
-
-    # Proxy Apps Script
-    if mode == "sheets_proxy":
-        try:
-            _, _, res_ws, plat_ws = _proxy_conf()
-            df_to_save = df.copy()
-            cols = [c for c in BASE_COLS if c in df_to_save.columns] or list(df_to_save.columns)
-            ok1 = proxy_replace_ws(res_ws, df_to_save[cols])
-            ok2 = True
-            if palette is not None:
-                df_p = pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"])
-                ok2 = proxy_replace_ws(plat_ws, df_p)
-            if ok1 and ok2:
-                st.cache_data.clear()
-                return True
-            st.error("Écriture proxy incomplète (Reservations/Plateformes).")
-            return False
-        except Exception as e:
-            st.error(f"Erreur de sauvegarde via proxy : {e}")
-            return False
-
-    # CSV local
-    try:
-        df.to_csv(CSV_RESERVATIONS, sep=";", index=False)
-        if palette is not None:
-            pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"]).to_csv(CSV_PLATEFORMES, sep=";", index=False)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Erreur de sauvegarde (CSV) : {e}")
-        return False
-
 # ==============================  SCHEMA & CLEAN ==============================
 BASE_COLS = [
     'res_id','ical_uid',
@@ -254,6 +180,80 @@ def ensure_schema(df):
         df_res.loc[missing,'res_id'] = [str(uuid.uuid4()) for _ in range(int(missing.sum()))]
 
     return df_res
+
+# ==============================  CHARGEMENT / SAUVEGARDE ==============================
+@st.cache_data
+def charger_donnees():
+    mode = _get_storage_mode()
+
+    # Proxy Apps Script
+    if mode == "sheets_proxy":
+        try:
+            _, _, res_ws, plat_ws = _proxy_conf()
+            df_res = proxy_read_ws(res_ws)
+            df_pal = proxy_read_ws(plat_ws)
+            df_res = ensure_schema(df_res)
+            palette = DEFAULT_PALETTE.copy()
+            if not df_pal.empty and {"plateforme","couleur"} <= set(df_pal.columns):
+                palette.update(dict(zip(df_pal["plateforme"], df_pal["couleur"])))
+            return df_res, palette
+        except Exception as e:
+            st.error(f"Lecture Google Sheets impossible : {e}. Bascule CSV local.")
+
+    # Fallback CSV
+    try:
+        df_res = pd.read_csv(CSV_RESERVATIONS, delimiter=";")
+        df_res.columns = df_res.columns.str.strip()
+    except Exception:
+        df_res = pd.DataFrame()
+    try:
+        df_pal = pd.read_csv(CSV_PLATEFORMES, delimiter=";")
+        palette = DEFAULT_PALETTE | dict(zip(df_pal["plateforme"], df_pal["couleur"]))
+    except Exception:
+        palette = DEFAULT_PALETTE.copy()
+    return ensure_schema(df_res), palette
+
+def sauvegarder_donnees(df, palette=None):
+    # backup CSV local (précaution)
+    try:
+        if os.path.exists(CSV_RESERVATIONS):
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copyfile(CSV_RESERVATIONS, f"{CSV_RESERVATIONS}.backup_{stamp}")
+    except Exception:
+        pass
+
+    mode = _get_storage_mode()
+
+    # Proxy Apps Script
+    if mode == "sheets_proxy":
+        try:
+            _, _, res_ws, plat_ws = _proxy_conf()
+            df_to_save = df.copy()
+            cols = [c for c in BASE_COLS if c in df_to_save.columns] or list(df_to_save.columns)
+            ok1 = proxy_replace_ws(res_ws, df_to_save[cols])
+            ok2 = True
+            if palette is not None:
+                df_p = pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"])
+                ok2 = proxy_replace_ws(plat_ws, df_p)
+            if ok1 and ok2:
+                st.cache_data.clear()
+                return True
+            st.error("Écriture proxy incomplète (Reservations/Plateformes).")
+            return False
+        except Exception as e:
+            st.error(f"Erreur de sauvegarde via proxy : {e}")
+            return False
+
+    # CSV local
+    try:
+        df.to_csv(CSV_RESERVATIONS, sep=";", index=False)
+        if palette is not None:
+            pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"]).to_csv(CSV_PLATEFORMES, sep=";", index=False)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde (CSV) : {e}")
+        return False
 
 # ==============================  HELPERS GÉNÉRAUX ==============================
 def _safe_div(a,b): 
@@ -348,74 +348,6 @@ def build_ics_from_df(df_src: pd.DataFrame) -> str:
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
-# ==============================  TEMPLATES MULTILINGUES ==============================
-LANG_TEMPLATES = {
-    "FR": {
-        "pre_arrivee": """VILLA TOBIAS
-Plateforme : {plateforme}
-Arrivée : {arrivee} Départ : {depart} Nuitées : {nuitees}
-
-Bonjour {nom}
-Téléphone : {tel}
-
-Bienvenue chez nous !
-
-Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre arrivée, merci de nous indiquer votre heure d'arrivée.
-
-Une place de parking est disponible si besoin.
-Check-in : 14:00 — Check-out : 11:00.
-
-Nous vous souhaitons un excellent voyage et avons hâte de vous rencontrer.
-
-Annick & Charley
-
-Merci de remplir la fiche d'arrivée :
-{form_link}""",
-        "post_depart": """Bonjour {nom},
-
-Un grand merci d'avoir choisi notre appartement pour votre séjour.
-Nous espérons que vous avez passé un moment agréable.
-
-Si l'envie vous prend de revenir explorer encore un peu notre ville, notre porte vous sera toujours ouverte.
-
-Au plaisir de vous accueillir à nouveau.
-
-Annick & Charley"""
-    },
-    "EN": {
-        "pre_arrivee": """VILLA TOBIAS
-Platform: {plateforme}
-Arrival: {arrivee} Departure: {depart} Nights: {nuitees}
-
-Hello {nom}
-Phone: {tel}
-
-Welcome!
-
-We're delighted to host you soon in Nice. To best arrange your arrival, please share your ETA.
-
-A parking spot is available if needed.
-Check-in: 2:00 PM — Check-out: 11:00 AM.
-
-We wish you a pleasant trip and look forward to meeting you.
-
-Annick & Charley
-
-Please fill out the arrival form:
-{form_link}""",
-        "post_depart": """Hello {nom},
-
-Thank you very much for choosing our apartment for your stay.
-We hope you had a wonderful time.
-
-If you feel like coming back to explore our city more, our door will always be open to you.
-
-We look forward to welcoming you back.
-
-Annick & Charley"""
-    }
-}
-
 # ==============================  VUES DE BASE ==============================
 def kpi_chips(df, title="Indicateurs Clés"):
     st.subheader(title)
@@ -483,6 +415,7 @@ def vue_reservations(df, palette):
     )
     if not edited.equals(df_sorted):
         df_copy = df.copy()
+        # Mise à jour par res_id si dispo (sinon fallback heuristique)
         for i, row in edited.iterrows():
             mask = df_copy['res_id'] == row.get('res_id')
             if not (mask.any()):
@@ -624,10 +557,12 @@ def vue_calendrier(df, palette):
                 for _, resa in dfv.iterrows():
                     if isinstance(resa['date_arrivee'], date) and isinstance(resa['date_depart'], date):
                         if resa['date_arrivee'] <= day < resa['date_depart']:
-                            color = palette.get(resa['plateforme'], '#888'); text_color = "#FFF" if color.lower()!='#f6f7fb' else "#000"
+                            color = palette.get(resa['plateforme'], '#888'); text_color = "#FFF"
                             day_html += f"<div class='reservation-bar' style='background-color:{color};color:{text_color}' title='{resa['nom_client']}'>{resa['nom_client']}</div>"
                 day_html += "</div>"
                 st.markdown(day_html, unsafe_allow_html=True)
+
+# === FIN PARTIE 1 ===
 
 # ==============================  RAPPORT (modernisé) ==============================
 def _available_nights_by_month(year: int):
@@ -796,6 +731,77 @@ def vue_rapport(df, palette):
                            mime="text/csv")
 
 # ==============================  SMS & WHATSAPP ==============================
+LANG_TEMPLATES = {
+    "FR": {
+        "pre_arrivee": """VILLA TOBIAS
+Plateforme : {plateforme}
+Arrivée : {arrivee} Départ : {depart} Nuitées : {nuitees}
+
+Bonjour {nom}
+Téléphone : {tel}
+
+Bienvenue chez nous !
+
+Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre arrivée, merci de nous indiquer votre heure d'arrivée.
+
+Une place de parking est disponible si besoin.
+Check-in : 14:00 — Check-out : 11:00.
+
+Nous vous souhaitons un excellent voyage et avons hâte de vous rencontrer.
+
+Annick & Charley
+
+Merci de remplir la fiche d'arrivée :
+{form_link}""",
+        "post_depart": """Bonjour {nom},
+
+Un grand merci d'avoir choisi notre appartement pour votre séjour.
+Nous espérons que vous avez passé un moment agréable.
+
+Si l'envie vous prend de revenir explorer encore un peu notre ville, notre porte vous sera toujours ouverte.
+
+Au plaisir de vous accueillir à nouveau.
+
+Annick & Charley"""
+    },
+    "EN": {
+        "pre_arrivee": """VILLA TOBIAS
+Platform: {plateforme}
+Arrival: {arrivee} Departure: {depart} Nights: {nuitees}
+
+Hello {nom}
+Phone: {tel}
+
+Welcome!
+
+We're delighted to host you soon in Nice. To best arrange your arrival, please share your ETA.
+
+A parking spot is available if needed.
+Check-in: 2:00 PM — Check-out: 11:00 AM.
+
+We wish you a pleasant trip and look forward to meeting you.
+
+Annick & Charley
+
+Please fill out the arrival form:
+{form_link}""",
+        "post_depart": """Hello {nom},
+
+Thank you very much for choosing our apartment for your stay.
+We hope you had a wonderful time.
+
+If you feel like coming back to explore our city more, our door will always be open to you.
+
+We look forward to welcoming you back.
+
+Annick & Charley"""
+    }
+}
+
+def _post_depart_message(name: str, lang: str="FR") -> str:
+    tpl = LANG_TEMPLATES.get(lang, LANG_TEMPLATES['FR'])["post_depart"]
+    return tpl.format(nom=(name or "").strip())
+
 def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
     card("Aide", "Pré-arrivée (**arrivées J+1**) et **post-départ** (départs du jour). Le lien formulaire est **court**.")
@@ -807,6 +813,12 @@ def vue_sms(df, palette):
     st.subheader("🛬 Messages pré-arrivée (J+1)")
     target_arrivee = st.date_input("Cibler les arrivées du", date.today()+timedelta(days=1), key="prearrivee_date")
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
+
+    # Dates robustes
+    for c in ('date_arrivee','date_depart'):
+        if c in df_tel.columns:
+            df_tel[c] = pd.to_datetime(df_tel[c], errors='coerce').dt.date
+
     df_tel = df_tel[(df_tel['date_arrivee']==target_arrivee) & (~df_tel['sms_envoye'])]
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     df_tel = df_tel[df_tel['tel_clean'].str.len().between(9,15)].copy()
@@ -869,46 +881,65 @@ def vue_sms(df, palette):
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
 
+    # --- Post-départ (départs du jour) avec sécurisation robuste ---
     st.markdown("---")
-    vue_sms_post_depart(df)
-
-def _post_depart_message(name: str, lang: str="FR") -> str:
-    tpl = LANG_TEMPLATES.get(lang, LANG_TEMPLATES['FR'])["post_depart"]
-    return tpl.format(nom=(name or "").strip())
-
-def vue_sms_post_depart(df):
     st.subheader("📤 Post-départ (départs du jour)")
+
     target_depart = st.date_input("Départs du", date.today(), key="postdepart_date")
-    df_post = df.dropna(subset=['telephone','nom_client','date_depart']).copy()
-    df_post = df_post[(df_post['date_depart']==target_depart) & (~df_post['post_depart_envoye'])]
-    df_post['tel_clean'] = df_post['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
-    df_post = df_post[df_post['tel_clean'].str.len().between(9,15)].copy()
-    df_post["_rowid"] = df_post.index
+
+    df_safe = df.copy()
+    if 'post_depart_envoye' not in df_safe.columns:
+        df_safe['post_depart_envoye'] = False
+
+    for col in ('date_arrivee','date_depart'):
+        if col in df_safe.columns:
+            df_safe[col] = pd.to_datetime(df_safe[col], errors='coerce').dt.date
+
+    need_cols = ['telephone','nom_client','date_depart']
+    present_cols = [c for c in need_cols if c in df_safe.columns]
+    if not set(['telephone','nom_client']).issubset(df_safe.columns) or 'date_depart' not in df_safe.columns:
+        st.warning("Colonnes indispensables manquantes (telephone/nom_client/date_depart).")
+        df_post = pd.DataFrame()
+    else:
+        df_post = df_safe.dropna(subset=present_cols).copy()
+        df_post = df_post[(df_post['date_depart'] == target_depart) & (~df_post['post_depart_envoye'])].copy()
+
+    if not df_post.empty:
+        df_post['tel_clean'] = df_post['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
+        df_post = df_post[df_post['tel_clean'].str.len().between(9,15)].copy()
+        df_post["_rowid"] = df_post.index
 
     if df_post.empty:
         st.info("Aucun message post-départ à envoyer aujourd’hui.")
     else:
-        df_sorted = df_post.sort_values(by="date_depart").reset_index(drop=True)
-        options = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i,r in df_sorted.iterrows()]
-        selection = st.selectbox("Sélectionnez un client (post-départ)", options=options, index=None, key="post_select")
-        if selection:
-            idx = int(selection.split(":")[0]); resa = df_sorted.loc[idx]
-            lang = str(resa.get('lang') or 'FR').upper()
-            msg = _post_depart_message(resa.get('nom_client'), lang)
-            enc = quote(msg); e164 = _format_phone_e164(resa['telephone']); wa_num=re.sub(r"\D","",e164)
-            cols = st.columns(3)
-            cols[0].link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
-            cols[1].link_button("📲 iPhone SMS", f"sms:&body={enc}")
-            cols[2].link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
-            st.components.v1.html(f"""
+        try:
+            df_sorted2 = df_post.sort_values(by="date_depart").reset_index(drop=True)
+        except Exception:
+            df_sorted2 = df_post.reset_index(drop=True)
+        options_post = [f"{idx}: {row['nom_client']} — départ {row['date_depart']}" for idx, row in df_sorted2.iterrows()]
+        selection2 = st.selectbox("Sélectionnez un client (post-départ)", options=options_post, index=None, key="post_select")
+        if selection2:
+            idx2 = int(selection2.split(":")[0])
+            resa2 = df_sorted2.loc[idx2]
+            lang = str(resa2.get('lang') or 'FR').upper()
+            msg = _post_depart_message(resa2.get('nom_client'), lang)
+            enc = quote(msg); e164 = _format_phone_e164(resa2['telephone']); wa_num=re.sub(r"\D","",e164)
+            c_wa2, c_ios2, c_and2 = st.columns([1,1,1])
+            c_wa2.link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
+            c_ios2.link_button("📲 iPhone SMS", f"sms:&body={enc}")
+            c_and2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+            st.components.v1.html(
+                f"""
                 <button onclick="navigator.clipboard.writeText({json.dumps(msg)})"
                         style="margin-top:8px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
                     📋 Copier le message post-départ
                 </button>
-            """, height=50)
+                """,
+                height=50
+            )
             if st.button("✅ Marquer 'post-départ envoyé'"):
                 try:
-                    df.loc[resa["_rowid"],'post_depart_envoye'] = True
+                    df.loc[resa2["_rowid"],'post_depart_envoye'] = True
                     df_final = ensure_schema(df)
                     if sauvegarder_donnees(df_final):
                         st.success("Marqué 'post-départ envoyé' ✅"); st.rerun()
@@ -1037,7 +1068,7 @@ def vue_flux_ics_public(df, palette):
         if not incl_sms: data = data[data['sms_envoye']==False]
         st.text(build_ics_from_df(data))
 
-# ==============================  GOOGLE FORM / SHEET (intégré & CSV public) ==============================
+# ==============================  GOOGLE FORM / SHEET intégrés ==============================
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée & Feuille Google")
     card("Infos", "Le bouton **Copier le lien** insère l’URL **courte** du formulaire.")
