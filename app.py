@@ -512,7 +512,7 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation."); return
     df_valid = df.dropna(subset=['AAAA','MM'])
     c1, c2, c3 = st.columns(3)
-    annees = ["Toutes"] + sorted(df_valid['AAAA'].dropna().astype(int).unique(), reverse=True).tolist()
+    annees = ["Toutes"] + sorted(df_valid['AAAA'].dropna().astype(int).unique(), reverse=True)
     annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
     mois_options = ["Tous"] + list(range(1,13))
     mois_selectionne = c2.selectbox("Filtrer par Mois", mois_options)
