@@ -1,13 +1,12 @@
 # app.py — Villa Tobias (COMPLET)
 # - Réservations : cases à cocher Payé / SMS envoyé / Post-départ envoyé (éditables + sauvegarde) + email
-# - SMS pré-arrivée : iPhone/Android/WhatsApp, Copier, Lien court formulaire + bouton Copier lien
-#   -> Par défaut : ARRIVÉES DE J+1 (N-1 avant arrivée), date ajustable
-# - SMS post-départ : envoi individuel (départs du jour par défaut + date ajustable) ET envoi groupé
-#   (WhatsApp + iPhone/Android SMS), suivi post_depart_envoye
+# - SMS pré-arrivée : par défaut Arrivées de J+1 (iPhone/Android/WhatsApp), Copier, lien court formulaire
+# - SMS post-départ : par défaut Départs du jour (individuel + groupé WhatsApp / iPhone / Android)
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
-# - Export ICS : UID stables (v5)
-# - Google Form/Sheet : Form intégré (lien court affiché + bouton Copier), Feuille intégrée (lien court), lecture CSV
+# - Export ICS manuel : UID stables (v5)
+# - 🔗 Flux ICS public (BETA) : URL à copier (endpoint ?feed=ics&token=...)
+# - Google Form/Sheet : Form intégré (lien court), Feuille intégrée (lien court), lecture CSV
 
 import streamlit as st
 import pandas as pd
@@ -141,6 +140,7 @@ def ensure_schema(df):
     return df_res
 
 # ============================== UID STABLE ==============================
+import hashlib
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://villa-tobias.fr/reservations")
 PROPERTY_ID = "villa-tobias"
 
@@ -258,6 +258,59 @@ def _format_phone_e164(raw_phone: str) -> str:
     if clean:
         return "+33" + clean
     return raw_phone.strip()
+
+# ============ ICS CORE ============
+def _fmt_ics_date(d: date) -> str:
+    return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+
+def _escape_text(s: str) -> str:
+    if s is None: return ""
+    return str(s).replace('\\','\\\\').replace(';','\\;').replace(',','\\,').replace('\n','\\n')
+
+def _compute_uid(df_row):
+    uid = df_row.get('ical_uid')
+    if isinstance(uid, str) and uid.strip():
+        return uid
+    return build_stable_uid(df_row)
+
+def build_ics_from_df(df_src: pd.DataFrame) -> str:
+    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Villa Tobias//Reservations//FR",
+        "CALSCALE:GREGORIAN","METHOD:PUBLISH",
+    ]
+    for _, r in df_src.iterrows():
+        da, dd = r['date_arrivee'], r['date_depart']
+        if not isinstance(da, date) or not isinstance(dd, date): continue
+        uid = _compute_uid(r)
+        summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
+        if r.get('plateforme'): summary += f" ({r['plateforme']})"
+        desc_parts = [
+            f"Client: {r.get('nom_client','')}",
+            f"Téléphone: {r.get('telephone','')}",
+            f"Email: {r.get('email','')}",
+            f"Plateforme: {r.get('plateforme','')}",
+            f"Nuitées: {int(r.get('nuitees') or 0)}",
+            f"Prix brut: {float(r.get('prix_brut') or 0):.2f} €",
+            f"Prix net: {float(r.get('prix_net') or 0):.2f} €",
+            f"Payé: {'Oui' if bool(r.get('paye')) else 'Non'}",
+            f"res_id: {r.get('res_id','')}",
+            f"UID: {uid}",
+        ]
+        desc = _escape_text("\n".join(desc_parts))
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{nowstamp}",
+            f"DTSTART;VALUE=DATE:{_fmt_ics_date(da)}",
+            f"DTEND;VALUE=DATE:{_fmt_ics_date(dd)}",
+            f"SUMMARY:{_escape_text(summary)}",
+            f"DESCRIPTION:{desc}",
+            "TRANSP:OPAQUE",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
 
 # ==============================  VUES  ==============================
 def vue_reservations(df):
@@ -377,7 +430,6 @@ def vue_reservations(df):
                     rid = int(rid_str)
                 except Exception:
                     continue
-
                 for bcol in ["paye","sms_envoye","post_depart_envoye"]:
                     df.loc[rid, bcol] = bool(row.get(bcol, False))
                 if "email" in row: df.loc[rid, "email"] = row["email"]
@@ -385,7 +437,6 @@ def vue_reservations(df):
                     df.loc[rid, "res_id"] = row["res_id"].strip()
                 if isinstance(row.get("ical_uid"), str) and row["ical_uid"].strip() != "":
                     df.loc[rid, "ical_uid"] = row["ical_uid"].strip()
-
                 for c in ["date_arrivee", "date_depart"]:
                     val = row.get(c)
                     if pd.isna(val):
@@ -724,18 +775,17 @@ def vue_sms(df):
         else:
             df[colb] = False
 
-    # ---------- Bloc A : Pré-arrivée (filtre par défaut J+1) ----------
+    # ---------- Pré-arrivée (par défaut J+1) ----------
     st.subheader("🛬 Messages pré-arrivée")
     tomorrow_default = date.today() + timedelta(days=1)
     target_arrivee = st.date_input("Cibler les arrivées du", tomorrow_default, key="prearrivee_date")
     df_tel = df.dropna(subset=['telephone','nom_client','date_arrivee']).copy()
-    df_tel = df_tel[df_tel['date_arrivee'] == target_arrivee]  # J+1 par défaut (ou date choisie)
+    df_tel = df_tel[df_tel['date_arrivee'] == target_arrivee]
     df_tel['tel_clean'] = df_tel['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
     mask_valid_phone = df_tel['tel_clean'].str.len().between(9,15)
     df_tel = df_tel[~df_tel['sms_envoye'] & mask_valid_phone].copy()
     df_tel["_rowid"] = df_tel.index
 
-    # Bouton copier lien court
     st.components.v1.html(f"""
         <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
                 style="margin-bottom:10px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
@@ -753,7 +803,6 @@ def vue_sms(df):
             idx = int(selection.split(":")[0])
             resa = df_sorted.loc[idx]
             original_rowid = resa["_rowid"]
-
             res_id_val = _ensure_res_id_on_row(df, original_rowid)
             email_val = resa.get('email') if 'email' in df_tel.columns else None
             prefill_link = form_prefill_url(
@@ -806,10 +855,10 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
 
             encoded_message = quote(message_body)
             e164_phone = _format_phone_e164(resa['telephone'])
-            sms_link_ios = f"sms:&body={encoded_message}"                  # iPhone
-            sms_link_android = f"sms:{e164_phone}?body={encoded_message}"  # Android
+            sms_link_ios = f"sms:&body={encoded_message}"
+            sms_link_android = f"sms:{e164_phone}?body={encoded_message}"
             wa_number = re.sub(r"\D", "", e164_phone)
-            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"  # WhatsApp
+            wa_link = f"https://wa.me/{wa_number}?text={encoded_message}"
 
             c_ios, c_and, c_wa = st.columns([1,1,1])
             with c_ios: st.link_button("📲 iPhone SMS", sms_link_ios)
@@ -840,7 +889,7 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
 
     st.markdown("---")
 
-    # ---------- Bloc B : Post-départ (individuel) — par défaut DÉPARTS DU JOUR ----------
+    # ---------- Post-départ (individuel) — par défaut départs du jour ----------
     st.subheader("📤 WhatsApp / SMS post-départ (individuel)")
     default_depart = date.today()
     target_depart = st.date_input("Cibler les départs du", default_depart, key="postdepart_date")
@@ -919,7 +968,7 @@ Annick & Charley"""
 
     st.markdown("---")
 
-    # ---------- Bloc C : Post-départ (envoi groupé) ----------
+    # ---------- Post-départ (envoi groupé) ----------
     st.subheader("📦 Envoi groupé post-départ")
     cold1, cold2 = st.columns(2)
     default_end = date.today()
@@ -1008,17 +1057,10 @@ Annick & Charley"""
                 c3.link_button("📲 iPhone SMS", row["sms_ios"])
                 c4.link_button("🤖 Android SMS", row["sms_android"])
 
-# ==============================  EXPORT ICS  ==============================
-def _fmt_ics_date(d: date) -> str:
-    return f"{d.year:04d}{d.month:02d}{d.day:02d}"
-
-def _escape_text(s: str) -> str:
-    if s is None: return ""
-    return str(s).replace('\\','\\\\').replace(';','\\;').replace(',','\\,').replace('\n','\\n')
-
+# ==============================  EXPORT ICS MANUEL  ==============================
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
-    st.info("Cet export génère un fichier **.ics** à importer dans Google Calendar. Pour une synchro auto, publier une URL ICS ou utiliser l’API Google Calendar (OAuth).")
+    st.info("Génère un fichier .ics à importer dans Google Calendar.")
 
     base_all = df.dropna(subset=['date_arrivee','date_depart']).copy()
     if base_all.empty:
@@ -1069,46 +1111,122 @@ def vue_export_ics(df, palette):
             df_filtre.loc[inter,'res_id']   = df_to_gen.loc[inter,'res_id']
             df_filtre.loc[inter,'ical_uid'] = df_to_gen.loc[inter,'ical_uid']
 
-    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    lines = [
-        "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Villa Tobias//Reservations//FR",
-        "CALSCALE:GREGORIAN","METHOD:PUBLISH",
-    ]
-    for _, r in df_filtre.iterrows():
-        da, dd = r['date_arrivee'], r['date_depart']
-        if not isinstance(da, date) or not isinstance(dd, date): continue
-        uid = r.get('ical_uid') or build_stable_uid(r)
-        summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
-        if r.get('plateforme'): summary += f" ({r['plateforme']})"
-        desc_parts = [
-            f"Client: {r.get('nom_client','')}",
-            f"Téléphone: {r.get('telephone','')}",
-            f"Email: {r.get('email','')}",
-            f"Plateforme: {r.get('plateforme','')}",
-            f"Nuitées: {int(r.get('nuitees') or 0)}",
-            f"Prix brut: {float(r.get('prix_brut') or 0):.2f} €",
-            f"Prix net: {float(r.get('prix_net') or 0):.2f} €",
-            f"Payé: {'Oui' if bool(r.get('paye')) else 'Non'}",
-            f"res_id: {r.get('res_id','')}",
-            f"UID: {uid}",
-        ]
-        desc = _escape_text("\n".join(desc_parts))
-        lines += [
-            "BEGIN:VEVENT",
-            f"UID:{uid}",
-            f"DTSTAMP:{nowstamp}",
-            f"DTSTART;VALUE=DATE:{_fmt_ics_date(da)}",
-            f"DTEND;VALUE=DATE:{_fmt_ics_date(dd)}",
-            f"SUMMARY:{_escape_text(summary)}",
-            f"DESCRIPTION:{desc}",
-            "TRANSP:OPAQUE",
-            "END:VEVENT",
-        ]
-    lines.append("END:VCALENDAR")
-    ics = "\r\n".join(lines) + "\r\n"
+    ics = build_ics_from_df(df_filtre)
     st.download_button("📥 Télécharger le fichier ICS", data=ics.encode('utf-8'),
                        file_name=f"villa_tobias_{annee}.ics", mime="text/calendar")
 
+# ==============================  FLUX ICS PUBLIC (BETA)  ==============================
+def _get_query_params():
+    # Support both new and legacy API
+    try:
+        return st.query_params
+    except Exception:
+        try:
+            return st.experimental_get_query_params()
+        except Exception:
+            return {}
+
+def _as_list(v):
+    if v is None: return []
+    if isinstance(v, list): return v
+    return [v]
+
+def icspublic_endpoint(df):
+    """Si l'URL contient ?feed=ics&token=..., on affiche l'ICS brut selon les filtres."""
+    params = _get_query_params()
+    feed = params.get("feed", [""])[0] if isinstance(params.get("feed"), list) else params.get("feed", "")
+    if str(feed).lower() != "ics":
+        return False  # ne gère pas
+    # (Simple "token" partagé pour éviter l'indexation publique accidentelle)
+    token = params.get("token", [""])[0] if isinstance(params.get("token"), list) else params.get("token", "")
+    if not token:
+        st.write("Missing token."); st.stop()
+    # Filtres optionnels
+    annee  = params.get("year", [""])[0] if isinstance(params.get("year"), list) else params.get("year", "")
+    plats  = _as_list(params.get("plats")) if "plats" in params else _as_list(params.get("platform"))
+    inc_np = params.get("incl_np", ["1"])[0] if isinstance(params.get("incl_np"), list) else params.get("incl_np", "1")
+    inc_sms= params.get("incl_sms", ["1"])[0] if isinstance(params.get("incl_sms"), list) else params.get("incl_sms", "1")
+
+    data = df.dropna(subset=['date_arrivee','date_depart']).copy()
+    if annee:
+        try:
+            an = int(annee)
+            data = data[data['date_arrivee'].apply(lambda d: isinstance(d, date) and d.year == an)]
+        except:
+            pass
+    if plats:
+        plats_norm = [p for p in plats if p]
+        if plats_norm:
+            data = data[data['plateforme'].isin(plats_norm)]
+    if inc_np in ("0","false","False"):
+        data = data[data['paye'] == True]
+    if inc_sms in ("0","false","False"):
+        data = data[data['sms_envoye'] == False]
+
+    ics = build_ics_from_df(data)
+    # On affiche le texte ; certains clients accepteront quand même.
+    st.text(ics)
+    st.stop()
+
+def vue_flux_ics_public(df, palette):
+    st.header("🔗 Flux ICS public (BETA)")
+    st.caption("Copie cette URL dans Google Calendar → *Ajouter un agenda* → *À partir de l’URL*. "
+               "Si Google refuse, on posera un petit proxy qui renvoie le bon en-tête `text/calendar`.")
+
+    # Paramétrage
+    base_url = st.text_input("URL de base de l'app (tel qu'affichée dans ton navigateur)", value=st.request.url if hasattr(st, "request") and hasattr(st.request, "url") else "")
+    if not base_url:
+        st.info("Renseigne l’URL de l’app telle qu’elle s’affiche dans la barre d’adresse pour générer le lien.")
+    col1, col2 = st.columns(2)
+    years = sorted([d.year for d in df['date_arrivee'].dropna().unique()]) if 'date_arrivee' in df.columns else []
+    year = col1.selectbox("Année (arrivées)", options=years if years else [date.today().year], index=len(years)-1 if years else 0)
+    plateformes = sorted(df['plateforme'].dropna().unique()) if 'plateforme' in df.columns else []
+    plats = col2.multiselect("Plateformes", plateformes, default=plateformes)
+
+    c3, c4 = st.columns(2)
+    incl_np  = c3.toggle("Inclure réservations non payées", value=True)
+    incl_sms = c4.toggle("Inclure celles déjà 'SMS envoyé'", value=True)
+
+    # Petit "token" (clé partagée) pour éviter l’indexation publique
+    token_default = hashlib.sha256(f"villa-tobias-{year}".encode()).hexdigest()[:16]
+    token = st.text_input("Token (clé simple, à partager seulement avec Google Calendar)", value=token_default)
+
+    # Construction de l’URL
+    query = {
+        "feed": "ics",
+        "token": token,
+        "year": str(year),
+        "incl_np": "1" if incl_np else "0",
+        "incl_sms": "1" if incl_sms else "0",
+    }
+    for p in plats:
+        query.setdefault("plats", []).append(p)
+
+    def build_url(base, params):
+        if not base:
+            return ""
+        # Nettoyage basique (supprime les anciens query params)
+        base_clean = base.split("?")[0]
+        return base_clean + "?" + urlencode(params, doseq=True)
+
+    flux_url = build_url(base_url, query)
+    if flux_url:
+        st.code(flux_url, language="text")
+        st.link_button("📋 Copier / Ouvrir l’URL de flux", flux_url)
+
+    # Aperçu du contenu ICS (pour vérifier)
+    with st.expander("Aperçu du contenu ICS (généré avec ces filtres)"):
+        data = df.dropna(subset=['date_arrivee','date_depart']).copy()
+        data = data[data['date_arrivee'].apply(lambda d: isinstance(d, date) and d.year == year)]
+        if plats:
+            data = data[data['plateforme'].isin(plats)]
+        if not incl_np:
+            data = data[data['paye'] == True]
+        if not incl_sms:
+            data = data[data['sms_envoye'] == False]
+        st.text(build_ics_from_df(data))
+
+# ==============================  GOOGLE SHEET / FORM  ==============================
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée — Google Form & Sheet")
     tab_form, tab_sheet, tab_csv = st.tabs(["Formulaire (intégré)", "Feuille intégrée", "Réponses (CSV)"])
@@ -1191,8 +1309,14 @@ def admin_sidebar(df):
 
 # ==============================  MAIN  ==============================
 def main():
-    st.title("📖 Gestion des Réservations - Villa Tobias")
     df, palette = charger_donnees_csv()
+
+    # Endpoint ICS public si demandé par query params
+    handled = icspublic_endpoint(df)
+    if handled:
+        return  # st.stop() est déjà appelé dans la fonction
+
+    st.title("📖 Gestion des Réservations - Villa Tobias")
     st.sidebar.title("🧭 Navigation")
     pages = {
         "📋 Réservations": vue_reservations,
@@ -1204,11 +1328,12 @@ def main():
         "👥 Liste des Clients": vue_liste_clients,
         "✉️ SMS": vue_sms,
         "📆 Export ICS (Google Calendar)": vue_export_ics,
+        "🔗 Flux ICS public (BETA)": vue_flux_ics_public,
         "📝 Fiche d'arrivée / Google Sheet": vue_google_sheet,
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)","📝 Fiche d'arrivée / Google Sheet"]:
+    if selection in ["➕ Ajouter","✏️ Modifier / Supprimer","🎨 Plateformes","📅 Calendrier","📊 Rapport","📆 Export ICS (Google Calendar)","🔗 Flux ICS public (BETA)","📝 Fiche d'arrivée / Google Sheet"]:
         page_function(df, palette)
     else:
         page_function(df)
