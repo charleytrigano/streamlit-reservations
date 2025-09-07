@@ -5,7 +5,8 @@ import numpy as np
 import altair as alt
 import hashlib, uuid, json, re, io, os, unicodedata, shutil
 from datetime import date, datetime, timedelta
-import calendar  # <- on utilise toujours calendar.monthrange
+import calendar  # on utilise toujours calendar.monthrange
+from urllib.parse import quote, urlencode  # <-- AJOUTÉ
 
 # requests peut être absent des requirements ; on le charge en douceur
 try:
@@ -888,7 +889,8 @@ def vue_sms(df, palette):
                 height=60
             )
 
-            if st.button("✅ Marquer 'SMS envoyé'"):
+            # --- CLÉ UNIQUE POUR ÉVITER CONFLIT ---
+            if st.button("✅ Marquer 'SMS envoyé'", key=f"mark_pre_sent_{resa['_rowid']}"):
                 try:
                     df.loc[resa["_rowid"], 'sms_envoye'] = True
                     df_final = ensure_schema(df)
@@ -967,7 +969,8 @@ def vue_sms(df, palette):
                 height=50
             )
 
-            if st.button("✅ Marquer 'post-départ envoyé'"):
+            # --- CLÉ UNIQUE POUR ÉVITER CONFLIT ---
+            if st.button("✅ Marquer 'post-départ envoyé'", key=f"mark_post_sent_{resa2['_rowid']}"):
                 try:
                     df.loc[resa2["_rowid"], 'post_depart_envoye'] = True
                     df_final = ensure_schema(df)
@@ -976,6 +979,74 @@ def vue_sms(df, palette):
                         st.rerun()
                 except Exception as e:
                     st.error(f"Impossible de marquer : {e}")
+
+        # Envoi groupé
+        st.markdown("---")
+        st.subheader("📦 Envoi groupé post-départ")
+        cold1, cold2 = st.columns(2)
+        default_end = date.today()
+        default_start = default_end - timedelta(days=7)
+        d_start = cold1.date_input("Départs à partir de", default_start)
+        d_end   = cold2.date_input("Jusqu'au (inclus)", default_end)
+
+        elig = df_safe.dropna(subset=['telephone','nom_client','date_depart']).copy()
+        elig = elig[(elig['date_depart'] >= d_start) & (elig['date_depart'] <= d_end) & (~elig['post_depart_envoye'])].copy()
+        elig['tel_clean'] = elig['telephone'].astype(str).str.replace(r'\D','',regex=True).str.lstrip('0')
+        elig = elig[elig['tel_clean'].str.len().between(9,15)]
+        if elig.empty:
+            st.info("Aucun client dans la plage sélectionnée.")
+        else:
+            rows_ui, all_messages = [], []
+            for ridx, r in elig.iterrows():
+                name = str(r.get('nom_client') or "").strip()
+                lang = str(r.get('lang') or 'FR').upper()
+                msg = _post_depart_message(name, lang)
+                e164 = _format_phone_e164(r['telephone'])
+                wa_num = re.sub(r"\D","",e164)
+                enc = quote(msg)
+                rows_ui.append({
+                    "index": ridx,
+                    "nom": name,
+                    "tel": r['telephone'],
+                    "depart": r['date_depart'],
+                    "wa": f"https://wa.me/{wa_num}?text={enc}",
+                    "sms_ios": f"sms:&body={enc}",
+                    "sms_android": f"sms:{e164}?body={enc}",
+                    "msg": msg,
+                })
+                all_messages.append(msg)
+
+            st.write(f"Clients éligibles : **{len(rows_ui)}**")
+            cgb1, cgb2 = st.columns(2)
+            if cgb1.button("📋 Tout copier (messages)"):
+                clipboard_text = "\n\n---\n".join(all_messages)
+                st.components.v1.html(
+                    f"""
+                    <script>
+                      navigator.clipboard.writeText({json.dumps(clipboard_text)});
+                    </script>
+                    <div style="color:#aaa">Messages copiés dans le presse-papiers.</div>
+                    """,
+                    height=10
+                )
+                st.success("Messages copiés.")
+            if cgb2.button("✅ Tout marquer 'post-départ envoyé'", key="mark_post_bulk"):
+                try:
+                    idxs = [row["index"] for row in rows_ui]
+                    df.loc[idxs, 'post_depart_envoye'] = True
+                    df_final = ensure_schema(df)
+                    if sauvegarder_donnees(df_final):
+                        st.success(f"{len(idxs)} réservation(s) marquées comme envoyées."); st.rerun()
+                except Exception as e:
+                    st.error(f"Impossible de marquer en masse : {e}")
+
+            for row in rows_ui:
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns([2,1,1,1])
+                    c1.markdown(f"**{row['nom']}** — départ {row['depart']}  \n📞 {row['tel']}")
+                    c2.link_button("🟢 WhatsApp", row["wa"])
+                    c3.link_button("📲 iPhone SMS", row["sms_ios"])
+                    c4.link_button("🤖 Android SMS", row["sms_android"])
 
 # ==============================  EXPORT ICS & FLUX PUBLIC ==============================
 def _get_query_params():
