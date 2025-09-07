@@ -4,7 +4,7 @@
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
 # - Export ICS : UID stables (v5)
-# - Google Form/Sheet : Form intégré, Feuille intégrée, lecture CSV
+# - Google Form/Sheet : Form intégré (lien court affiché), Feuille intégrée (lien court), lecture CSV
 
 import streamlit as st
 import pandas as pd
@@ -23,21 +23,21 @@ CSV_PLATEFORMES  = "reservations.xlsx - Plateformes.csv"
 # --- Google Form / Sheet ---
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 
-# 👉 Lien raccourci utilisé dans les SMS et WhatsApp
+# 👉 Lien raccourci utilisé dans les SMS/WhatsApp et affiché dans l’onglet Formulaire
 FORM_SHORT_URL = "https://urlr.me/kZuH94"
 
-# Feuille intégrée : même lien raccourci
+# Feuille intégrée : URL raccourcie fournie
 GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
 
-# Réponses publiées (CSV)
+# Réponses publiées (CSV) (URL “Publier sur le Web”)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
 # IDs des champs (préremplissage) — de ton lien fourni
-FORM_ENTRY_NOM      = "entry.937556468"
-FORM_ENTRY_TEL      = "entry.702324920"
-FORM_ENTRY_EMAIL    = "entry.1712365042"
-FORM_ENTRY_ARRIVEE  = "entry.1099006415"
-FORM_ENTRY_DEPART   = "entry.2013910918"
+FORM_ENTRY_NOM        = "entry.937556468"
+FORM_ENTRY_TEL        = "entry.702324920"
+FORM_ENTRY_EMAIL      = "entry.1712365042"
+FORM_ENTRY_ARRIVEE    = "entry.1099006415"
+FORM_ENTRY_DEPART     = "entry.2013910918"
 FORM_ENTRY_PLATEFORME = "entry.528935650"     # Plateforme
 FORM_ENTRY_NUITEES    = "entry.473651945"     # Nuitées
 FORM_ENTRY_RESID      = "entry.2071395456"    # ID interne (res_id)
@@ -215,29 +215,39 @@ def _ensure_res_id_on_row(df, idx):
         return new_id
     return cur
 
+def _null_like(v):
+    # Considère None, NaN, "nan", "" comme vides
+    if v is None:
+        return True
+    if isinstance(v, float) and np.isnan(v):
+        return True
+    if isinstance(v, str) and v.strip().lower() in ("", "nan", "none"):
+        return True
+    return False
+
 def form_prefill_url(nom=None, tel=None, email=None, date_arrivee=None, date_depart=None,
                      plateforme=None, nuitees=None, res_id=None):
     base = GOOGLE_FORM_URL.split("?")[0]
     def to_ymd(d):
-        if d is None or (isinstance(d, float) and np.isnan(d)): return ""
+        if _null_like(d): return ""
         if isinstance(d, str): return d
         if isinstance(d, (pd.Timestamp, datetime)): d = d.date()
         if isinstance(d, date): return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
         return ""
     params = {}
-    if nom:   params[FORM_ENTRY_NOM] = str(nom)
-    if tel:   params[FORM_ENTRY_TEL] = str(tel)
-    if email: params[FORM_ENTRY_EMAIL] = str(email)
-    if date_arrivee: params[FORM_ENTRY_ARRIVEE] = to_ymd(date_arrivee)
-    if date_depart:  params[FORM_ENTRY_DEPART]  = to_ymd(date_depart)
-    if FORM_ENTRY_PLATEFORME and plateforme:
+    if not _null_like(nom):        params[FORM_ENTRY_NOM] = str(nom)
+    if not _null_like(tel):        params[FORM_ENTRY_TEL] = str(tel)
+    if not _null_like(email):      params[FORM_ENTRY_EMAIL] = str(email)
+    if not _null_like(date_arrivee): params[FORM_ENTRY_ARRIVEE] = to_ymd(date_arrivee)
+    if not _null_like(date_depart):  params[FORM_ENTRY_DEPART]  = to_ymd(date_depart)
+    if FORM_ENTRY_PLATEFORME and not _null_like(plateforme):
         params[FORM_ENTRY_PLATEFORME] = str(plateforme)
-    if FORM_ENTRY_NUITEES and (nuitees is not None):
+    if FORM_ENTRY_NUITEES and not _null_like(nuitees):
         try:
             params[FORM_ENTRY_NUITEES] = str(int(nuitees))
         except Exception:
             params[FORM_ENTRY_NUITEES] = str(nuitees)
-    if FORM_ENTRY_RESID and res_id:
+    if FORM_ENTRY_RESID and not _null_like(res_id):
         params[FORM_ENTRY_RESID] = str(res_id)
     return f"{base}?{urlencode(params, quote_via=quote_plus)}" if params else base
 
@@ -945,7 +955,9 @@ def vue_google_sheet(df, palette):
         df_ok = df.dropna(subset=['nom_client','telephone','date_arrivee']).copy()
         if df_ok.empty:
             st.info("Aucune réservation exploitable pour préremplir le formulaire.")
+            # On laisse l'iframe simple si aucune sélection
             st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
+            st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
         else:
             df_ok = df_ok.sort_values('date_arrivee', ascending=False).reset_index()
             options = {i: f"{row['nom_client']} — arrivée {row['date_arrivee']}" for i, row in df_ok.iterrows()}
@@ -966,7 +978,8 @@ def vue_google_sheet(df, palette):
                 nuitees      = sel.get('nuitees'),
                 res_id       = res_id_val
             )
-            st.write("Lien direct :", url_prefill)
+            st.write("Lien direct prérempli :", url_prefill)
+            st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
