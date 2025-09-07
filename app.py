@@ -3,10 +3,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import hashlib, uuid, json, re, io, os, unicodedata, shutil, requests
+import hashlib, uuid, json, re, io, os, unicodedata, shutil
 from datetime import date, datetime, timedelta
-from calendar import monthrange
-from urllib.parse import quote, urlencode
+import calendar  # <- on utilise toujours calendar.monthrange
+
+# requests peut être absent des requirements ; on le charge en douceur
+try:
+    import requests
+except Exception:  # pragma: no cover
+    requests = None
 
 # --- Fichiers CSV (fallback local) ---
 CSV_RESERVATIONS = "reservations.xlsx - Sheet1.csv"
@@ -81,6 +86,9 @@ def _proxy_conf():
         raise RuntimeError(f"Configuration sheets_proxy manquante: {e}")
 
 def proxy_read_ws(ws_name: str) -> pd.DataFrame:
+    if requests is None:
+        st.error("Le module 'requests' n'est pas installé. Bascule en CSV local.")
+        return pd.DataFrame()
     base, token, _, _ = _proxy_conf()
     try:
         r = requests.get(base, params={"token": token, "ws": ws_name}, timeout=20)
@@ -90,8 +98,7 @@ def proxy_read_ws(ws_name: str) -> pd.DataFrame:
         rows = payload.get("rows", [])
         if not headers:
             return pd.DataFrame()
-        df = pd.DataFrame(rows, columns=headers)
-        return df
+        return pd.DataFrame(rows, columns=headers)
     except Exception as e:
         st.error(f"Proxy GET échec ({ws_name}) : {e}")
         return pd.DataFrame()
@@ -107,6 +114,9 @@ def _df_to_rows(df: pd.DataFrame, date_cols=("date_arrivee","date_depart")):
     return headers, rows
 
 def proxy_replace_ws(ws_name: str, df: pd.DataFrame) -> bool:
+    if requests is None:
+        st.error("Le module 'requests' n'est pas installé. Bascule en CSV local.")
+        return False
     base, token, _, _ = _proxy_conf()
     try:
         headers, rows = _df_to_rows(df)
@@ -516,7 +526,6 @@ def vue_plateformes(df, palette):
             st.success("Palette mise à jour !"); st.rerun()
 
 def vue_calendrier(df, palette):
-    import calendar
     st.header("📅 Calendrier des Réservations")
     dfv = df.dropna(subset=['date_arrivee','date_depart','AAAA'])
     if dfv.empty:
@@ -550,7 +559,7 @@ def vue_calendrier(df, palette):
 
 # ==============================  RAPPORT ==============================
 def _available_nights_by_month(year: int):
-    return {date(year, m, 1): monthrange(year, m)[1] for m in range(1,13)}
+    return {date(year, m, 1): calendar.monthrange(year, m)[1] for m in range(1,13)}
 
 def _expand_to_daily(df):
     rows = []
@@ -687,7 +696,7 @@ def vue_rapport(df, palette):
         occ_days = (daily.groupby('day', as_index=False).agg(occ=('res_id','nunique'))); occ_days['occ']=occ_days['occ'].clip(0,1)
         all_days=[]
         for m in mois_int:
-            rng = pd.date_range(f"{annee}-{m:02d}-01", f"{annee}-{m:02d}-{monthrange(annee, m)[1]}", freq="D").date
+            rng = pd.date_range(f"{annee}-{m:02d}-01", f"{annee}-{m:02d}-{calendar.monthrange(annee, m)[1]}", freq="D").date
             all_days += list(rng)
         all_days = pd.DataFrame({"day": all_days})
         all_days = all_days.merge(occ_days[['day','occ']], on='day', how='left').fillna({'occ':0})
