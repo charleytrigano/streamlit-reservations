@@ -48,6 +48,7 @@ def apply_modern_style(mode="dark"):
     .stTabs [aria-selected="true"]{{background:{bg};border-color:{accent};}}
     .calendar-day{{border:1px solid {grid}; background:{panel};}}
     .calendar-day.outside-month{{background: {'#1a1d2b' if mode=='dark' else '#f1f5f9'};}}
+    .chips{{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 16px 0;}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -83,7 +84,9 @@ def _gspread_client():
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/calendar",
     ]
-    info = dict(st.secrets["gcp_service_account"])
+    info = dict(st.secrets.get("gcp_service_account", {}))
+    if not info or "token_uri" not in info:
+        raise RuntimeError("Service account info missing fields (ex: token_uri).")
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     return gspread.authorize(creds), creds
 
@@ -512,11 +515,12 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation."); return
     df_valid = df.dropna(subset=['AAAA','MM'])
     c1, c2, c3 = st.columns(3)
+    # FIX: pas de .tolist() après sorted(...)
     annees = ["Toutes"] + sorted(df_valid['AAAA'].dropna().astype(int).unique(), reverse=True)
-    annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
     mois_options = ["Tous"] + list(range(1,13))
     mois_selectionne = c2.selectbox("Filtrer par Mois", mois_options)
-    plats_opts = ["Toutes"] + sorted(df_valid['plateforme'].dropna().unique().tolist())
+    plats_opts = ["Toutes"] + sorted(df_valid['plateforme'].dropna().unique())
+    annee_selectionnee = c1.selectbox("Filtrer par Année", annees)
     plateforme_selectionnee = c3.selectbox("Filtrer par Plateforme", plats_opts)
 
     data = df_valid.copy()
@@ -554,12 +558,9 @@ def vue_reservations(df, palette):
     # si modifié, on répercute
     if not edited.equals(df_sorted):
         df_copy = df.copy()
-        # meilleure approche: on recalcule via clés uniques (nom+dates+tel) ou res_id si présent
         for i, row in edited.iterrows():
-            # essaie d'aligner via res_id si disponible
             mask = df_copy['res_id'] == row.get('res_id')
             if not (mask.any()):
-                # fallback naïf: par (nom + arrivée + départ)
                 mask = (df_copy['nom_client']==row.get('nom_client')) & \
                        (df_copy['date_arrivee']==row.get('date_arrivee')) & \
                        (df_copy['date_depart']==row.get('date_depart'))
@@ -681,7 +682,8 @@ def vue_calendrier(df, palette):
     noms_mois = [calendar.month_name[i] for i in range(1,13)]
     selected_month_name = c1.selectbox("Mois", options=noms_mois, index=today.month-1)
     selected_month = noms_mois.index(selected_month_name) + 1
-    years = sorted(dfv['AAAA'].dropna().astype(int).unique().tolist())
+    # FIX: pas de .tolist() après sorted(...)
+    years = sorted(dfv['AAAA'].dropna().astype(int).unique())
     default_year_index = years.index(today.year) if today.year in years else len(years)-1
     selected_year = c2.selectbox("Année", options=years, index=default_year_index)
     cal = calendar.Calendar()
@@ -970,9 +972,10 @@ def vue_sms_post_depart(df):
             lang = str(resa.get('lang') or 'FR').upper()
             msg = _post_depart_message(resa.get('nom_client'), lang)
             enc = quote(msg); e164 = _format_phone_e164(resa['telephone']); wa_num=re.sub(r"\D","",e164)
-            st.columns(3)[0].link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
-            st.columns(3)[1].link_button("📲 iPhone SMS", f"sms:&body={enc}")
-            st.columns(3)[2].link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+            cols = st.columns(3)
+            cols[0].link_button("🟢 WhatsApp", f"https://wa.me/{wa_num}?text={enc}")
+            cols[1].link_button("📲 iPhone SMS", f"sms:&body={enc}")
+            cols[2].link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
             st.components.v1.html(f"""
                 <button onclick="navigator.clipboard.writeText({json.dumps(msg)})"
                         style="margin-top:8px;padding:8px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:#222;color:#fff;cursor:pointer">
@@ -1220,7 +1223,7 @@ def main():
     }
     selection = st.sidebar.radio("Aller à", list(pages.keys()))
     page_function = pages[selection]
-    page_function(df, palette_eff) if selection not in ["✉️ SMS"] else page_function(df, palette_eff)
+    page_function(df, palette_eff)
 
     admin_sidebar(df)
 
