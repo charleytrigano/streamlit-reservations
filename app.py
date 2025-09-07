@@ -4,7 +4,7 @@
 # - Google Form prérempli (nom, tél, email, arrivée, départ, plateforme, nuitées, res_id)
 # - Rapport : métriques, barres/courbes, cumul, moyenne / nuitée, export CSV
 # - Export ICS : UID stables (v5)
-# - Google Form/Sheet : Form intégré (lien court affiché), Feuille intégrée (lien court), lecture CSV
+# - Google Form/Sheet : Form intégré (lien court affiché + bouton Copier), Feuille intégrée (lien court), lecture CSV
 
 import streamlit as st
 import pandas as pd
@@ -32,7 +32,7 @@ GOOGLE_SHEET_EMBED_URL = "https://urlr.me/kZuH94"
 # Réponses publiées (CSV) (URL “Publier sur le Web”)
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?gid=1915058425&single=true&output=csv"
 
-# IDs des champs (préremplissage) — de ton lien fourni
+# IDs des champs (préremplissage)
 FORM_ENTRY_NOM        = "entry.937556468"
 FORM_ENTRY_TEL        = "entry.702324920"
 FORM_ENTRY_EMAIL      = "entry.1712365042"
@@ -216,7 +216,6 @@ def _ensure_res_id_on_row(df, idx):
     return cur
 
 def _null_like(v):
-    # Considère None, NaN, "nan", "" comme vides
     if v is None:
         return True
     if isinstance(v, float) and np.isnan(v):
@@ -828,7 +827,6 @@ Merci de remplir la fiche d'arrivee / Please fill out the arrival form :
         with c_wa:
             st.link_button("🟢 WhatsApp", wa_link)
 
-        # Bouton copier
         st.components.v1.html(f"""
             <button onclick="navigator.clipboard.writeText({json.dumps(message_body)})"
                     style="margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
@@ -955,9 +953,14 @@ def vue_google_sheet(df, palette):
         df_ok = df.dropna(subset=['nom_client','telephone','date_arrivee']).copy()
         if df_ok.empty:
             st.info("Aucune réservation exploitable pour préremplir le formulaire.")
-            # On laisse l'iframe simple si aucune sélection
             st.components.v1.iframe(GOOGLE_FORM_URL, height=950, scrolling=True)
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
+            st.components.v1.html(f"""
+                <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+                        style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                    📋 Copier le lien
+                </button>
+            """, height=50)
         else:
             df_ok = df_ok.sort_values('date_arrivee', ascending=False).reset_index()
             options = {i: f"{row['nom_client']} — arrivée {row['date_arrivee']}" for i, row in df_ok.iterrows()}
@@ -966,7 +969,6 @@ def vue_google_sheet(df, palette):
             sel = df_ok.loc[choice]
 
             res_id_val = _ensure_res_id_on_row(df, sel['index'])
-
             email_val = sel.get('email') if 'email' in df_ok.columns else None
             url_prefill = form_prefill_url(
                 nom = sel.get('nom_client'),
@@ -978,8 +980,17 @@ def vue_google_sheet(df, palette):
                 nuitees      = sel.get('nuitees'),
                 res_id       = res_id_val
             )
-            st.write("Lien direct prérempli :", url_prefill)
+
+            # ⬇️ On n'affiche plus le lien long : uniquement le lien court + bouton Copier
             st.markdown(f"**Lien à partager (court)** : {FORM_SHORT_URL}")
+            st.components.v1.html(f"""
+                <button onclick="navigator.clipboard.writeText({json.dumps(FORM_SHORT_URL)})"
+                        style="margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid #888;background:#222;color:#fff;cursor:pointer">
+                    📋 Copier le lien
+                </button>
+            """, height=50)
+
+            # On intègre le formulaire prérempli (URL longue non affichée à l'écran)
             st.components.v1.iframe(url_prefill, height=950, scrolling=True)
 
     with tab_sheet:
