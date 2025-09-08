@@ -59,7 +59,7 @@ def apply_style():
         }
         </style>
         """,
-        unsafe_allow_html=True)
+        unsafe_allow_html=True
     )
 
 def card(title: str, content: str):
