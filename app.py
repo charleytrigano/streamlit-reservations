@@ -173,6 +173,50 @@ BASE_COLS = [
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=BASE_COLS)
+    df = df.copy()
+
+    # Dates -> date
+    for c in ["date_arrivee","date_depart"]:
+        df[c] = pd.to_datetime(df.get(c), errors="coerce").dt.date
+
+    # Booléens
+    for b in ["paye","sms_envoye","post_depart_envoye"]:
+        if b not in df.columns: df[b] = False
+        df[b] = df[b].astype(str).str.lower().isin(["true","1","oui","vrai","yes"]).fillna(False)
+
+    # Numériques
+    for n in ["prix_brut","commissions","frais_cb","menage","taxes_sejour","nuitees","base","charges"]:
+        if n in df.columns:
+            df[n] = pd.to_numeric(df[n], errors="coerce").fillna(0.0)
+
+    # Prix net
+    if "prix_brut" in df.columns:
+        brut = pd.to_numeric(df["prix_brut"], errors="coerce").fillna(0.0)
+        comm = pd.to_numeric(df.get("commissions"), errors="coerce").fillna(0.0)
+        cb   = pd.to_numeric(df.get("frais_cb"), errors="coerce").fillna(0.0)
+        df["prix_net"] = brut - comm - cb
+    else:
+        df["prix_net"] = 0.0
+
+    # IDs
+    if "res_id" not in df.columns: df["res_id"] = None
+    if "ical_uid" not in df.columns: df["ical_uid"] = None
+
+    miss = df["res_id"].isna() | (df["res_id"].astype(str).str.strip()=="")
+    if miss.any():
+        df.loc[miss, "res_id"] = [str(uuid.uuid4()) for _ in range(int(miss.sum()))]
+
+    # Année / Mois (sécurisé)
+    df["AAAA"] = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.year.fillna(0).astype(int)
+    df["MM"]   = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.month.fillna(0).astype(int)
+
+    # Colonnes manquantes
+    for c in BASE_COLS:
+        if c not in df.columns: df[c] = None
+
+    return df[BASE_COLS]:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=BASE_COLS)
 
     df = df.copy()
     df.columns = df.columns.map(lambda c: str(c).strip())
@@ -298,7 +342,9 @@ def _kpis_resa(df):
     c5.metric("Nuitées / ADR", f"{int(nuits)} / {_safe_eur(adr)}" if not np.isnan(adr) else f"{int(nuits)} / —")
 
 # ============================== VUES (réservations/calendrier/plateformes) ==============================
-def vue_reservations(df, palette):
+# Recalcule au cas où
+df["AAAA"] = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.year.fillna(0).astype(int)
+df["MM"]   = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.month.fillna(0).astype(int) vue_reservations(df, palette):
     st.header("📋 Réservations")
     if df.empty:
         st.info("Aucune réservation.")
