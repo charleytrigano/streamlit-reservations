@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import altair as alt
@@ -34,7 +35,7 @@ def apply_style(light: bool):
     border = "rgba(17,24,39,.08)" if light else "rgba(124,92,255,.16)"
     chip_bg = "#333" if not light else "#e8e8e8"
     chip_fg = "#eee" if not light else "#222"
-    st.markdown(
+    components.html(  # style global
         f"""
         <style>
           html, body, [data-testid="stAppViewContainer"] {{
@@ -72,7 +73,7 @@ def apply_style(light: bool):
           }}
         </style>
         """,
-        unsafe_allow_html=True
+        height=0,
     )
 
 def card(title: str, content: str):
@@ -543,7 +544,7 @@ def vue_rapport(df, palette):
 
 # ---- util bouton copier (JS)
 def _copy_button_js(label: str, payload: str, key: str = ""):
-    st.components.v1.html(
+    components.html(
         f"""
         <button onclick="navigator.clipboard.writeText({json.dumps(payload)})"
                 style="padding:8px 12px;border-radius:10px;border:1px solid rgba(127,127,127,.35);
@@ -804,15 +805,15 @@ def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
 
-    st.markdown(
+    components.html(
         f'<iframe src="{GOOGLE_FORM_URL}" width="100%" height="900" frameborder="0"></iframe>',
-        unsafe_allow_html=True
+        height=900,
     )
     st.markdown("---")
     st.subheader("Feuille Google intégrée")
-    st.markdown(
+    components.html(
         f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>',
-        unsafe_allow_html=True
+        height=700,
     )
     st.markdown("---")
     st.subheader("Réponses (CSV publié)")
