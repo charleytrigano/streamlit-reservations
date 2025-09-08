@@ -72,6 +72,28 @@ try:
         st.sidebar.success("✅ Aucun 'with st.sidebar:' trouvé dans ce fichier.")
 except Exception as _e:
     st.sidebar.warning(f"[DEBUG] Scanner sidebar impossible: {_e}")
+
+# === DEBUG: scanner 'with st.sidebar:' + contexte ===
+try:
+    _lines = _contents.splitlines()
+    hits = []
+    for i, raw in enumerate(_lines, 1):
+        L = raw.replace("\t", "    ")
+        if "with st.sidebar:" in L or "with  st.sidebar:" in L or "with\tst.sidebar:" in raw:
+            hits.append(i)
+
+    if hits:
+        st.sidebar.error("⚠️ 'with st.sidebar:' trouvé aux lignes : " + ", ".join(map(str, hits)))
+        # Montrer 2 lignes avant/après pour chaque hit
+        for ln in hits:
+            start = max(1, ln-2)
+            end = min(len(_lines), ln+2)
+            excerpt = "\n".join([f"{n:04d}: {_lines[n-1]}" for n in range(start, end+1)])
+            st.sidebar.code(excerpt)
+    else:
+        st.sidebar.success("✅ Aucun 'with st.sidebar:' trouvé dans ce fichier.")
+except Exception as _e:
+    st.sidebar.warning(f"[DEBUG] Scanner sidebar impossible: {_e}")
 # ============================== CONFIG ==============================
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
