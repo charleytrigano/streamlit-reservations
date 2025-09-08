@@ -29,6 +29,11 @@ try:
 except Exception as _e:
     st.sidebar.markdown(f"[DEBUG] Impossible de lire le fichier courant: {_e}")
 
+try:
+    if "with st.sidebar:" in _contents:
+        st.sidebar.error("⚠️ Trouvé 'with st.sidebar:' dans le fichier exécuté !")
+except Exception:
+    pass
 # ============================== CONFIG ==============================
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
