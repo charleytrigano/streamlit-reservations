@@ -848,7 +848,49 @@ def admin_sidebar(df):
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"Erreur : {e}")
+def admin_sidebar(df):
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚙️ Administration")
+    st.sidebar.download_button(
+        "Télécharger CSV",
+        data=df.to_csv(sep=";", index=False).encode("utf-8"),
+        file_name=CSV_RESERVATIONS,
+        mime="text/csv"
+    )
+    up = st.sidebar.file_uploader("Restaurer depuis un CSV", type=["csv"])
+    if up is not None and st.sidebar.button("Confirmer restauration"):
+        try:
+            content = up.getvalue()
+            df_test = _read_csv_loose(content)
+            df_test = _normalize_dates_ymd(df_test)
+            df_valid = ensure_schema(df_test)
+            required = {"nom_client", "plateforme", "date_arrivee", "date_depart"}
+            if not required.issubset(set(df_valid.columns)):
+                raise ValueError(f"Colonnes manquantes : {required - set(df_valid.columns)}")
+            df_valid.to_csv(CSV_RESERVATIONS, sep=";", index=False)
+            st.cache_data.clear()
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            st.success("Fichier restauré. Rechargement…")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erreur : {e}")
 
+    # --- NOUVEAU : Vider le cache ---
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🧹 Vider le cache", use_container_width=True):
+        try:
+            st.cache_data.clear()
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            st.sidebar.success("Cache vidé. Rechargement…")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Impossible de vider le cache : {e}")
 # ============================== MAIN ==============================
 def main():
     try:
