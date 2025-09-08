@@ -654,6 +654,83 @@ def admin_sidebar(df):
                 st.sidebar.error(f"Erreur lors de la restauration : {e}")
 
 
+# ============================== IMPORT / RESTORE CSV ==============================
+
+def _read_csv_loose(file_bytes: bytes) -> pd.DataFrame:
+    """Lecture tolérante d'un CSV (encodage / séparateur)."""
+    errors = []
+    for enc in ("utf-8-sig", "utf-8", "cp1252"):
+        for sep in (";", ","):
+            try:
+                df = pd.read_csv(pd.io.common.BytesIO(file_bytes), encoding=enc, sep=sep)
+                if isinstance(df, pd.DataFrame):
+                    return df
+            except Exception as e:
+                errors.append(f"[{enc} / '{sep}'] {e}")
+    raise ValueError("Impossible de lire le CSV avec encodages/séparateurs classiques.\n" + "\n".join(errors))
+
+
+def _normalize_dates_ymd(df: pd.DataFrame) -> pd.DataFrame:
+    """Accepte AAAA/mm/dd (year-first) ET autres variantes.
+    On tente d'abord yearfirst=True, puis dayfirst=True, sinon coerce."""
+    df = df.copy()
+    for c in ("date_arrivee", "date_depart", "Arrivée", "Arrivee", "Départ", "Depart"):
+        if c in df.columns:
+            s = pd.to_datetime(df[c], errors="coerce", yearfirst=True)
+            # si trop de NaT, on retente dayfirst
+            if s.isna().mean() > 0.5:
+                s = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+            df[c] = s.dt.date
+    return df
+
+
+def vue_import_csv(df_current, palette):
+    st.header("🛠️ Import / Restaurer CSV")
+    st.write("Charge un **CSV de réservations** (dates `AAAA/mm/dd` acceptées). Le fichier est **validé** avant d'écraser `reservations.csv`.")
+
+    uploaded = st.file_uploader("Sélectionne ton fichier CSV", type=["csv"])
+    if not uploaded:
+        st.info("Choisis un fichier pour continuer.")
+        return
+
+    # Aperçu tolérant
+    try:
+        raw = uploaded.getvalue()
+        df_raw = _read_csv_loose(raw)
+        df_raw = _normalize_dates_ymd(df_raw)
+        df_norm = ensure_schema(df_raw)
+    except Exception as e:
+        st.error(f"Lecture impossible : {e}")
+        return
+
+    # Validation minimale
+    required = {"nom_client", "plateforme", "date_arrivee", "date_depart"}
+    missing = required - set(df_norm.columns)
+    if missing:
+        st.error(f"Colonnes manquantes : {missing}")
+        st.stop()
+
+    st.subheader("Aperçu (après normalisation)")
+    st.dataframe(df_norm.head(30), use_container_width=True)
+
+    c1, c2 = st.columns([1,1])
+    with c1:
+        st.caption("Lignes détectées : {}".format(len(df_norm)))
+        st.caption("Dates arrivées min/max : {} → {}".format(
+            pd.to_datetime(df_norm["date_arrivee"], errors="coerce").min(),
+            pd.to_datetime(df_norm["date_arrivee"], errors="coerce").max(),
+        ))
+
+    with c2:
+        if st.button("✅ Écraser et restaurer maintenant"):
+            try:
+                df_norm.to_csv(CSV_RESERVATIONS, sep=";", index=False)
+                st.cache_data.clear()
+                st.success("CSV restauré avec succès. Rechargement…")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Échec de la restauration : {e}")
+
 # ============================== MAIN ==============================
 def main():
     # thème
@@ -677,6 +754,7 @@ def main():
         "✉️ SMS": vue_sms,
         "📆 Export ICS": vue_export_ics,
         "📝 Google Sheet": vue_google_sheet,
+        "🛠️ Import/Restaurer CSV": vue_import_csv,
     }
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
