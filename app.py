@@ -209,11 +209,11 @@ def vue_reservations(df, palette):
     if data.empty:
         st.warning("Aucune donnée après filtres."); return
 
-    # Totaux/KPI (format lisible, chiffres arrondis pour lisibilité)
-    brut  = float(data["prix_brut"].sum())
-    net   = float(data["prix_net"].sum())
-    nuits = int(data["nuitees"].sum())
-    adr   = (net/nuits) if nuits>0 else 0.0
+    # Totaux/KPI (format lisible)
+    brut   = float(data["prix_brut"].sum())
+    net    = float(data["prix_net"].sum())
+    nuits  = int(data["nuitees"].sum())
+    adr    = (net/nuits) if nuits>0 else 0.0
     menage = float(data["menage"].sum())
     taxes  = float(data["taxes_sejour"].sum())
     comm   = float(data["commissions"].sum())
@@ -315,6 +315,15 @@ def vue_plateformes(df, palette):
     st.header("🎨 Plateformes & couleurs")
     base = pd.DataFrame(list(palette.items()), columns=["plateforme","couleur"])
     edited = st.data_editor(base, num_rows="dynamic", use_container_width=True, hide_index=True)
+    up = st.file_uploader("Restaurer une palette (CSV ; séparateur ';')", type=["csv"], key="pal_up")
+    if up is not None and st.button("↩️ Importer cette palette"):
+        try:
+            new_pal = pd.read_csv(up, delimiter=";")
+            edited = new_pal[["plateforme","couleur"]]
+            st.success("Palette chargée. Cliquez ensuite sur '💾 Enregistrer la palette'.")
+        except Exception as e:
+            st.error(f"Erreur import palette : {e}")
+
     if st.button("💾 Enregistrer la palette"):
         try:
             edited.to_csv(CSV_PLATEFORMES, sep=";", index=False)
@@ -405,7 +414,7 @@ def vue_rapport(df, palette):
 
 # --------- COPIE COMPATIBLE ---------
 def _copy_button(label: str, payload: str, key: str):
-    """Bouton copier compatible (fallback download)."""
+    """Bouton copier compatible (fallback download si clipboard bloqué)."""
     try:
         html = f"""
         <div>
@@ -429,6 +438,10 @@ def _copy_button(label: str, payload: str, key: str):
             mime="text/plain",
             key=f"dl_{key}"
         )
+
+# --- Compat: anciens appels (SOLIDE) ---
+def _copy_button_js(label: str, payload: str, key: str):
+    return _copy_button(label, payload, key)
 
 # --------- SMS ---------
 def vue_sms(df, palette):
