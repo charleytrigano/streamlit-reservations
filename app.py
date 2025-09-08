@@ -22,7 +22,16 @@ DEFAULT_PALETTE = {
 
 # ============================== STYLE ==============================
 def apply_style():
+
+  def apply_style(light: bool):
     st.markdown(
+        """
+        <style>
+        body { font-family: Arial, sans-serif; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    ) st.markdown(
         """
         <style>
         [data-testid="stSidebar"] {
