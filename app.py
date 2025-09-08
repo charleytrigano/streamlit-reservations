@@ -50,8 +50,13 @@ def apply_style(light: bool):
           }}
           .chip {{
             display:inline-block; background:{chip_bg}; color:{chip_fg};
-            padding:6px 10px; border-radius:12px; margin:4px 6px; font-size:0.9rem
+            padding:6px 10px; border-radius:10px; margin:4px 6px; font-size:0.9rem
           }}
+          .kpi-row {{ display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px 0; }}
+          .kpi-chip {{ background:rgba(127,127,127,.12); border:1px solid rgba(127,127,127,.25);
+                       padding:6px 10px; border-radius:10px; font-size:0.9rem; }}
+          .kpi-chip b {{ font-size:0.95rem; }}
+
           /* Calendar grid */
           .cal-grid {{
             display:grid; grid-template-columns: repeat(7, 1fr);
@@ -179,24 +184,23 @@ def _format_phone_e164(phone: str) -> str:
 # ============================== VUES ==============================
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
+
     if df.empty:
-        st.info("Aucune réservation."); return
+        st.info("Aucune réservation."); 
+        return
 
-    # Filtres robustes
-    if "AAAA" in df.columns and df["AAAA"].notna().any():
-        years_list = pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique().tolist()
-        years_list = sorted([y for y in years_list if y > 0], reverse=True)
-    else:
-        years_list = []
-
+    # ===== Filtres Année / Mois / Plateforme (dans la page)
+    years_list = pd.to_numeric(df.get("AAAA", pd.Series(dtype="float64")), errors="coerce").dropna().astype(int)
+    years_list = sorted([y for y in years_list.unique().tolist() if y > 0], reverse=True)
     annees = ["Toutes"] + years_list
-    annee_sel = st.sidebar.selectbox("Année", annees, index=0)
 
     mois_opts = ["Tous"] + list(range(1, 13))
-    mois_sel = st.sidebar.selectbox("Mois", mois_opts, index=0)
+    plats = ["Toutes"] + sorted([p for p in df.get("plateforme", pd.Series(dtype="object")).dropna().astype(str).unique().tolist()])
 
-    plats = ["Toutes"] + sorted([p for p in df["plateforme"].dropna().astype(str).unique()])
-    plat_sel = st.sidebar.selectbox("Plateforme", plats, index=0)
+    c1, c2, c3 = st.columns([1, 1, 2])
+    annee_sel = c1.selectbox("Année", annees, index=0)
+    mois_sel  = c2.selectbox("Mois", mois_opts, index=0)
+    plat_sel  = c3.selectbox("Plateforme", plats, index=0)
 
     data = df.copy()
     if annee_sel != "Toutes":
@@ -207,25 +211,43 @@ def vue_reservations(df, palette):
         data = data[data["plateforme"] == plat_sel]
 
     if data.empty:
-        st.warning("Aucune donnée après filtres."); return
+        st.warning("Aucune donnée après filtres.")
+        return
 
-    # Totaux/KPI (format lisible)
+    # ===== Totaux (petites pastilles)
     brut   = float(data["prix_brut"].sum())
     net    = float(data["prix_net"].sum())
     nuits  = int(data["nuitees"].sum())
-    adr    = (net/nuits) if nuits>0 else 0.0
+    adr    = (net/nuits) if nuits > 0 else 0.0
     menage = float(data["menage"].sum())
     taxes  = float(data["taxes_sejour"].sum())
     comm   = float(data["commissions"].sum())
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Brut", f"{brut:,.0f} €".replace(",", " "))
-    c2.metric("Net", f"{net:,.0f} €".replace(",", " "))
-    c3.metric("Nuitées", f"{nuits}")
-    c4.metric("ADR net", f"{adr:,.0f} €".replace(",", " "))
-    c5.metric("Commissions", f"{comm:,.0f} €".replace(",", " "))
-    c6.metric("Taxes séjour", f"{taxes:,.0f} €".replace(",", " "))
+    st.markdown(
+        """
+        <style>
+          .kpi-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px 0; }
+          .kpi-chip { background:rgba(127,127,127,.12); border:1px solid rgba(127,127,127,.25);
+                      padding:6px 10px; border-radius:10px; font-size:0.9rem; }
+          .kpi-chip b { font-size:0.95rem; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    kpi_html = f"""
+    <div class="kpi-row">
+      <div class="kpi-chip"><b>Brut</b>&nbsp;{brut:,.0f} €</div>
+      <div class="kpi-chip"><b>Net</b>&nbsp;{net:,.0f} €</div>
+      <div class="kpi-chip"><b>Nuitées</b>&nbsp;{nuits}</div>
+      <div class="kpi-chip"><b>ADR net</b>&nbsp;{adr:,.0f} €</div>
+      <div class="kpi-chip"><b>Commissions</b>&nbsp;{comm:,.0f} €</div>
+      <div class="kpi-chip"><b>Taxes</b>&nbsp;{taxes:,.0f} €</div>
+      <div class="kpi-chip"><b>Ménage</b>&nbsp;{menage:,.0f} €</div>
+    </div>
+    """
+    st.markdown(kpi_html.replace(",", " "), unsafe_allow_html=True)
 
+    # ===== Tableau
     st.dataframe(
         data.sort_values("date_arrivee", ascending=False),
         use_container_width=True
@@ -382,28 +404,57 @@ def vue_calendrier(df, palette):
 # --------- RAPPORT ----------
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
+
     if df.empty:
-        st.info("Aucune donnée."); return
-    years = sorted(pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique(), reverse=True)
+        st.info("Aucune donnée."); 
+        return
+
+    years = sorted(pd.to_numeric(df.get("AAAA", pd.Series(dtype="float64")), errors="coerce").dropna().astype(int).unique(), reverse=True)
     if not years:
-        st.info("Pas d'années valides."); return
-    year  = st.selectbox("Année", years, index=0)
+        st.info("Pas d'années valides.")
+        return
+
+    c1, c2, c3 = st.columns([1,1,2])
+    year   = c1.selectbox("Année", years, index=0)
     months = ["Tous"] + list(range(1,13))
-    month = st.selectbox("Mois", months, index=0)
-    plats = ["Tous"] + sorted(df["plateforme"].dropna().unique())
-    plat  = st.selectbox("Plateforme", plats, index=0)
+    month  = c2.selectbox("Mois", months, index=0)
+    plats  = ["Tous"] + sorted(df.get("plateforme", pd.Series(dtype="object")).dropna().unique().tolist())
+    plat   = c3.selectbox("Plateforme", plats, index=0)
+
     metric = st.selectbox("Métrique", ["prix_brut","prix_net","nuitees","menage","taxes_sejour","commissions"], index=0)
 
-    data = df[df["AAAA"]==year].copy()
-    if month!="Tous": data = data[data["MM"]==int(month)]
-    if plat!="Tous":  data = data[data["plateforme"]==plat]
+    data = df[df["AAAA"] == year].copy()
+    if month != "Tous":
+        data = data[data["MM"] == int(month)]
+    if plat != "Tous":
+        data = data[data["plateforme"] == plat]
+
     if data.empty:
-        st.warning("Aucune donnée après filtres."); return
+        st.warning("Aucune donnée après filtres.")
+        return
 
     data["mois"] = pd.to_datetime(data["date_arrivee"], errors="coerce").dt.to_period("M").astype(str)
     agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
-    st.dataframe(agg, use_container_width=True)
 
+    # ===== TOTAL de la métrique =====
+    total_metric = float(agg[metric].sum())
+
+    st.markdown("""
+    <style>
+      .tot-chip { display:inline-block; background:rgba(0,128,0,.08); border:1px solid rgba(0,128,0,.25);
+                  padding:6px 10px; border-radius:10px; margin:6px 0 10px 0; }
+      .tot-chip b { margin-right:8px; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown(f'<div class="tot-chip"><b>Total {metric.replace("_"," ").title()}</b> {total_metric:,.0f}</div>'.replace(",", " "), unsafe_allow_html=True)
+
+    # ===== Tableau + ligne Total
+    total_row = pd.DataFrame([{"mois": "Total", "plateforme": "—", metric: total_metric}])
+    agg_export = pd.concat([agg, total_row], ignore_index=True)
+
+    st.dataframe(agg_export, use_container_width=True)
+
+    # ===== Graphique
     chart = alt.Chart(agg).mark_bar().encode(
         x="mois:N",
         y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
@@ -439,7 +490,7 @@ def _copy_button(label: str, payload: str, key: str):
             key=f"dl_{key}"
         )
 
-# --- Compat: anciens appels (SOLIDE) ---
+# --- Compat: anciens appels (alias robuste) ---
 def _copy_button_js(label: str, payload: str, key: str):
     return _copy_button(label, payload, key)
 
