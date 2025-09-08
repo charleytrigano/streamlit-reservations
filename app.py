@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import re, uuid, hashlib, json
+import re, uuid, hashlib
 from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
@@ -28,7 +28,7 @@ GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS
 
 # ============================== STYLE ==============================
 def apply_style(light: bool):
-    """Theme simple et lisible en clair/sombre."""
+    """Theme simple clair/sombre + styles utiles."""
     bg = "#fafafa" if light else "#0f1115"
     fg = "#0f172a" if light else "#eaeef6"
     side = "#f2f2f2" if light else "#171923"
@@ -90,26 +90,25 @@ def _to_bool_series(s):
     return s.astype(str).str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie et complète le schéma pour éviter les crashes, même si le CSV est imparfait."""
+    """Nettoie et complète le schéma en tolérant les CSV imparfaits."""
     if df is None or df.empty:
         return pd.DataFrame(columns=BASE_COLS)
     df = df.copy()
 
-    # Normaliser colonnes attendues
+    # Colonnes manquantes
     for col in BASE_COLS:
         if col not in df.columns:
             df[col] = None
 
-    # Dates
+    # Dates (support 14/08/2024 ou 2024-08-14)
     for c in ["date_arrivee","date_depart"]:
-        # support 14/08/2024, 2024-08-14, etc.
         df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True).dt.date
 
     # Booléens
     for b in ["paye","sms_envoye","post_depart_envoye"]:
         df[b] = _to_bool_series(df[b]).fillna(False)
 
-    # Numériques (attention aux € et virgules)
+    # Numériques (enlevant € et virgules)
     for n in ["prix_brut","commissions","frais_cb","menage","taxes_sejour","nuitees"]:
         df[n] = (
             df[n]
@@ -123,18 +122,17 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     # Prix net
     df["prix_net"] = df["prix_brut"] - df["commissions"] - df["frais_cb"]
 
-    # res_id
+    # res_id (UUID si absent)
     miss_id = df["res_id"].isna() | (df["res_id"].astype(str).str.strip()=="")
     if miss_id.any():
         df.loc[miss_id, "res_id"] = [str(uuid.uuid4()) for _ in range(int(miss_id.sum()))]
 
-    # AAAA / MM
+    # AAAA / MM depuis arrivée (0 si manquant)
     aa = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.year
     mm = pd.to_datetime(df["date_arrivee"], errors="coerce").dt.month
     df["AAAA"] = aa.fillna(0).astype(int)
     df["MM"]   = mm.fillna(0).astype(int)
 
-    # ical_uid (gardé tel quel si présent)
     return df[BASE_COLS]
 
 @st.cache_data
@@ -150,7 +148,6 @@ def charger_donnees():
     try:
         df_pal = pd.read_csv(CSV_PLATEFORMES, delimiter=";")
         palette = dict(zip(df_pal["plateforme"], df_pal["couleur"]))
-        # complétion avec défauts
         for k, v in DEFAULT_PALETTE.items():
             palette.setdefault(k, v)
     except Exception:
@@ -212,7 +209,7 @@ def vue_reservations(df, palette):
     if data.empty:
         st.warning("Aucune donnée après filtres."); return
 
-    # Totaux/KPI (format lisible)
+    # Totaux/KPI (format lisible, chiffres arrondis pour lisibilité)
     brut  = float(data["prix_brut"].sum())
     net   = float(data["prix_net"].sum())
     nuits = int(data["nuitees"].sum())
@@ -406,18 +403,32 @@ def vue_rapport(df, palette):
     )
     st.altair_chart(chart.properties(height=420), use_container_width=True)
 
-# --------- UTIL COPIER ---------
-def _copy_button_js(label: str, payload: str, key: str):
-    st.components.v1.html(
-        f"""
-        <button onclick="navigator.clipboard.writeText({json.dumps(payload)})"
-                style="padding:6px 10px;border-radius:8px;border:1px solid rgba(127,127,127,.35);
-                       background:#222;color:#fff;cursor:pointer;margin-top:4px">
+# --------- COPIE COMPATIBLE ---------
+def _copy_button(label: str, payload: str, key: str):
+    """Bouton copier compatible (fallback download)."""
+    try:
+        html = f"""
+        <div>
+          <textarea id="ta_{key}" style="position:absolute;left:-10000px;top:-10000px">{payload}</textarea>
+          <button onclick="
+            var ta=document.getElementById('ta_{key}');
+            ta.focus(); ta.select();
+            try {{ document.execCommand('copy'); }} catch(e) {{}}
+          " style="padding:6px 10px;border-radius:8px;border:1px solid rgba(127,127,127,.35);
+                   background:#222;color:#fff;cursor:pointer;margin-top:4px">
             {label}
-        </button>
-        """,
-        height=36,
-    )
+          </button>
+        </div>
+        """
+        st.components.v1.html(html, height=46)
+    except Exception:
+        st.download_button(
+            label=label.replace("📋", "⬇️"),
+            data=payload.encode("utf-8"),
+            file_name=f"{key}.txt",
+            mime="text/plain",
+            key=f"dl_{key}"
+        )
 
 # --------- SMS ---------
 def vue_sms(df, palette):
@@ -455,7 +466,7 @@ def vue_sms(df, palette):
             wa = re.sub(r"\D","", e164)
 
             st.text_area(f"Prévisualisation {r['nom_client']}", value=msg, height=200)
-            _copy_button_js("📋 Copier", msg, key=f"cpy_pre_{i}")
+            _copy_button("📋 Copier", msg, key=f"cpy_pre_{i}")
             c1, c2, c3 = st.columns(3)
             c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
             c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
@@ -493,7 +504,7 @@ def vue_sms(df, palette):
             wab = re.sub(r"\D","", e164b)
 
             st.text_area(f"Prévisualisation {name}", value=msg2, height=180)
-            _copy_button_js("📋 Copier", msg2, key=f"cpy_post_{j}")
+            _copy_button("📋 Copier", msg2, key=f"cpy_post_{j}")
             c1, c2, c3 = st.columns(3)
             c1.link_button("🟢 WhatsApp", f"https://wa.me/{wab}?text={enc2}")
             c2.link_button("📲 iPhone SMS", f"sms:&body={enc2}")
@@ -613,8 +624,6 @@ def main():
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
         mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
-
-    # >>> ICI on appelle la fonction qui existait pas chez toi <<<
     apply_style(light=bool(mode_clair))
 
     st.title("✨ Villa Tobias — Gestion des Réservations")
