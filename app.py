@@ -34,6 +34,23 @@ try:
         st.sidebar.error("⚠️ Trouvé 'with st.sidebar:' dans le fichier exécuté !")
 except Exception:
     pass
+
+# === DEBUG: scanner des patterns fragiles (sidebar) ===
+try:
+    _lines = _contents.splitlines()
+    hits = []
+    for i, L in enumerate(_lines, 1):
+        LL = L.strip().replace("\t", "    ")
+        if "with st.sidebar:" in LL or "with  st.sidebar:" in LL or "with\tst.sidebar:" in LL:
+            hits.append((i, L))
+    if hits:
+        st.sidebar.error("⚠️ 'with st.sidebar:' trouvé aux lignes : " + ", ".join(str(h[0]) for h in hits))
+        for ln, raw in hits[:5]:
+            st.sidebar.code(f"{ln:04d}: {raw}")
+    else:
+        st.sidebar.success("✅ Aucun 'with st.sidebar:' trouvé dans le fichier exécuté.")
+except Exception as _e:
+    st.sidebar.warning(f"[DEBUG] Scanner sidebar impossible: {_e}")
 # ============================== CONFIG ==============================
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
