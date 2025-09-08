@@ -244,7 +244,7 @@ def vue_rapport(df, palette):
         color="plateforme:N",
         tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.0f")]
     )
-    st.altair_chart(chart.properties(height=420), use_container_width=True
+    st.altair_chart(chart.properties(height=420), use_container_width=True)
 
 from urllib.parse import quote
 
