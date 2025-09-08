@@ -266,22 +266,38 @@ def _format_phone_e164(phone: str) -> str:
     if s.startswith("0"):  return "+33"+s[1:]
     return "+"+s
 
-# ============================== VUES (réservations/calendrier/plateformes) ==============================
-def _kpis_resa(df):
-    brut = float(df["prix_brut"].sum())
-    net  = float(df["prix_net"].sum())
-    nuits= int(df["nuitees"].sum())
-    charges = float(df["charges"].sum())
-    base    = float(df["base"].sum())
-    adr  = (net/nuits) if nuits>0 else 0.0
-    with st.container():
-        c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("Brut", f"{brut:,.2f} €".replace(",", " "))
-        c2.metric("Net", f"{net:,.2f} €".replace(",", " "))
-        c3.metric("Base", f"{base:,.2f} €".replace(",", " "))
-        c4.metric("Charges", f"{charges:,.2f} €".replace(",", " "))
-        c5.metric("Nuitées / ADR", f"{nuits} / {adr:,.2f} €".replace(",", " "))
+# ============================== KPI SÛRS ==============================
+def _safe_eur(x):
+    try:
+        v = float(x)
+        if np.isnan(v):
+            return "—"
+        return f"{v:,.2f} €".replace(",", " ")
+    except Exception:
+        return "—"
 
+def _kpis_resa(df):
+    # Forcer toutes les colonnes à numérique
+    for col in ["prix_brut", "prix_net", "base", "charges", "nuitees"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    brut    = float(pd.to_numeric(df.get("prix_brut"), errors="coerce").sum() or 0.0)
+    net     = float(pd.to_numeric(df.get("prix_net"),  errors="coerce").sum() or 0.0)
+    base_v  = float(pd.to_numeric(df.get("base"),      errors="coerce").sum() or 0.0)
+    charges = float(pd.to_numeric(df.get("charges"),   errors="coerce").sum() or 0.0)
+    nuits   = float(pd.to_numeric(df.get("nuitees"),   errors="coerce").sum() or 0.0)
+
+    adr = (net / nuits) if nuits and not np.isnan(nuits) and nuits > 0 else np.nan
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Brut",    _safe_eur(brut))
+    c2.metric("Net",     _safe_eur(net))
+    c3.metric("Base",    _safe_eur(base_v))
+    c4.metric("Charges", _safe_eur(charges))
+    c5.metric("Nuitées / ADR", f"{int(nuits)} / {_safe_eur(adr)}" if not np.isnan(adr) else f"{int(nuits)} / —")
+
+# ============================== VUES (réservations/calendrier/plateformes) ==============================
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
     if df.empty:
@@ -540,7 +556,6 @@ def vue_sms(df, palette):
     pre = df.dropna(subset=["telephone","nom_client","date_arrivee"]).copy()
     pre["date_arrivee"] = pd.to_datetime(pre["date_arrivee"], errors="coerce").dt.date
     pre["date_depart"]  = pd.to_datetime(pre["date_depart"],  errors="coerce").dt.date
-    # garder uniquement non envoyés
     if "sms_envoye" not in pre.columns:
         pre["sms_envoye"] = False
     pre = pre[(pre["date_arrivee"]==target_arrivee) & (~pre["sms_envoye"])]
@@ -554,7 +569,6 @@ def vue_sms(df, palette):
         pick = st.selectbox("Client (pré-arrivée)", options=opts, index=None)
         if pick:
             i = int(pick.split(":")[0]); r = pre.loc[i]
-            # Message complet FR + EN (comme demandé)
             msg = (
                 "VILLA TOBIAS\n"
                 f"Plateforme : {r.get('plateforme','N/A')}\n"
@@ -611,7 +625,6 @@ def vue_sms(df, palette):
         if pick2:
             j = int(pick2.split(":")[0]); r2 = post.loc[j]
             name = str(r2.get("nom_client") or "").strip()
-            # Message bilingue complet (comme tu l'avais fourni)
             msg2 = (
                 f"Bonjour {name},\n\n"
                 "Un grand merci d'avoir choisi notre appartement pour votre séjour.\n\n"
@@ -655,7 +668,6 @@ def vue_export_ics(df, palette):
     if data.empty:
         st.warning("Rien à exporter."); return
 
-    # Créer UID manquants
     if "ical_uid" not in data.columns:
         data["ical_uid"] = None
     missing_uid = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip()=="")
@@ -726,9 +738,9 @@ def vue_google_sheet(df, palette):
         st.error(f"Impossible de charger la feuille publiée : {e}")
 
 
-# ====== Petite “wrapper” pour ajouter la restauration des plateformes sans toucher la fonction existante ======
+# ====== Wrapper plateformes avec restauration CSV ======
 def vue_plateformes_wrapper(df, palette):
-    vue_plateformes(df, palette)  # affiche l’éditeur existant
+    vue_plateformes(df, palette)
     st.markdown("---")
     st.subheader("🔁 Restaurer une palette (CSV)")
     upf = st.file_uploader("Importer un CSV ';' avec colonnes plateforme,couleur", type=["csv"], key="restore_palette")
@@ -795,8 +807,8 @@ def main():
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes_wrapper,   # wrapper avec restauration CSV
-        "📅 Calendrier": vue_calendrier,             # grille mensuelle
+        "🎨 Plateformes": vue_plateformes_wrapper,
+        "📅 Calendrier": vue_calendrier,
         "📊 Rapport": vue_rapport,
         "✉️ SMS": vue_sms,
         "📆 Export ICS": vue_export_ics,
