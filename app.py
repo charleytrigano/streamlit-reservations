@@ -96,16 +96,15 @@ BASE_COLS = [
     "res_id","ical_uid","AAAA","MM"
 ]
 
-# --- Utils robustes lecture CSV ---
 def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
-    """Lit un CSV en testant ; , tab | . Enlève BOM. Retourne dtype=str pour normaliser."""
+    """Lit un CSV robuste : essaie ; , tab, | — enlève BOM — dtype=str pour préserver."""
     if raw is None:
         return pd.DataFrame()
     txt = raw.decode("utf-8", errors="ignore").replace("\ufeff", "")
     for sep in [";", ",", "\t", "|"]:
         try:
             df = pd.read_csv(StringIO(txt), sep=sep, dtype=str)
-            if df.shape[1] >= 2:
+            if df.shape[1] >= 3:  # heuristique mini
                 return df
         except Exception:
             continue
@@ -115,11 +114,13 @@ def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
         return pd.DataFrame()
 
 def _to_bool_series(s: pd.Series) -> pd.Series:
-    if s is None: return pd.Series([], dtype=bool)
+    if s is None: 
+        return pd.Series([], dtype=bool)
     return s.astype(str).str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
 
 def _to_num(s: pd.Series) -> pd.Series:
-    if s is None: return pd.Series([], dtype="float64")
+    if s is None: 
+        return pd.Series([], dtype="float64")
     sc = (
         s.astype(str)
          .str.replace("€", "", regex=False)
@@ -130,28 +131,24 @@ def _to_num(s: pd.Series) -> pd.Series:
     return pd.to_numeric(sc, errors="coerce")
 
 def _to_date(s: pd.Series) -> pd.Series:
-    if s is None: return pd.Series([], dtype="object")
+    """Accepte JJ/MM/AAAA, AAAA-MM-JJ, JJ-MM-AAAA, etc., retourne .dt.date"""
+    if s is None:
+        return pd.Series([], dtype="object")
     d = pd.to_datetime(s, errors="coerce", dayfirst=True)
-    if d.isna().mean() > 0.5:  # beaucoup d'échecs -> tenter Y-M-D strict
+    if d.isna().mean() > 0.5:
         d2 = pd.to_datetime(s, errors="coerce", format="%Y-%m-%d")
-        d  = d.fillna(d2)
+        d = d.fillna(d2)
     return d.dt.date
 
-def normalize_name(x: str) -> str:
-    if x is None: return ""
-    s = str(x).strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"[^a-zàâäéèêëîïôöùûüç\s\-']", "", s)
-    return s
-
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
+    """Normalise le DataFrame pour BASE_COLS + calcule champs dérivés."""
     if df_in is None or df_in.empty:
         return pd.DataFrame(columns=BASE_COLS)
 
     df = df_in.copy()
     df.columns = df.columns.astype(str).str.strip()
 
-    # Compat renommages
+    # Renommages éventuels (compat)
     rename_map = {
         'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme',
         'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
@@ -159,7 +156,7 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     }
     df.rename(columns=rename_map, inplace=True)
 
-    # Créer colonnes manquantes
+    # Colonnes manquantes
     for c in BASE_COLS:
         if c not in df.columns:
             df[c] = None
@@ -176,7 +173,7 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df["date_arrivee"] = _to_date(df["date_arrivee"])
     df["date_depart"]  = _to_date(df["date_depart"])
 
-    # Recalcul nuitées si possible
+    # Recalcul nuitées si dates OK
     mask_ok = df["date_arrivee"].notna() & df["date_depart"].notna()
     try:
         da = pd.to_datetime(df.loc[mask_ok, "date_arrivee"])
@@ -198,17 +195,18 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df["AAAA"] = pd.to_numeric(da_all.dt.year, errors="coerce")
     df["MM"]   = pd.to_numeric(da_all.dt.month, errors="coerce")
 
-    # IDs
+    # IDs stables
     miss_res = df["res_id"].isna() | (df["res_id"].astype(str).str.strip()=="")
     if miss_res.any():
         df.loc[miss_res, "res_id"] = [str(uuid.uuid4()) for _ in range(int(miss_res.sum()))]
+
     miss_uid = df["ical_uid"].isna() | (df["ical_uid"].astype(str).str.strip()=="")
     if miss_uid.any():
         df.loc[miss_uid, "ical_uid"] = df.loc[miss_uid].apply(build_stable_uid, axis=1)
 
-    # Nettoyage de base
+    # Strings clés propres
     for c in ["nom_client","plateforme","telephone","email"]:
-        df[c] = df[c].astype(str).replace({"nan":"", "None":""}).str.strip()
+        df[c] = df[c].astype(str).replace({"nan": "", "None": ""}).str.strip()
 
     return df[BASE_COLS]
 
@@ -222,15 +220,16 @@ def _load_file_bytes(path: str):
 
 @st.cache_data
 def charger_donnees():
-    # reservations.csv (séparateur tolérant ; , tab | )
+    # 1) CSV résa
     raw = _load_file_bytes(CSV_RESERVATIONS)
     if raw is not None:
         base_df = _detect_delimiter_and_read(raw)
     else:
         base_df = pd.DataFrame()
+
     df = ensure_schema(base_df)
 
-    # plateformes.csv
+    # 2) Palette plateformes
     rawp = _load_file_bytes(CSV_PLATEFORMES)
     palette = DEFAULT_PALETTE.copy()
     if rawp is not None:
@@ -241,6 +240,7 @@ def charger_donnees():
                 palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
         except Exception:
             pass
+
     return df, palette
 
 def sauvegarder_donnees(df: pd.DataFrame) -> bool:
@@ -249,7 +249,6 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         out = df2.copy()
         for col in ["date_arrivee","date_depart"]:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        # On SAUVE en ; (mais on RELIT tous les séparateurs → OK pour importer des , ou ; ensuite)
         out.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8")
         st.cache_data.clear()
         return True
@@ -301,7 +300,7 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation.")
         return
 
-    # Filtres solides
+    # Séries robustes
     years_ser  = pd.to_numeric(df.get("AAAA", pd.Series(dtype="float64")), errors="coerce")
     months_ser = pd.to_numeric(df.get("MM",   pd.Series(dtype="float64")), errors="coerce")
 
@@ -333,7 +332,7 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
 
-    # KPI
+    # KPI compacts
     brut = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
     net  = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
     base = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
@@ -354,7 +353,7 @@ def vue_reservations(df, palette):
     st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
-    # Tri par date d’arrivée si dispo
+    # Tri par date d’arrivée si possible
     if "date_arrivee" in data.columns:
         order = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
         data = data.loc[order]
@@ -532,6 +531,8 @@ def vue_rapport(df, palette):
     if df.empty:
         st.info("Aucune donnée."); return
     years = sorted(pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique(), reverse=True)
+    if not years:
+        st.info("Aucune année détectée."); return
     year  = st.selectbox("Année", years, index=0)
     months = ["Tous"] + list(range(1,13))
     month = st.selectbox("Mois", months, index=0)
@@ -560,7 +561,7 @@ def vue_rapport(df, palette):
     )
     st.altair_chart(chart.properties(height=420), use_container_width=True)
 
-# ---- util bouton copier simplifié (pas de JS requis)
+# ---- util bouton copier (sans JS)
 def _copy_button(label: str, payload: str, key: str):
     st.text_area("Aperçu", payload, height=180, key=f"ta_{key}")
     st.caption("Sélectionne le texte ci-dessus et copie-le (Ctrl/Cmd+C).")
@@ -623,7 +624,7 @@ def vue_sms(df, palette):
 
     st.markdown("---")
 
-    # Post-départ (J0)
+    # Post-départ (J0) — message fourni
     st.subheader("📤 Post-départ (départs du jour)")
     target_depart = st.date_input("Départs du", date.today(), key="post_date")
     post = df.dropna(subset=["telephone","nom_client","date_depart"]).copy()
@@ -669,6 +670,8 @@ def vue_export_ics(df, palette):
     if df.empty:
         st.info("Aucune réservation."); return
     years = sorted(pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique(), reverse=True)
+    if not years:
+        st.info("Aucune année disponible."); return
     year  = st.selectbox("Année (arrivées)", years, index=0)
     plats = ["Tous"] + sorted(df["plateforme"].dropna().unique())
     plat  = st.selectbox("Plateforme", plats, index=0)
@@ -694,7 +697,7 @@ def vue_export_ics(df, palette):
     lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Villa Tobias//Reservations//FR","CALSCALE:GREGORIAN"]
     for _, r in data.iterrows():
         da, dd = r["date_arrivee"], r["date_depart"]
-        if not (isinstance(da, (date, datetime)) and isinstance(dd, (date, datetime))): 
+        if not (isinstance(da, (date, datetime)) and isinstance(dd, (date, datetime))):
             continue
         summary = f"Villa Tobias — {r.get('nom_client','Sans nom')}"
         if r.get("plateforme"): summary += f" ({r['plateforme']})"
@@ -720,41 +723,11 @@ def vue_export_ics(df, palette):
     ics = "\r\n".join(lines) + "\r\n"
     st.download_button("📥 Télécharger .ics", data=ics.encode("utf-8"), file_name=f"reservations_{year}.ics", mime="text/calendar")
 
-# --------- Import emails depuis Google Sheet (CSV publié) ----------
-def _infer_form_columns(df_form: pd.DataFrame):
-    cols = {k: None for k in ["email","nom","telephone","date_arrivee","date_depart","res_id"]}
-    lower = {c: c.lower() for c in df_form.columns}
-
-    # email
-    for c in df_form.columns:
-        if any(k in lower[c] for k in ["email","e-mail","mail"]):
-            cols["email"] = c; break
-    # nom
-    for c in df_form.columns:
-        if any(k in lower[c] for k in ["nom","name","client"]):
-            cols["nom"] = c; break
-    # tel
-    for c in df_form.columns:
-        if any(k in lower[c] for k in ["tel","phone","téléphone","telephone"]):
-            cols["telephone"] = c; break
-    # dates
-    for c in df_form.columns:
-        if any(k in lower[c] for k in ["arriv", "check-in", "date d'arrivée", "date arrivee"]):
-            cols["date_arrivee"] = c; break
-    for c in df_form.columns:
-        if any(k in lower[c] for k in ["départ", "depart", "check-out"]):
-            cols["date_depart"] = c; break
-    # res_id
-    for c in df_form.columns:
-        if "res_id" in lower[c] or "reservation id" in lower[c] or "id interne" in lower[c]:
-            cols["res_id"] = c; break
-
-    return cols
-
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
 
+    # Formulaire intégré
     st.markdown(
         f'<iframe src="{GOOGLE_FORM_URL}" width="100%" height="900" frameborder="0"></iframe>',
         unsafe_allow_html=True
@@ -766,117 +739,19 @@ def vue_google_sheet(df, palette):
         unsafe_allow_html=True
     )
     st.markdown("---")
-
-    st.subheader("Réponses (CSV publié) + Import emails")
+    st.subheader("Réponses (CSV publié)")
     try:
         rep = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+        # Afficher / masquer colonnes d'email pour éviter d’exposer ton adresse
+        show_email = st.checkbox("Afficher les colonnes d'email (si présentes)", value=False)
+        if not show_email:
+            mask_cols = [c for c in rep.columns if "mail" in c.lower() or "email" in c.lower()]
+            rep_display = rep.drop(columns=mask_cols, errors="ignore")
+        else:
+            rep_display = rep
+        st.dataframe(rep_display, use_container_width=True)
     except Exception as e:
         st.error(f"Impossible de charger la feuille publiée : {e}")
-        return
-
-    # Masquage optionnel des colonnes email à l'écran
-    show_email = st.checkbox("Afficher les colonnes d'email (si présentes)", value=False)
-    if not show_email:
-        rep_display = rep.drop(columns=[c for c in rep.columns if "mail" in c.lower() or "email" in c.lower()], errors="ignore")
-    else:
-        rep_display = rep
-    st.dataframe(rep_display, use_container_width=True)
-
-    st.markdown("—")
-    st.write("### Importer les emails dans vos réservations")
-    mapping = _infer_form_columns(rep)
-    colmap_df = pd.DataFrame({
-        "Champ attendu": ["email","nom","telephone","date_arrivee","date_depart","res_id"],
-        "Colonne détectée": [mapping.get(k) for k in ["email","nom","telephone","date_arrivee","date_depart","res_id"]]
-    })
-    st.caption("Colonnes détectées automatiquement (modifiable ci-dessous) :")
-    st.dataframe(colmap_df, use_container_width=True)
-
-    # Permettre de corriger la détection
-    c1, c2, c3 = st.columns(3)
-    mapping["email"]        = c1.selectbox("Colonne email", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["email"]) if mapping["email"] in rep.columns else 0))
-    mapping["nom"]          = c2.selectbox("Colonne nom", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["nom"]) if mapping["nom"] in rep.columns else 0))
-    mapping["telephone"]    = c3.selectbox("Colonne téléphone", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["telephone"]) if mapping["telephone"] in rep.columns else 0))
-    c4, c5, c6 = st.columns(3)
-    mapping["date_arrivee"] = c4.selectbox("Colonne date arrivée", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["date_arrivee"]) if mapping["date_arrivee"] in rep.columns else 0))
-    mapping["date_depart"]  = c5.selectbox("Colonne date départ", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["date_depart"]) if mapping["date_depart"] in rep.columns else 0))
-    mapping["res_id"]       = c6.selectbox("Colonne res_id", options=["(aucune)"]+list(rep.columns), index=(rep.columns.tolist().index(mapping["res_id"]) if mapping["res_id"] in rep.columns else 0))
-
-    # Remettre None si "(aucune)"
-    for k, v in mapping.items():
-        if v == "(aucune)":
-            mapping[k] = None
-
-    st.markdown(
-        "Règles d'association (dans cet ordre) : **res_id**, sinon **nom normalisé + date d’arrivée**, sinon **téléphone**."
-    )
-
-    # Préparer un tableau des correspondances potentielles
-    preview_rows = []
-    df_work = df.copy()
-
-    for _, row in rep.iterrows():
-        email_val = str(row[mapping["email"]]).strip() if mapping["email"] else ""
-        if not email_val:
-            continue
-
-        match_idx = None
-        reason = ""
-
-        # 1) res_id
-        if mapping["res_id"]:
-            rid = str(row[mapping["res_id"]]).strip()
-            if rid:
-                hits = df_work.index[df_work["res_id"].astype(str)==rid].tolist()
-                if hits:
-                    match_idx = hits[0]
-                    reason = "res_id"
-        # 2) nom + date_arrivee
-        if match_idx is None and mapping["nom"] and mapping["date_arrivee"]:
-            nomf = normalize_name(row[mapping["nom"]])
-            da_f = _to_date(pd.Series([row[mapping["date_arrivee"]]])).iloc[0]
-            if nomf and pd.notna(da_f):
-                # normaliser côté DF
-                nom_norm = df_work["nom_client"].apply(normalize_name)
-                mask = (nom_norm == nomf) & (pd.to_datetime(df_work["date_arrivee"], errors="coerce").dt.date == da_f)
-                hits = df_work.index[mask].tolist()
-                if hits:
-                    match_idx = hits[0]
-                    reason = "nom+date_arrivee"
-        # 3) téléphone
-        if match_idx is None and mapping["telephone"]:
-            tel = re.sub(r"\D","", str(row[mapping["telephone"]] or ""))
-            if tel:
-                tel_norm_df = df_work["telephone"].astype(str).apply(lambda x: re.sub(r"\D","", x))
-                hits = df_work.index[tel_norm_df == tel].tolist()
-                if hits:
-                    match_idx = hits[0]
-                    reason = "telephone"
-
-        if match_idx is not None:
-            preview_rows.append({
-                "index_df": match_idx,
-                "nom_resa": df_work.loc[match_idx, "nom_client"],
-                "arrivee_resa": df_work.loc[match_idx, "date_arrivee"],
-                "tel_resa": df_work.loc[match_idx, "telephone"],
-                "email_avant": df_work.loc[match_idx, "email"],
-                "email_form": email_val,
-                "match": reason
-            })
-
-    if not preview_rows:
-        st.info("Aucun email à importer avec la configuration actuelle.")
-    else:
-        prev = pd.DataFrame(preview_rows)
-        st.dataframe(prev.drop(columns=["index_df"]), use_container_width=True)
-        if st.button(f"📥 Importer / mettre à jour {len(prev)} email(s)"):
-            try:
-                for _, r in prev.iterrows():
-                    df.loc[int(r["index_df"]), "email"] = r["email_form"]
-                if sauvegarder_donnees(ensure_schema(df)):
-                    st.success("Emails importés et enregistrés ✅"); st.rerun()
-            except Exception as e:
-                st.error(f"Erreur lors de l'import : {e}")
 
 def vue_clients(df, palette):
     st.header("👥 Liste des clients")
@@ -916,7 +791,7 @@ def admin_sidebar(df):
         except Exception as e:
             st.sidebar.error(f"Erreur : {e}")
 
-    # Bouton vider le cache
+    # Vider le cache
     if st.sidebar.button("🧹 Vider le cache & recharger"):
         try:
             st.cache_data.clear()
@@ -931,6 +806,7 @@ def admin_sidebar(df):
 
 # ============================== MAIN ==============================
 def main():
+    # Préférences d'affichage
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
