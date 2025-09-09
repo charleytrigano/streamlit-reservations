@@ -4,6 +4,25 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import re, uuid, hashlib, json, time
+# --- HARD CLEAR (sécurisé) : purger cache au chargement du script ---
+import time
+import streamlit as st
+
+def _hard_clear_once():
+    # Empêche de recléarer en boucle si Streamlit relance le script
+    if st.session_state.get("_cleared_on_start", False):
+        return
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    st.session_state["_cleared_on_start"] = True
+
+_hard_clear_once()
 from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
