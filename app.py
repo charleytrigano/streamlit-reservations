@@ -13,7 +13,7 @@ from urllib.parse import quote
 from io import StringIO
 
 # ----------------- VERSION POUR PURGER LE CACHE -----------------
-APP_VERSION = 4  # ← augmente ce nombre pour forcer un hard refresh
+APP_VERSION = 5  # ← augmente ce nombre pour forcer un hard refresh
 
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
