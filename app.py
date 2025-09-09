@@ -40,7 +40,7 @@ DEFAULT_PALETTE = {
     "Autre":   "#f59e0b",
 }
 
-# Liens Google (inchangés)
+# Liens Google
 FORM_SHORT_URL = "https://urlr.me/kZuH94"
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
@@ -767,7 +767,6 @@ def admin_sidebar(df):
 def main():
     # Basculeur de thème : sombre par défaut
     try:
-        # toggle retourne bool — False => éteint ; ici on inverse pour sombre par défaut
         _toggle_light = st.sidebar.toggle("Mode clair (PC)", value=False)
         mode_clair = bool(_toggle_light)
     except Exception:
