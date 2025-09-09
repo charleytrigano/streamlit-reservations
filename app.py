@@ -29,8 +29,12 @@ GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9q
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?output=csv"
 
-# Cache buster (secret optionnel)
-CACHE_BUSTER = st.secrets.get("CACHE_BUSTER", "0")
+# Cache buster (aucune dépendance aux secrets si non configurés)
+try:
+    _secrets = dict(st.secrets)  # peut lever une exception si secrets indisponibles
+    CACHE_BUSTER = _secrets.get("CACHE_BUSTER", "0")
+except Exception:
+    CACHE_BUSTER = "0"
 
 # ============================== STYLE ==============================
 def apply_style(light: bool):
@@ -236,13 +240,17 @@ def kpi_totaux(data: pd.DataFrame, titre="Totaux"):
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
     if df.empty:
-        st.info("Aucune réservation."); return
+        st.info("Aucune réservation."); 
+        return
 
-    # Filtres (Année, Mois, Plateforme)
-    years_ser = df["AAAA"].dropna().astype(int) if "AAAA" in df.columns else pd.Series([], dtype=int)
-    years  = ["Toutes"] + (sorted(years_ser.unique(), reverse=True).tolist() if not years_ser.empty else [])
-    months = ["Tous"] + list(range(1,13))
-    plats  = ["Toutes"] + sorted(df["plateforme"].dropna().unique())
+    # -- Séries robustes pour AAAA, MM, plateforme
+    years_ser = pd.to_numeric(df.get("AAAA", pd.Series(dtype="float")), errors="coerce").dropna().astype(int)
+    months_ser = pd.to_numeric(df.get("MM", pd.Series(dtype="float")), errors="coerce").dropna().astype(int)
+    plats_ser = df.get("plateforme", pd.Series(dtype="object")).dropna().astype(str).str.strip()
+
+    years = ["Toutes"] + (sorted(years_ser.unique().tolist(), reverse=True) if not years_ser.empty else [])
+    months = ["Tous"] + list(range(1, 13))
+    plats  = ["Toutes"] + (sorted(plats_ser.unique().tolist()) if not plats_ser.empty else [])
 
     c1, c2, c3 = st.columns(3)
     y_sel = c1.selectbox("Année", years, index=0)
@@ -250,11 +258,21 @@ def vue_reservations(df, palette):
     p_sel = c3.selectbox("Plateforme", plats, index=0)
 
     data = df.copy()
-    if y_sel != "Toutes": data = data[data["AAAA"] == int(y_sel)]
-    if m_sel != "Tous":   data = data[data["MM"] == int(m_sel)]
-    if p_sel != "Toutes": data = data[data["plateforme"] == p_sel]
+
+    # Convertis proprement avant filtrage
+    data["AAAA"] = pd.to_numeric(data.get("AAAA"), errors="coerce").astype("Int64")
+    data["MM"]   = pd.to_numeric(data.get("MM"), errors="coerce").astype("Int64")
+    data["plateforme"] = data.get("plateforme").astype(str).str.strip()
+
+    if y_sel != "Toutes":
+        data = data[data["AAAA"] == int(y_sel)]
+    if m_sel != "Tous":
+        data = data[data["MM"] == int(m_sel)]
+    if p_sel != "Toutes":
+        data = data[data["plateforme"] == p_sel]
 
     kpi_totaux(data, "Totaux")
+
     st.dataframe(
         data.sort_values("date_arrivee", ascending=False),
         use_container_width=True
@@ -376,7 +394,6 @@ def vue_calendrier(df, palette):
     debut_mois = date(annee, mois, 1)
     fin_mois = date(annee, mois, monthrange(annee, mois)[1])
 
-    # entête jours
     st.markdown("<div class='cal-header'><div>Lun</div><div>Mar</div><div>Mer</div><div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div></div>", unsafe_allow_html=True)
 
     def day_resas(d):
@@ -420,7 +437,7 @@ def vue_rapport(df, palette):
     st.header("📊 Rapport")
     if df.empty:
         st.info("Aucune donnée."); return
-    years = sorted(df["AAAA"].dropna().astype(int).unique(), reverse=True)
+    years = sorted(pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique(), reverse=True)
     year  = st.selectbox("Année", years, index=0)
     months = ["Tous"] + list(range(1,13))
     month = st.selectbox("Mois", months, index=0)
@@ -428,8 +445,8 @@ def vue_rapport(df, palette):
     plat  = st.selectbox("Plateforme", plats, index=0)
     metric = st.selectbox("Métrique", ["prix_brut","prix_net","menage","nuitees"], index=0)
 
-    data = df[df["AAAA"]==year].copy()
-    if month!="Tous": data = data[data["MM"]==int(month)]
+    data = df[pd.to_numeric(df["AAAA"], errors="coerce")==year].copy()
+    if month!="Tous": data = data[pd.to_numeric(data["MM"], errors="coerce")==int(month)]
     if plat!="Tous":  data = data[data["plateforme"]==plat]
     if data.empty:
         st.warning("Aucune donnée après filtres."); return
@@ -437,7 +454,6 @@ def vue_rapport(df, palette):
     data["mois"] = pd.to_datetime(data["date_arrivee"], errors="coerce").dt.to_period("M").astype(str)
     agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
 
-    # Total global affiché
     total_val = float(agg[metric].sum())
     st.markdown(f"**Total {metric.replace('_',' ')} :** {total_val:,.2f} €".replace(",", " "))
 
@@ -453,7 +469,7 @@ def vue_rapport(df, palette):
 
 # ---- util bouton copier (robuste sans JS complexe)
 def _copy_button_area(label: str, payload: str, key: str):
-    st.text_area(label, value=payload, height=180, key=key)
+    st.text_area(label, value=payload, height=220, key=key)
     st.caption("Copiez le texte ci-dessus (Ctrl/Cmd+C).")
 
 def vue_sms(df, palette):
@@ -554,12 +570,12 @@ def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
     if df.empty:
         st.info("Aucune réservation."); return
-    years = sorted(df["AAAA"].dropna().astype(int).unique(), reverse=True)
+    years = sorted(pd.to_numeric(df["AAAA"], errors="coerce").dropna().astype(int).unique(), reverse=True)
     year  = st.selectbox("Année (arrivées)", years, index=0)
     plats = ["Tous"] + sorted(df["plateforme"].dropna().unique())
     plat  = st.selectbox("Plateforme", plats, index=0)
 
-    data = df[df["AAAA"]==year].copy()
+    data = df[pd.to_numeric(df["AAAA"], errors="coerce")==year].copy()
     if plat!="Tous": data = data[data["plateforme"]==plat]
     if data.empty:
         st.warning("Rien à exporter."); return
