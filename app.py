@@ -965,12 +965,6 @@ def admin_sidebar(df):
 
 
 # ============================== MAIN ==============================
-params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
-if str(params.get("reset", ["0"])[0]).lower() in ("1", "true", "yes"):
-    st.cache_data.clear()
-    st.session_state["cache_buster"] = st.session_state.get("cache_buster", 0) + 1
-    st.rerun()
-
 
 def main():
     # Style clair/sombre
