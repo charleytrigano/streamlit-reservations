@@ -63,11 +63,9 @@ def apply_style(light: bool):
           }}
           .kpi small {{ opacity:.8; font-size:.80rem; }}
           .kpi .big {{ font-weight:700; font-size:1rem; }}
+          .totaux-wrap {{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }}
           /* Calendar grid */
-          .cal-grid {{
-            display:grid; grid-template-columns: repeat(7, 1fr);
-            gap:8px; margin-top:8px;
-          }}
+          .cal-grid {{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; margin-top:8px; }}
           .cal-cell {{
             border:1px solid {border}; border-radius:10px; min-height:110px; padding:8px;
             position:relative; overflow:hidden; background:{"#fff" if light else "#0b0d12"};
@@ -82,16 +80,20 @@ def apply_style(light: bool):
             display:grid; grid-template-columns: repeat(7, 1fr);
             font-weight:700; opacity:.8; margin-top:10px;
           }}
-          .totaux-wrap {{
-            display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+          .panel-ok {{ border-left:6px solid #22c55e; }}
+          .panel-warn {{ border-left:6px solid #ef4444; }}
+          .row-wrap {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
+          .pill {{
+            padding:6px 10px; border-radius:999px; font-size:.9rem;
+            background: {"#eaeaea" if light else "#1f2430"}; border:1px solid {border};
           }}
         </style>
         """,
         unsafe_allow_html=True
     )
 
-def card(title: str, content: str):
-    st.markdown(f"<div class='glass'><b>{title}</b><br/>{content}</div>", unsafe_allow_html=True)
+def card(title: str, content: str, extra_class: str = ""):
+    st.markdown(f"<div class='glass {extra_class}'><b>{title}</b><br/>{content}</div>", unsafe_allow_html=True)
 
 # ============================== DATA ==============================
 BASE_COLS = [
@@ -236,6 +238,94 @@ def kpi_totaux(data: pd.DataFrame, titre="Totaux"):
     </div>
     """
     st.markdown(html.replace(",", " "), unsafe_allow_html=True)
+
+# --------- ACCUEIL (NOUVEAU) ----------
+def _mini_sms_links(name: str, tel: str, text: str):
+    enc = quote(text)
+    e164 = _format_phone_e164(tel)
+    wa = re.sub(r"\D","", e164)
+    return (
+        f"sms:&body={enc}",            # iPhone
+        f"sms:{e164}?body={enc}",      # Android
+        f"https://wa.me/{wa}?text={enc}"  # WhatsApp
+    )
+
+def vue_accueil(df, palette):
+    st.header("🏠 Accueil")
+    if df.empty:
+        card("Aucune donnée", "Importez ou ajoutez des réservations pour démarrer.")
+        return
+
+    today = date.today()
+
+    base = df.copy()
+    base["date_arrivee"] = pd.to_datetime(base["date_arrivee"], errors="coerce").dt.date
+    base["date_depart"]  = pd.to_datetime(base["date_depart"], errors="coerce").dt.date
+
+    arrivals  = base[base["date_arrivee"]==today].copy()
+    departures= base[base["date_depart"]==today].copy()
+
+    # Totaux du jour (sur toutes les résas chevauchant aujourd’hui)
+    occ_mask = (base["date_arrivee"]<=today) & (base["date_depart"]>today)
+    today_rows = base[occ_mask]
+    kpi_totaux(today_rows, "Totaux du jour")
+
+    c1, c2 = st.columns(2)
+
+    # -------- Arrivées (Feu vert)
+    with c1:
+        count = len(arrivals)
+        card("🟢 Arrivées aujourd’hui", f"{count} réservation(s).", extra_class="panel-ok")
+        if arrivals.empty:
+            st.info("Aucune arrivée aujourd’hui.")
+        else:
+            for _, r in arrivals.sort_values("nom_client").iterrows():
+                nom = str(r.get("nom_client") or "Sans nom")
+                tel = str(r.get("telephone") or "")
+                base_msg = (
+                    f"Bonjour {nom},\n"
+                    "Bienvenue à la Villa Tobias. Merci de nous indiquer votre heure d'arrivée.\n"
+                    f"Fiche d'arrivée : {FORM_SHORT_URL}"
+                )
+                link_ios, link_android, link_wa = _mini_sms_links(nom, tel, base_msg)
+                with st.container(border=True):
+                    st.markdown(f"**{nom}**  \n📞 {tel or '—'}  \n🛏️ Plateforme : {r.get('plateforme','—')}")
+                    b1, b2, b3 = st.columns(3)
+                    b1.link_button("📲 iPhone SMS", link_ios)
+                    b2.link_button("🤖 Android SMS", link_android)
+                    b3.link_button("🟢 WhatsApp", link_wa)
+
+    # -------- Départs (Feu rouge)
+    with c2:
+        count = len(departures)
+        card("🔴 Départs aujourd’hui", f"{count} réservation(s).", extra_class="panel-warn")
+        if departures.empty:
+            st.info("Aucun départ aujourd’hui.")
+        else:
+            for _, r in departures.sort_values("nom_client").iterrows():
+                nom = str(r.get("nom_client") or "Sans nom")
+                tel = str(r.get("telephone") or "")
+                post_msg = (
+                    f"Bonjour {nom},\n\n"
+                    "Un grand merci d'avoir choisi notre appartement pour votre sejour. \n\n"
+                    "Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. \n\n"
+                    "Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. \n\n"
+                    "Au plaisir de vous accueillir à nouveau.\n\n"
+                    "Annick & Charley\n\n"
+                    f"Hello {nom},\n\n"
+                    "Thank you very much for choosing our apartment for your stay. \n\n"
+                    "We hope you had as enjoyable a time as we did hosting you. \n\n"
+                    "If you feel like coming back to explore our city a little more, know that our door will always be open to you. \n\n"
+                    "We look forward to welcoming you back.\n\n"
+                    "Annick & Charley"
+                )
+                link_ios, link_android, link_wa = _mini_sms_links(nom, tel, post_msg)
+                with st.container(border=True):
+                    st.markdown(f"**{nom}**  \n📞 {tel or '—'}  \n🧾 Plateforme : {r.get('plateforme','—')}")
+                    b1, b2, b3 = st.columns(3)
+                    b1.link_button("🟢 WhatsApp", link_wa)
+                    b2.link_button("📲 iPhone SMS", link_ios)
+                    b3.link_button("🤖 Android SMS", link_android)
 
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
@@ -467,7 +557,7 @@ def vue_rapport(df, palette):
     )
     st.altair_chart(chart.properties(height=420), use_container_width=True)
 
-# ---- util bouton copier (robuste sans JS complexe)
+# ---- util bouton copier (simple)
 def _copy_button_area(label: str, payload: str, key: str):
     st.text_area(label, value=payload, height=220, key=key)
     st.caption("Copiez le texte ci-dessus (Ctrl/Cmd+C).")
@@ -540,14 +630,13 @@ def vue_sms(df, palette):
         if pick2:
             j = int(pick2.split(":")[0]); r2 = post.loc[j]
             name = str(r2.get("nom_client") or "").strip()
-            # Texte exactement comme fourni
             msg2 = (
                 f"Bonjour {name},\n\n"
                 "Un grand merci d'avoir choisi notre appartement pour votre sejour. \n\n"
                 "Nous esperons que vous avez passe un moment aussi agreable que celui que nous avons eu a vous accueillir. \n\n"
                 "Si l'envie vous prend de revenir explorer encore un peu notre ville, sachez que notre porte vous sera toujours grande ouverte. \n\n"
                 "Au plaisir de vous accueillir à nouveau.\n\n"
-                "Annick & Charley"
+                "Annick & Charley\n\n"
                 f"Hello {name},\n\n"
                 "Thank you very much for choosing our apartment for your stay. \n\n"
                 "We hope you had as enjoyable a time as we did hosting you. \n\n"
@@ -698,6 +787,7 @@ def main():
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
     pages = {
+        "🏠 Accueil": vue_accueil,            # ← NOUVEAU
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "✏️ Modifier / Supprimer": vue_modifier,
