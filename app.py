@@ -280,47 +280,45 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
 # ============================================================
 # [5] VUES : ACCUEIL / RÉSERVATIONS / AJOUTER / MODIFIER
 # ============================================================
-def vue_accueil(df, palette):
-    st.header("🏠 Accueil")
-    today = date.today()
-    st.write(f"**Aujourd'hui : {today.strftime('%d/%m/%Y')}**")
-
-    dfv = df.copy()
-    dfv["date_arrivee"] = _to_date(dfv["date_arrivee"])
-    dfv["date_depart"]  = _to_date(dfv["date_depart"])
-
-    arr = dfv[dfv["date_arrivee"] == today][["nom_client","telephone","plateforme"]]
-    dep = dfv[dfv["date_depart"]  == today][["nom_client","telephone","plateforme"]]
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("🟢 Arrivées du jour")
-        st.dataframe(arr if not arr.empty else pd.DataFrame(columns=["nom_client","telephone","plateforme"]),
-                     use_container_width=True)
-    with c2:
-        st.subheader("🔴 Départs du jour")
-        st.dataframe(dep if not dep.empty else pd.DataFrame(columns=["nom_client","telephone","plateforme"]),
-                     use_container_width=True)
-
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
-    if df is None or df.empty:
+
+    # Sécurité maximale : s’assurer qu’on a bien un DataFrame complet
+    if not isinstance(df, pd.DataFrame) or df.empty:
         st.info("Aucune réservation.")
         return
+    try:
+        # Normalise à la volée sans modifier le fichier disque
+        dfn = ensure_schema(df)
+    except Exception as e:
+        st.error("Impossible de normaliser les données des réservations.")
+        st.exception(e)
+        return
 
-    # Filtres robustes
-    years_ser  = pd.to_numeric(df.get("AAAA", pd.Series(dtype="float64")), errors="coerce")
-    months_ser = pd.to_numeric(df.get("MM",   pd.Series(dtype="float64")), errors="coerce")
+    # Colonnes critiques garanties
+    needed = ["AAAA","MM","plateforme","date_arrivee","prix_brut","prix_net","base","nuitees","charges"]
+    for c in needed:
+        if c not in dfn.columns:
+            dfn[c] = None
 
-    years_unique = (sorted(years_ser.dropna().astype(int).unique().tolist(), reverse=True)
-                    if years_ser is not None and not years_ser.dropna().empty else [])
-    months_unique = (sorted(months_ser.dropna().astype(int).unique().tolist())
-                     if months_ser is not None and not months_ser.dropna().empty else list(range(1,13)))
+    # --- Filtres robustes ---
+    years_ser  = pd.to_numeric(dfn.get("AAAA", pd.Series(dtype="float64")), errors="coerce")
+    months_ser = pd.to_numeric(dfn.get("MM",   pd.Series(dtype="float64")), errors="coerce")
+
+    years_unique = (
+        sorted(years_ser.dropna().astype(int).unique().tolist(), reverse=True)
+        if years_ser is not None and not years_ser.dropna().empty else []
+    )
+    months_unique = (
+        sorted(months_ser.dropna().astype(int).unique().tolist())
+        if months_ser is not None and not months_ser.dropna().empty else list(range(1,13))
+    )
 
     years  = ["Toutes"] + years_unique
     months = ["Tous"] + months_unique
     plats  = ["Toutes"] + sorted(
-        df["plateforme"].dropna().astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
+        dfn["plateforme"].astype(str).str.strip().replace({"nan":"", "None":"", "": np.nan}).dropna().unique().tolist()
+        if "plateforme" in dfn.columns else []
     )
 
     colf1, colf2, colf3 = st.columns(3)
@@ -328,7 +326,8 @@ def vue_reservations(df, palette):
     month  = colf2.selectbox("Mois", months, index=0)
     plat   = colf3.selectbox("Plateforme", plats, index=0)
 
-    data = df.copy()
+    # --- Application des filtres ---
+    data = dfn.copy()
     if year != "Toutes":
         data = data[pd.to_numeric(data["AAAA"], errors="coerce").fillna(-1).astype(int) == int(year)]
     if month != "Tous":
@@ -336,118 +335,41 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
 
-    # KPIs compacts
-    brut = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
-    net  = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
-    base = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
-    nuits= int(pd.to_numeric(data["nuitees"],     errors="coerce").fillna(0).sum())
-    adr  = (net/nuits) if nuits>0 else 0.0
-    charges = float(pd.to_numeric(data["charges"], errors="coerce").fillna(0).sum())
+    if data.empty:
+        st.info("Aucune réservation avec ces filtres.")
+        return
+
+    # --- KPIs compacts (formats petits) ---
+    brut    = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+    net     = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+    base    = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
+    nuits   = int(pd.to_numeric(data["nuitees"],     errors="coerce").fillna(0).sum())
+    charges = float(pd.to_numeric(data["charges"],   errors="coerce").fillna(0).sum())
+    adr     = (net/nuits) if nuits>0 else 0.0
 
     html = f"""
-    <div class='glass kpi-line'>
-      <span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
-      <span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
-      <span class='chip'><small>Charges</small><br><strong>{charges:,.2f} €</strong></span>
-      <span class='chip'><small>Base</small><br><strong>{base:,.2f} €</strong></span>
-      <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
-      <span class='chip'><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
+    <div class='glass kpi-line' style="line-height:1.15">
+      <span class='chip' style="font-size:.82rem"><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
+      <span class='chip' style="font-size:.82rem"><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
+      <span class='chip' style="font-size:.82rem"><small>Charges</small><br><strong>{charges:,.2f} €</strong></span>
+      <span class='chip' style="font-size:.82rem"><small>Base</small><br><strong>{base:,.2f} €</strong></span>
+      <span class='chip' style="font-size:.82rem"><small>Nuitées</small><br><strong>{nuits}</strong></span>
+      <span class='chip' style="font-size:.82rem"><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
     </div>
     """.replace(",", " ")
     st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
-    # Tri par date d’arrivée si dispo
+    # --- Tri par date d’arrivée si dispo, sinon index ---
     if "date_arrivee" in data.columns:
-        order = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
-        data = data.loc[order]
+        try:
+            order = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
+            data = data.loc[order]
+        except Exception:
+            pass
 
+    # Affichage
     st.dataframe(data, use_container_width=True)
-
-def vue_ajouter(df, palette):
-    st.header("➕ Ajouter une réservation")
-    with st.form("form_add", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            nom = st.text_input("Nom du client")
-            email = st.text_input("Email", value="")
-            tel = st.text_input("Téléphone")
-            arr = st.date_input("Arrivée", date.today())
-            dep = st.date_input("Départ", date.today()+timedelta(days=1))
-        with c2:
-            plat = st.selectbox("Plateforme", list(palette.keys()))
-            brut = st.number_input("Prix brut (€)", min_value=0.0, step=0.01)
-            commissions = st.number_input("Commissions (€)", min_value=0.0, step=0.01)
-            frais_cb = st.number_input("Frais CB (€)", min_value=0.0, step=0.01)
-            menage = st.number_input("Ménage (€)", min_value=0.0, step=0.01)
-            taxes = st.number_input("Taxes séjour (€)", min_value=0.0, step=0.01)
-            paye = st.checkbox("Payé", value=False)
-        if st.form_submit_button("✅ Ajouter"):
-            if not nom or dep <= arr:
-                st.error("Veuillez entrer un nom et des dates valides.")
-            else:
-                nuitees = (dep - arr).days
-                new = pd.DataFrame([{
-                    "nom_client": nom, "email": email, "telephone": tel, "plateforme": plat,
-                    "date_arrivee": arr, "date_depart": dep, "nuitees": nuitees,
-                    "prix_brut": brut, "commissions": commissions, "frais_cb": frais_cb,
-                    "menage": menage, "taxes_sejour": taxes, "paye": paye
-                }])
-                df2 = ensure_schema(pd.concat([df, new], ignore_index=True))
-                if sauvegarder_donnees(df2):
-                    st.success(f"Réservation pour {nom} ajoutée.")
-                    st.rerun()
-
-def vue_modifier(df, palette):
-    st.header("✏️ Modifier / Supprimer")
-    if df.empty:
-        st.info("Aucune réservation.")
-        return
-
-    df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
-    options = [f"{i}: {r.get('nom_client','')} ({r.get('date_arrivee','')})" for i, r in df_sorted.iterrows()]
-    sel = st.selectbox("Sélectionnez une réservation", options=options, index=None)
-    if not sel: return
-    idx = int(sel.split(":")[0])
-    original_idx = df_sorted.loc[idx, "index"]
-    row = df.loc[original_idx]
-
-    with st.form(f"form_mod_{original_idx}"):
-        c1, c2 = st.columns(2)
-        with c1:
-            nom = st.text_input("Nom", value=row.get("nom_client","") or "")
-            email = st.text_input("Email", value=row.get("email","") or "")
-            tel = st.text_input("Téléphone", value=row.get("telephone","") or "")
-            arrivee = st.date_input("Arrivée", value=row.get("date_arrivee"))
-            depart  = st.date_input("Départ", value=row.get("date_depart"))
-        with c2:
-            palette_keys = list(palette.keys())
-            plat_idx = palette_keys.index(row.get("plateforme")) if row.get("plateforme") in palette_keys else 0
-            plat = st.selectbox("Plateforme", options=palette_keys, index=plat_idx)
-            paye = st.checkbox("Payé", value=bool(row.get("paye", False)))
-            brut = st.number_input("Prix brut", min_value=0.0, step=0.01, value=float(row.get("prix_brut") or 0))
-            commissions = st.number_input("Commissions", min_value=0.0, step=0.01, value=float(row.get("commissions") or 0))
-            frais_cb = st.number_input("Frais CB", min_value=0.0, step=0.01, value=float(row.get("frais_cb") or 0))
-            menage = st.number_input("Ménage", min_value=0.0, step=0.01, value=float(row.get("menage") or 0))
-            taxes  = st.number_input("Taxes séjour", min_value=0.0, step=0.01, value=float(row.get("taxes_sejour") or 0))
-
-        b1, b2 = st.columns([0.7, 0.3])
-        if b1.form_submit_button("💾 Enregistrer"):
-            for k, v in {
-                "nom_client": nom, "email": email, "telephone": tel, "date_arrivee": arrivee, "date_depart": depart,
-                "plateforme": plat, "paye": paye, "prix_brut": brut, "commissions": commissions, "frais_cb": frais_cb,
-                "menage": menage, "taxes_sejour": taxes
-            }.items():
-                df.loc[original_idx, k] = v
-            df2 = ensure_schema(df)
-            if sauvegarder_donnees(df2):
-                st.success("Modifié ✅"); st.rerun()
-
-        if b2.form_submit_button("🗑️ Supprimer"):
-            df2 = df.drop(index=original_idx)
-            if sauvegarder_donnees(df2):
-                st.warning("Supprimé."); st.rerun()
-
 
 # ============================================================
 # [6] VUES : PLATEFORMES / CALENDRIER / RAPPORT
