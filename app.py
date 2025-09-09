@@ -283,25 +283,22 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
 
-    # Sécurité maximale : s’assurer qu’on a bien un DataFrame complet
-    if not isinstance(df, pd.DataFrame) or df.empty:
+    # Sécurité absolue : vérifier df
+    if df is None or not isinstance(df, pd.DataFrame):
+        st.warning("Les données de réservation sont invalides ou absentes.")
+        return
+    if df.empty:
         st.info("Aucune réservation.")
         return
+
     try:
-        # Normalise à la volée sans modifier le fichier disque
         dfn = ensure_schema(df)
     except Exception as e:
-        st.error("Impossible de normaliser les données des réservations.")
+        st.error("Impossible de normaliser les données.")
         st.exception(e)
         return
 
-    # Colonnes critiques garanties
-    needed = ["AAAA","MM","plateforme","date_arrivee","prix_brut","prix_net","base","nuitees","charges"]
-    for c in needed:
-        if c not in dfn.columns:
-            dfn[c] = None
-
-    # --- Filtres robustes ---
+    # --- Nettoyage ultra défensif des années/mois ---
     years_ser  = pd.to_numeric(dfn.get("AAAA", pd.Series(dtype="float64")), errors="coerce")
     months_ser = pd.to_numeric(dfn.get("MM",   pd.Series(dtype="float64")), errors="coerce")
 
@@ -314,11 +311,11 @@ def vue_reservations(df, palette):
         if months_ser is not None and not months_ser.dropna().empty else list(range(1,13))
     )
 
+    # --- Filtres (avec valeurs par défaut si vides) ---
     years  = ["Toutes"] + years_unique
     months = ["Tous"] + months_unique
     plats  = ["Toutes"] + sorted(
-        dfn["plateforme"].astype(str).str.strip().replace({"nan":"", "None":"", "": np.nan}).dropna().unique().tolist()
-        if "plateforme" in dfn.columns else []
+        dfn["plateforme"].dropna().astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
     )
 
     colf1, colf2, colf3 = st.columns(3)
@@ -326,7 +323,7 @@ def vue_reservations(df, palette):
     month  = colf2.selectbox("Mois", months, index=0)
     plat   = colf3.selectbox("Plateforme", plats, index=0)
 
-    # --- Application des filtres ---
+    # --- Application des filtres en douceur ---
     data = dfn.copy()
     if year != "Toutes":
         data = data[pd.to_numeric(data["AAAA"], errors="coerce").fillna(-1).astype(int) == int(year)]
@@ -335,42 +332,33 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
 
-    if data.empty:
-        st.info("Aucune réservation avec ces filtres.")
-        return
-
-    # --- KPIs compacts (formats petits) ---
-    brut    = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
-    net     = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
-    base    = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
-    nuits   = int(pd.to_numeric(data["nuitees"],     errors="coerce").fillna(0).sum())
-    charges = float(pd.to_numeric(data["charges"],   errors="coerce").fillna(0).sum())
-    adr     = (net/nuits) if nuits>0 else 0.0
+    # KPI
+    brut = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+    net  = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+    base = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
+    nuits= int(pd.to_numeric(data["nuitees"],     errors="coerce").fillna(0).sum())
+    adr  = (net/nuits) if nuits>0 else 0.0
+    charges = float(pd.to_numeric(data["charges"], errors="coerce").fillna(0).sum())
 
     html = f"""
-    <div class='glass kpi-line' style="line-height:1.15">
-      <span class='chip' style="font-size:.82rem"><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
-      <span class='chip' style="font-size:.82rem"><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
-      <span class='chip' style="font-size:.82rem"><small>Charges</small><br><strong>{charges:,.2f} €</strong></span>
-      <span class='chip' style="font-size:.82rem"><small>Base</small><br><strong>{base:,.2f} €</strong></span>
-      <span class='chip' style="font-size:.82rem"><small>Nuitées</small><br><strong>{nuits}</strong></span>
-      <span class='chip' style="font-size:.82rem"><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
+    <div class='glass kpi-line'>
+      <span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
+      <span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
+      <span class='chip'><small>Charges</small><br><strong>{charges:,.2f} €</strong></span>
+      <span class='chip'><small>Base</small><br><strong>{base:,.2f} €</strong></span>
+      <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
+      <span class='chip'><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
     </div>
     """.replace(",", " ")
     st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
-    # --- Tri par date d’arrivée si dispo, sinon index ---
+    # Tri par date d’arrivée si dispo
     if "date_arrivee" in data.columns:
-        try:
-            order = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
-            data = data.loc[order]
-        except Exception:
-            pass
+        order = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
+        data = data.loc[order]
 
-    # Affichage
     st.dataframe(data, use_container_width=True)
-
 # ============================================================
 # [6] VUES : PLATEFORMES / CALENDRIER / RAPPORT
 # ============================================================
