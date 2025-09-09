@@ -8,6 +8,15 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
 
+# --- HARD CLEAR (sécurisé) : purger cache au chargement du script ---
+try:
+    import streamlit as st  # déjà importé plus haut normalement
+    try: st.cache_data.clear()
+    except Exception: pass
+    try: st.cache_resource.clear()
+    except Exception: pass
+except Exception:
+    pass
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
 
