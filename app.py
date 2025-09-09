@@ -25,7 +25,7 @@ except Exception:
     pass
 
 # --- version d'app : changez le chiffre pour forcer une purge intégrale ---
-APP_VERSION = 12  # <— incrémentez si besoin
+APP_VERSION = 19  # <— incrémentez si besoin
 
 if st.session_state.get("_app_version") != APP_VERSION:
     try: st.cache_data.clear()
