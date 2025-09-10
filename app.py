@@ -311,14 +311,18 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[_series(data["plateforme"], "string").str.strip() == str(plat).strip()]
 
-    brut        = float(pd.to_numeric(_series(data["prix_brut"]), errors="coerce").fillna(0).sum())
-    net         = float(pd.to_numeric(_series(data["prix_net"]),  errors="coerce").fillna(0).sum())
-    commissions = float(pd.to_numeric(_series(data["commissions"]), errors="coerce").fillna(0).sum())
-    frais_cb    = float(pd.to_numeric(_series(data["frais_cb"]), errors="coerce").fillna(0).sum())
-    menage      = float(pd.to_numeric(_series(data["menage"]), errors="coerce").fillna(0).sum())
-    taxes       = float(pd.to_numeric(_series(data["taxes_sejour"]), errors="coerce").fillna(0).sum())
-    nuits       = int(pd.to_numeric(_series(data["nuitees"]), errors="coerce").fillna(0).sum())
-    nb_resas    = len(data)
+    # Nouvelle vérification pour éviter l'erreur
+    if data.empty:
+        brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
+    else:
+        brut        = float(pd.to_numeric(data["prix_brut"]).sum())
+        net         = float(pd.to_numeric(data["prix_net"]).sum())
+        commissions = float(pd.to_numeric(data["commissions"]).sum())
+        frais_cb    = float(pd.to_numeric(data["frais_cb"]).sum())
+        menage      = float(pd.to_numeric(data["menage"]).sum())
+        taxes       = float(pd.to_numeric(data["taxes_sejour"]).sum())
+        nuits       = int(pd.to_numeric(data["nuitees"]).sum())
+        nb_resas    = len(data)
 
     st.markdown("---")
     
