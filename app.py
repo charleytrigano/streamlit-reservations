@@ -101,14 +101,16 @@ def _to_bool_series(s) -> pd.Series:
     return ser.str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
 
 def _to_num(s) -> pd.Series:
-    ser = _series(s, "string").fillna("")
-    ser = (ser.str.replace("€","", regex=False)
+    ser = _series(s, "string")
+    if ser.empty:
+        return pd.Series([], dtype=float)
+    ser = (ser.fillna("")
+              .str.replace("€","", regex=False)
               .str.replace(" ", "", regex=False)
               .str.replace("\u00A0","", regex=False)   # espace insécable
               .str.replace(",", ".", regex=False)
               .str.replace(r"[^\d\.\-]", "", regex=True)
               .str.strip())
-    # Ajout d'un fillna ici pour plus de robustesse
     return pd.to_numeric(ser, errors="coerce").fillna(0.0)
 
 def _to_date(s) -> pd.Series:
