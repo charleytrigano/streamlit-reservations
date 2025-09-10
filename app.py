@@ -297,49 +297,8 @@ def vue_reservations(df, palette):
     if df is None or df.empty:
         st.info("Aucune réservation."); return
 
-    years_ser = pd.to_numeric(_series(df.get("AAAA")), errors="coerce")
-    months_ser = pd.to_numeric(_series(df.get("MM")), errors="coerce")
-
-    years_unique = sorted(years_ser.dropna().astype(int).unique().tolist(), reverse=True)
-    if not years_unique:
-        st.info("Aucune année de réservation disponible."); return
-    
-    st.sidebar.markdown("### Filtres")
-    
-    # Ajout d'une logique pour sélectionner la dernière année disponible par défaut
-    if years_unique:
-        default_year_index = years_unique.index(max(years_unique))
-        selected_year = st.sidebar.selectbox("Année", years_unique, index=default_year_index)
-    else:
-        st.info("Aucune année de réservation disponible."); return
-
-    df_filtered = df[df["AAAA"] == selected_year]
-    months_in_year = sorted(df_filtered["MM"].dropna().astype(int).unique().tolist())
-    
-    month_options = {1:"Jan",2:"Fév",3:"Mar",4:"Avr",5:"Mai",6:"Juin",
-                     7:"Juil",8:"Août",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
-    
-    month_list_with_labels = [f"{m} ({month_options.get(m)})" for m in months_in_year]
-    
-    # Sélectionne le dernier mois disponible par défaut
-    default_month_index = 0
-    if months_in_year:
-        default_month_index = months_in_year.index(max(months_in_year))
-        selected_month_label = st.sidebar.radio("Mois", month_list_with_labels, index=default_month_index)
-    else:
-        st.info("Aucun mois de réservation disponible pour cette année."); return
-    
-    selected_month = int(selected_month_label.split(" ")[0])
-
-    st.subheader(f"Réservations pour {month_options.get(selected_month)} {selected_year}")
-    
-    df_month = df_filtered[df_filtered["MM"] == selected_month].sort_values("date_arrivee")
-    
-    if df_month.empty:
-        st.info("Aucune réservation pour ce mois."); return
-        
-    # Affiche le tableau des réservations avec toutes les colonnes
-    st.dataframe(df_month, use_container_width=True)
+    # Nous affichons maintenant la liste complète de toutes les réservations
+    st.dataframe(df, use_container_width=True)
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une réservation")
