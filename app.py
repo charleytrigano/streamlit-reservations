@@ -207,14 +207,10 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df["charges"]  = (_to_num(df["prix_brut"]) - _to_num(df["prix_net"])).fillna(0.0)
     df["base"]     = (_to_num(df["prix_net"]) - _to_num(df["menage"]) - _to_num(df["taxes_sejour"])).fillna(0.0)
     
-    # === Début de la correction pour l'erreur de division ===
-    # On isole les lignes où le prix brut est supérieur à zéro pour éviter une division par zéro
+    # Correction pour l'erreur de division
     mask = _to_num(df["prix_brut"]) > 0
-    # On initialise la colonne '%' à 0 pour toutes les lignes
     df["%"] = 0.0
-    # On calcule le pourcentage uniquement pour les lignes valides
     df.loc[mask, "%"] = (_to_num(df.loc[mask, "charges"]) / _to_num(df.loc[mask, "prix_brut"]) * 100)
-    # === Fin de la correction ===
 
     # AAAA / MM
     da_all = pd.to_datetime(df["date_arrivee"], errors="coerce")
@@ -332,13 +328,20 @@ def vue_reservations(df, palette):
         start = row["date_arrivee"]
         end   = row["date_depart"]
         
+        # === Début de la correction pour l'erreur de date ===
+        # Formate les dates seulement si elles sont valides
+        start_date_str = pd.to_datetime(start).strftime('%d/%m/%Y') if pd.notna(start) else "Date manquante"
+        end_date_str = pd.to_datetime(end).strftime('%d/%m/%Y') if pd.notna(end) else "Date manquante"
+        
         info = f"""
         **{row['nom_client']}**<br/>
         **{row['plateforme']}** ({row['nuitees']} nuits)<br/>
         Prix brut: **{_to_num(row['prix_brut']):.2f}€**<br/>
-        Arrivée: {pd.to_datetime(start).strftime('%d/%m/%Y')}<br/>
-        Départ: {pd.to_datetime(end).strftime('%d/%m/%Y')}
+        Arrivée: {start_date_str}<br/>
+        Départ: {end_date_str}
         """
+        # === Fin de la correction ===
+
         st.markdown(info, unsafe_allow_html=True)
         st.markdown("---")
 
