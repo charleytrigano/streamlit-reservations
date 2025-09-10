@@ -297,7 +297,23 @@ def vue_reservations(df, palette):
     if df is None or df.empty:
         st.info("Aucune réservation."); return
 
-    # Nous affichons maintenant la liste complète de toutes les réservations
+    # Calcule les totaux des colonnes numériques
+    df_totals = df.sum(numeric_only=True)
+
+    # Affiche les totaux sous forme de boutons
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(label="Total Nuitées", value=f"{df_totals['nuitees']:.0f} nuits")
+    with col2:
+        st.metric(label="Revenu Brut Total", value=f"{df_totals['prix_brut']:.2f} €")
+    with col3:
+        st.metric(label="Commissions Total", value=f"{df_totals['commissions']:.2f} €")
+    with col4:
+        st.metric(label="Revenu Net Total", value=f"{df_totals['prix_net']:.2f} €")
+
+    # Affiche le tableau complet des réservations
+    st.markdown("---")
+    st.subheader("Détails des réservations")
     st.dataframe(df, use_container_width=True)
 
 def vue_ajouter(df, palette):
