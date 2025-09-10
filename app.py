@@ -97,35 +97,54 @@ def _series(obj, dtype=None):
     return s
 
 def _to_bool_series(s) -> pd.Series:
-    ser = _series(s, "string").fillna("")
-    return ser.str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
+    ser = _series(s, "string")
+    if ser.empty: return pd.Series([], dtype=bool)
+    return ser.fillna("").str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
 
 def _to_num(s) -> pd.Series:
-    ser = _series(s, "string")
-    if ser.empty:
+    try:
+        ser = _series(s, "string")
+        if ser.empty:
+            print("DEBUG: _to_num reçoit un objet vide, retourne une Series vide.")
+            return pd.Series([], dtype=float)
+        
+        print(f"DEBUG: _to_num traite un objet de type: {type(ser)}")
+        ser = (ser.fillna("")
+                  .str.replace("€","", regex=False)
+                  .str.replace(" ", "", regex=False)
+                  .str.replace("\u00A0","", regex=False)   # espace insécable
+                  .str.replace(",", ".", regex=False)
+                  .str.replace(r"[^\d\.\-]", "", regex=True)
+                  .str.strip())
+        return pd.to_numeric(ser, errors="coerce").fillna(0.0)
+    except Exception as e:
+        print(f"ERREUR DANS _to_num: {e}")
+        st.error(f"Une erreur s'est produite dans la fonction _to_num : {e}")
         return pd.Series([], dtype=float)
-    ser = (ser.fillna("")
-              .str.replace("€","", regex=False)
-              .str.replace(" ", "", regex=False)
-              .str.replace("\u00A0","", regex=False)   # espace insécable
-              .str.replace(",", ".", regex=False)
-              .str.replace(r"[^\d\.\-]", "", regex=True)
-              .str.strip())
-    return pd.to_numeric(ser, errors="coerce").fillna(0.0)
 
 def _to_date(s) -> pd.Series:
     """Accepte JJ/MM/AAAA, AAAA-MM-JJ, JJ-MM-AAAA, retourne date."""
-    ser = _series(s, "string").fillna("").str.strip()
-    if ser.empty:
+    try:
+        ser = _series(s, "string")
+        if ser.empty:
+            print("DEBUG: _to_date reçoit un objet vide, retourne une Series vide.")
+            return pd.Series([], dtype="object")
+        
+        print(f"DEBUG: _to_date traite un objet de type: {type(ser)}")
+        ser = ser.fillna("").str.strip()
+        # 1) tentative flexible dayfirst
+        d = pd.to_datetime(ser, errors="coerce", dayfirst=True)
+        # 2) complète avec ISO si NaT
+        mask_nat = d.isna()
+        if mask_nat.any():
+            d2 = pd.to_datetime(ser[mask_nat], errors="coerce", format="%Y-%m-%d")
+            d = d.where(~mask_nat, d2)
+        return d.dt.date
+    except Exception as e:
+        print(f"ERREUR DANS _to_date: {e}")
+        st.error(f"Une erreur s'est produite dans la fonction _to_date : {e}")
         return pd.Series([], dtype="object")
-    # 1) tentative flexible dayfirst
-    d = pd.to_datetime(ser, errors="coerce", dayfirst=True)
-    # 2) complète avec ISO si NaT
-    mask_nat = d.isna()
-    if mask_nat.any():
-        d2 = pd.to_datetime(ser[mask_nat], errors="coerce", format="%Y-%m-%d")
-        d = d.where(~mask_nat, d2)
-    return d.dt.date
+
 
 def _format_phone_e164(phone: str) -> str:
     s = re.sub(r"\D","", str(phone or ""))
@@ -318,15 +337,20 @@ def vue_reservations(df, palette):
     if data.empty:
         brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
     else:
-        # Corrections supplémentaires pour gérer les cas extrêmes de filtrage
-        brut        = float(pd.to_numeric(_series(data["prix_brut"]), errors="coerce").fillna(0).sum())
-        net         = float(pd.to_numeric(_series(data["prix_net"]),  errors="coerce").fillna(0).sum())
-        commissions = float(pd.to_numeric(_series(data["commissions"]), errors="coerce").fillna(0).sum())
-        frais_cb    = float(pd.to_numeric(_series(data["frais_cb"]), errors="coerce").fillna(0).sum())
-        menage      = float(pd.to_numeric(_series(data["menage"]), errors="coerce").fillna(0).sum())
-        taxes       = float(pd.to_numeric(_series(data["taxes_sejour"]), errors="coerce").fillna(0).sum())
-        nuits       = int(pd.to_numeric(_series(data["nuitees"]), errors="coerce").fillna(0).sum())
-        nb_resas    = len(data)
+        try:
+            print(f"DEBUG: Dans vue_reservations, data['prix_brut'] est de type: {type(data['prix_brut'])}")
+            brut        = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+            net         = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+            commissions = float(pd.to_numeric(data["commissions"], errors="coerce").fillna(0).sum())
+            frais_cb    = float(pd.to_numeric(data["frais_cb"], errors="coerce").fillna(0).sum())
+            menage      = float(pd.to_numeric(data["menage"], errors="coerce").fillna(0).sum())
+            taxes       = float(pd.to_numeric(data["taxes_sejour"], errors="coerce").fillna(0).sum())
+            nuits       = int(pd.to_numeric(data["nuitees"], errors="coerce").fillna(0).sum())
+            nb_resas    = len(data)
+        except Exception as e:
+            st.error(f"Une erreur s'est produite dans vue_reservations: {e}")
+            print(f"ERREUR DANS VUE_RESERVATIONS: {e}")
+            brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
 
     st.markdown("---")
     
@@ -522,22 +546,33 @@ def vue_rapport(df, palette):
     data = df[pd.to_numeric(_series(df["AAAA"]), errors="coerce")==year].copy()
     if month!="Tous": data = data[pd.to_numeric(_series(data["MM"]), errors="coerce")==int(month)]
     if plat!="Tous":  data = data[_series(data["plateforme"], "string")==plat]
-    if data.empty: st.warning("Aucune donnée après filtres."); return
+    
+    if data.empty:
+        st.warning("Aucune donnée après filtres."); 
+        return
 
-    data["mois"] = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").dt.to_period("M").astype(str)
-    agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
-    total_val = float(pd.to_numeric(_series(agg[metric]), errors="coerce").fillna(0).sum())
+    try:
+        print(f"DEBUG: Dans vue_rapport, data['date_arrivee'] est de type: {type(data['date_arrivee'])}")
+        data["mois"] = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").dt.to_period("M").astype(str)
+        agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
+        total_val = float(pd.to_numeric(_series(agg[metric]), errors="coerce").fillna(0).sum())
 
-    st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
-    st.dataframe(agg, use_container_width=True)
+        st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
+        st.dataframe(agg, use_container_width=True)
+    
+        chart = alt.Chart(agg).mark_bar().encode(
+            x="mois:N",
+            y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
+            color="plateforme:N",
+            tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+        )
+        st.altair_chart(chart.properties(height=420), use_container_width=True)
 
-    chart = alt.Chart(agg).mark_bar().encode(
-        x="mois:N",
-        y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
-        color="plateforme:N",
-        tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
-    )
-    st.altair_chart(chart.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.error(f"Une erreur s'est produite dans vue_rapport : {e}")
+        print(f"ERREUR DANS VUE_RAPPORT: {e}")
+        st.stop()
+
 
 def _copy_block(payload: str, height=180, key: str="copy"):
     st.text_area("Aperçu à copier", payload, height=height, key=f"ta_{key}")
