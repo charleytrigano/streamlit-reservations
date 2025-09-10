@@ -108,7 +108,8 @@ def _to_num(s) -> pd.Series:
               .str.replace(",", ".", regex=False)
               .str.replace(r"[^\d\.\-]", "", regex=True)
               .str.strip())
-    return pd.to_numeric(ser, errors="coerce")
+    # Ajout d'un fillna ici pour plus de robustesse
+    return pd.to_numeric(ser, errors="coerce").fillna(0.0)
 
 def _to_date(s) -> pd.Series:
     """Accepte JJ/MM/AAAA, AAAA-MM-JJ, JJ-MM-AAAA, retourne date."""
@@ -185,7 +186,7 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
 
     # numériques
     for n in ["prix_brut","commissions","frais_cb","menage","taxes_sejour","nuitees","charges","%","base"]:
-        df[n] = _to_num(df[n]).fillna(0.0)
+        df[n] = _to_num(df[n])
 
     # dates
     df["date_arrivee"] = _to_date(df["date_arrivee"])
@@ -315,13 +316,13 @@ def vue_reservations(df, palette):
     if data.empty:
         brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
     else:
-        brut        = float(pd.to_numeric(data["prix_brut"]).sum())
-        net         = float(pd.to_numeric(data["prix_net"]).sum())
-        commissions = float(pd.to_numeric(data["commissions"]).sum())
-        frais_cb    = float(pd.to_numeric(data["frais_cb"]).sum())
-        menage      = float(pd.to_numeric(data["menage"]).sum())
-        taxes       = float(pd.to_numeric(data["taxes_sejour"]).sum())
-        nuits       = int(pd.to_numeric(data["nuitees"]).sum())
+        brut        = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+        net         = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+        commissions = float(pd.to_numeric(data["commissions"], errors="coerce").fillna(0).sum())
+        frais_cb    = float(pd.to_numeric(data["frais_cb"], errors="coerce").fillna(0).sum())
+        menage      = float(pd.to_numeric(data["menage"], errors="coerce").fillna(0).sum())
+        taxes       = float(pd.to_numeric(data["taxes_sejour"], errors="coerce").fillna(0).sum())
+        nuits       = int(pd.to_numeric(data["nuitees"], errors="coerce").fillna(0).sum())
         nb_resas    = len(data)
 
     st.markdown("---")
