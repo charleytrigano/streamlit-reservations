@@ -731,6 +731,7 @@ def admin_sidebar(df):
 
 # ============================== 5) MAIN ==============================
 def main():
+    # Mode sombre par défaut (lisible PC), toggle pour mode clair
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
@@ -748,4 +749,15 @@ def main():
         "✏️ Modifier / Supprimer": vue_modifier,
         "🎨 Plateformes": vue_plateformes,
         "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport
+        "📊 Rapport": vue_rapport,
+        "✉️ SMS": vue_sms,
+        "📆 Export ICS": vue_export_ics,
+        "📝 Google Sheet": vue_google_sheet,
+        "👥 Clients": vue_clients,
+    }
+    choice = st.sidebar.radio("Aller à", list(pages.keys()))
+    pages[choice](df, palette)
+    admin_sidebar(df)
+
+if __name__ == "__main__":
+    main()
