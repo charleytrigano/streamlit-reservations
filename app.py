@@ -34,7 +34,7 @@ DEFAULT_PALETTE = {
 FORM_SHORT_URL = "https://urlr.me/kZuH94"
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
-GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?output=csv"
+GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCxOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?output=csv"
 
 def apply_style(light: bool):
     bg = "#fafafa" if light else "#0f1115"
@@ -305,7 +305,13 @@ def vue_reservations(df, palette):
         st.info("Aucune année de réservation disponible."); return
     
     st.sidebar.markdown("### Filtres")
-    selected_year = st.sidebar.selectbox("Année", years_unique, index=0)
+    
+    # Ajout d'une logique pour sélectionner la dernière année disponible par défaut
+    if years_unique:
+        default_year_index = years_unique.index(max(years_unique))
+        selected_year = st.sidebar.selectbox("Année", years_unique, index=default_year_index)
+    else:
+        st.info("Aucune année de réservation disponible."); return
 
     df_filtered = df[df["AAAA"] == selected_year]
     months_in_year = sorted(df_filtered["MM"].dropna().astype(int).unique().tolist())
@@ -314,7 +320,15 @@ def vue_reservations(df, palette):
                      7:"Juil",8:"Août",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
     
     month_list_with_labels = [f"{m} ({month_options.get(m)})" for m in months_in_year]
-    selected_month_label = st.sidebar.radio("Mois", month_list_with_labels)
+    
+    # Sélectionne le dernier mois disponible par défaut
+    default_month_index = 0
+    if months_in_year:
+        default_month_index = months_in_year.index(max(months_in_year))
+        selected_month_label = st.sidebar.radio("Mois", month_list_with_labels, index=default_month_index)
+    else:
+        st.info("Aucun mois de réservation disponible pour cette année."); return
+    
     selected_month = int(selected_month_label.split(" ")[0])
 
     st.subheader(f"Réservations pour {month_options.get(selected_month)} {selected_year}")
@@ -346,7 +360,6 @@ def vue_reservations(df, palette):
         """
         st.markdown(info, unsafe_allow_html=True)
         st.markdown("---")
-
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une réservation")
