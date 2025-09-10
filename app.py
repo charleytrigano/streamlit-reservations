@@ -203,14 +203,14 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
         pass
 
     # dérivées
-    df["prix_net"] = (_to_num(df["prix_brut"]) - _to_num(df["commissions"]) - _to_num(df["frais_cb"])).fillna(0.0)
-    df["charges"]  = (_to_num(df["prix_brut"]) - _to_num(df["prix_net"])).fillna(0.0)
-    df["base"]     = (_to_num(df["prix_net"]) - _to_num(df["menage"]) - _to_num(df["taxes_sejour"])).fillna(0.0)
+    df["prix_net"] = (df["prix_brut"] - df["commissions"] - df["frais_cb"]).fillna(0.0)
+    df["charges"]  = (df["prix_brut"] - df["prix_net"]).fillna(0.0)
+    df["base"]     = (df["prix_net"] - df["menage"] - df["taxes_sejour"]).fillna(0.0)
     
     # Correction pour l'erreur de division
-    mask = _to_num(df["prix_brut"]) > 0
+    mask = df["prix_brut"] > 0
     df["%"] = 0.0
-    df.loc[mask, "%"] = (_to_num(df.loc[mask, "charges"]) / _to_num(df.loc[mask, "prix_brut"]) * 100)
+    df.loc[mask, "%"] = (df.loc[mask, "charges"] / df.loc[mask, "prix_brut"] * 100)
 
     # AAAA / MM
     da_all = pd.to_datetime(df["date_arrivee"], errors="coerce")
@@ -325,21 +325,22 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation pour ce mois."); return
         
     for _, row in df_month.iterrows():
-        # === Début de la correction pour l'erreur de date ===
         # Formate les dates seulement si elles sont valides
+        start = row["date_arrivee"]
+        end   = row["date_depart"]
+        
         start_date_str = "Date manquante"
-        if pd.notna(row['date_arrivee']):
-            start_date_str = row['date_arrivee'].strftime('%d/%m/%Y')
+        if pd.notna(start):
+            start_date_str = start.strftime('%d/%m/%Y')
         
         end_date_str = "Date manquante"
-        if pd.notna(row['date_depart']):
-            end_date_str = row['date_depart'].strftime('%d/%m/%Y')
-        # === Fin de la correction ===
+        if pd.notna(end):
+            end_date_str = end.strftime('%d/%m/%Y')
         
         info = f"""
         **{row['nom_client']}**<br/>
         **{row['plateforme']}** ({row['nuitees']} nuits)<br/>
-        Prix brut: **{_to_num(row['prix_brut']):.2f}€**<br/>
+        Prix brut: **{row['prix_brut']:.2f}€**<br/>
         Arrivée: {start_date_str}<br/>
         Départ: {end_date_str}
         """
