@@ -206,9 +206,15 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df["prix_net"] = (_to_num(df["prix_brut"]) - _to_num(df["commissions"]) - _to_num(df["frais_cb"])).fillna(0.0)
     df["charges"]  = (_to_num(df["prix_brut"]) - _to_num(df["prix_net"])).fillna(0.0)
     df["base"]     = (_to_num(df["prix_net"]) - _to_num(df["menage"]) - _to_num(df["taxes_sejour"])).fillna(0.0)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        pct = np.where(_to_num(df["prix_brut"])>0, (_to_num(df["charges"]) / _to_num(df["prix_brut"]) * 100), 0)
-    df["%"] = pd.to_numeric(pct, errors="coerce").fillna(0.0)
+    
+    # === Début de la correction pour l'erreur de division ===
+    # On isole les lignes où le prix brut est supérieur à zéro pour éviter une division par zéro
+    mask = _to_num(df["prix_brut"]) > 0
+    # On initialise la colonne '%' à 0 pour toutes les lignes
+    df["%"] = 0.0
+    # On calcule le pourcentage uniquement pour les lignes valides
+    df.loc[mask, "%"] = (_to_num(df.loc[mask, "charges"]) / _to_num(df.loc[mask, "prix_brut"]) * 100)
+    # === Fin de la correction ===
 
     # AAAA / MM
     da_all = pd.to_datetime(df["date_arrivee"], errors="coerce")
