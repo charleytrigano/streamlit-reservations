@@ -338,28 +338,8 @@ def vue_reservations(df, palette):
     if df_month.empty:
         st.info("Aucune réservation pour ce mois."); return
         
-    for _, row in df_month.iterrows():
-        # Formate les dates seulement si elles sont valides
-        start = row["date_arrivee"]
-        end   = row["date_depart"]
-        
-        start_date_str = "Date manquante"
-        if pd.notna(start):
-            start_date_str = start.strftime('%d/%m/%Y')
-        
-        end_date_str = "Date manquante"
-        if pd.notna(end):
-            end_date_str = end.strftime('%d/%m/%Y')
-        
-        info = f"""
-        **{row['nom_client']}**<br/>
-        **{row['plateforme']}** ({row['nuitees']} nuits)<br/>
-        Prix brut: **{row['prix_brut']:.2f}€**<br/>
-        Arrivée: {start_date_str}<br/>
-        Départ: {end_date_str}
-        """
-        st.markdown(info, unsafe_allow_html=True)
-        st.markdown("---")
+    # Affiche le tableau des réservations avec toutes les colonnes
+    st.dataframe(df_month, use_container_width=True)
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une réservation")
