@@ -105,20 +105,17 @@ def _to_num(s) -> pd.Series:
     try:
         ser = _series(s, "string")
         if ser.empty:
-            print("DEBUG: _to_num reçoit un objet vide, retourne une Series vide.")
             return pd.Series([], dtype=float)
         
-        print(f"DEBUG: _to_num traite un objet de type: {type(ser)}")
         ser = (ser.fillna("")
                   .str.replace("€","", regex=False)
                   .str.replace(" ", "", regex=False)
-                  .str.replace("\u00A0","", regex=False)   # espace insécable
+                  .str.replace("\u00A0","", regex=False)
                   .str.replace(",", ".", regex=False)
                   .str.replace(r"[^\d\.\-]", "", regex=True)
                   .str.strip())
         return pd.to_numeric(ser, errors="coerce").fillna(0.0)
     except Exception as e:
-        print(f"ERREUR DANS _to_num: {e}")
         st.error(f"Une erreur s'est produite dans la fonction _to_num : {e}")
         return pd.Series([], dtype=float)
 
@@ -127,21 +124,16 @@ def _to_date(s) -> pd.Series:
     try:
         ser = _series(s, "string")
         if ser.empty:
-            print("DEBUG: _to_date reçoit un objet vide, retourne une Series vide.")
             return pd.Series([], dtype="object")
         
-        print(f"DEBUG: _to_date traite un objet de type: {type(ser)}")
         ser = ser.fillna("").str.strip()
-        # 1) tentative flexible dayfirst
         d = pd.to_datetime(ser, errors="coerce", dayfirst=True)
-        # 2) complète avec ISO si NaT
         mask_nat = d.isna()
         if mask_nat.any():
             d2 = pd.to_datetime(ser[mask_nat], errors="coerce", format="%Y-%m-%d")
             d = d.where(~mask_nat, d2)
         return d.dt.date
     except Exception as e:
-        print(f"ERREUR DANS _to_date: {e}")
         st.error(f"Une erreur s'est produite dans la fonction _to_date : {e}")
         return pd.Series([], dtype="object")
 
@@ -333,12 +325,10 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[_series(data["plateforme"], "string").str.strip() == str(plat).strip()]
 
-    # Nouvelle vérification pour éviter l'erreur
     if data.empty:
         brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
     else:
         try:
-            print(f"DEBUG: Dans vue_reservations, data['prix_brut'] est de type: {type(data['prix_brut'])}")
             brut        = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
             net         = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
             commissions = float(pd.to_numeric(data["commissions"], errors="coerce").fillna(0).sum())
@@ -349,12 +339,10 @@ def vue_reservations(df, palette):
             nb_resas    = len(data)
         except Exception as e:
             st.error(f"Une erreur s'est produite dans vue_reservations: {e}")
-            print(f"ERREUR DANS VUE_RESERVATIONS: {e}")
             brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
 
     st.markdown("---")
     
-    # Ligne de totaux principale (revenus)
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="Revenu Brut Total", value=f"{brut:,.2f} €".replace(",", " "))
@@ -363,7 +351,6 @@ def vue_reservations(df, palette):
     with col3:
         st.metric(label="Commissions", value=f"{commissions:,.2f} €".replace(",", " "))
 
-    # Ligne de totaux secondaire (frais et stats)
     col4, col5, col6, col7, col8 = st.columns(5)
     with col4:
         st.metric(label="Frais CB", value=f"{frais_cb:,.2f} €".replace(",", " "))
@@ -378,7 +365,6 @@ def vue_reservations(df, palette):
 
     st.markdown("---")
 
-    # tri par date d'arrivée
     order = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").sort_values(ascending=False).index
     data = data.loc[order]
     st.dataframe(data, use_container_width=True)
@@ -552,7 +538,6 @@ def vue_rapport(df, palette):
         return
 
     try:
-        print(f"DEBUG: Dans vue_rapport, data['date_arrivee'] est de type: {type(data['date_arrivee'])}")
         data["mois"] = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").dt.to_period("M").astype(str)
         agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
         total_val = float(pd.to_numeric(_series(agg[metric]), errors="coerce").fillna(0).sum())
@@ -570,7 +555,6 @@ def vue_rapport(df, palette):
 
     except Exception as e:
         st.error(f"Une erreur s'est produite dans vue_rapport : {e}")
-        print(f"ERREUR DANS VUE_RAPPORT: {e}")
         st.stop()
 
 
@@ -789,7 +773,6 @@ def admin_sidebar(df):
 
 # ============================== 5) MAIN ==============================
 def main():
-    # Mode sombre par défaut (lisible PC), toggle pour mode clair
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
