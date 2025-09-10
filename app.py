@@ -325,13 +325,16 @@ def vue_reservations(df, palette):
         st.info("Aucune réservation pour ce mois."); return
         
     for _, row in df_month.iterrows():
-        start = row["date_arrivee"]
-        end   = row["date_depart"]
-        
         # === Début de la correction pour l'erreur de date ===
         # Formate les dates seulement si elles sont valides
-        start_date_str = pd.to_datetime(start).strftime('%d/%m/%Y') if pd.notna(start) else "Date manquante"
-        end_date_str = pd.to_datetime(end).strftime('%d/%m/%Y') if pd.notna(end) else "Date manquante"
+        start_date_str = "Date manquante"
+        if pd.notna(row['date_arrivee']):
+            start_date_str = row['date_arrivee'].strftime('%d/%m/%Y')
+        
+        end_date_str = "Date manquante"
+        if pd.notna(row['date_depart']):
+            end_date_str = row['date_depart'].strftime('%d/%m/%Y')
+        # === Fin de la correction ===
         
         info = f"""
         **{row['nom_client']}**<br/>
@@ -340,8 +343,6 @@ def vue_reservations(df, palette):
         Arrivée: {start_date_str}<br/>
         Départ: {end_date_str}
         """
-        # === Fin de la correction ===
-
         st.markdown(info, unsafe_allow_html=True)
         st.markdown("---")
 
