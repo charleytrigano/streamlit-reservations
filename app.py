@@ -717,4 +717,62 @@ def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
     st.sidebar.download_button(
-        "Télé
+        "📥 Télécharger CSV",
+        data=ensure_schema(df).to_csv(sep=";", index=False).encode("utf-8"),
+        file_name=CSV_RESERVATIONS, mime="text/csv"
+    )
+    up = st.sidebar.file_uploader("Restaurer depuis un CSV", type=["csv"])
+    if up is not None and st.sidebar.button("Confirmer restauration"):
+        try:
+            content = up.read()
+            tmp_df = _detect_delimiter_and_read(content)
+            tmp_df = ensure_schema(tmp_df)
+            out = tmp_df.copy()
+            for col in ["date_arrivee","date_depart"]:
+                out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
+            out.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8")
+            st.cache_data.clear()
+            st.success("Fichier restauré. Rechargement…"); st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erreur : {e}")
+
+    if st.sidebar.button("🧹 Vider le cache & recharger"):
+        for _clear in (getattr(st, "cache_data", None), getattr(st, "cache_resource", None)):
+            try:
+                if _clear: _clear.clear()
+            except Exception:
+                pass
+        st.success("Cache vidé. Rechargement…"); st.rerun()
+
+# ============================== 5) MAIN ==============================
+def main():
+    # Mode sombre par défaut (lisible PC), toggle pour mode clair
+    try:
+        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
+    except Exception:
+        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
+    apply_style(light=bool(mode_clair))
+
+    st.title("✨ Villa Tobias — Gestion des Réservations")
+    df, palette_loaded = charger_donnees()
+    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
+
+    pages = {
+        "🏠 Accueil": vue_accueil,
+        "📋 Réservations": vue_reservations,
+        "➕ Ajouter": vue_ajouter,
+        "✏️ Modifier / Supprimer": vue_modifier,
+        "🎨 Plateformes": vue_plateformes,
+        "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,
+        "✉️ SMS": vue_sms,
+        "📆 Export ICS": vue_export_ics,
+        "📝 Google Sheet": vue_google_sheet,
+        "👥 Clients": vue_clients,
+    }
+    choice = st.sidebar.radio("Aller à", list(pages.keys()))
+    pages[choice](df, palette)
+    admin_sidebar(df)
+
+if __name__ == "__main__":
+    main()
