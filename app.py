@@ -97,45 +97,32 @@ def _series(obj, dtype=None):
     return s
 
 def _to_bool_series(s) -> pd.Series:
-    ser = _series(s, "string")
-    if ser.empty: return pd.Series([], dtype=bool)
-    return ser.fillna("").str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
+    ser = _series(s, "string").fillna("")
+    return ser.str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
 
 def _to_num(s) -> pd.Series:
-    try:
-        ser = _series(s, "string")
-        if ser.empty:
-            return pd.Series([], dtype=float)
-        
-        ser = (ser.fillna("")
-                  .str.replace("€","", regex=False)
-                  .str.replace(" ", "", regex=False)
-                  .str.replace("\u00A0","", regex=False)
-                  .str.replace(",", ".", regex=False)
-                  .str.replace(r"[^\d\.\-]", "", regex=True)
-                  .str.strip())
-        return pd.to_numeric(ser, errors="coerce").fillna(0.0)
-    except Exception as e:
-        st.error(f"Une erreur s'est produite dans la fonction _to_num : {e}")
-        return pd.Series([], dtype=float)
+    ser = _series(s, "string").fillna("")
+    ser = (ser.str.replace("€","", regex=False)
+              .str.replace(" ", "", regex=False)
+              .str.replace("\u00A0","", regex=False)   # espace insécable
+              .str.replace(",", ".", regex=False)
+              .str.replace(r"[^\d\.\-]", "", regex=True)
+              .str.strip())
+    return pd.to_numeric(ser, errors="coerce")
 
 def _to_date(s) -> pd.Series:
     """Accepte JJ/MM/AAAA, AAAA-MM-JJ, JJ-MM-AAAA, retourne date."""
-    try:
-        ser = _series(s, "string")
-        if ser.empty:
-            return pd.Series([], dtype="object")
-        
-        ser = ser.fillna("").str.strip()
-        d = pd.to_datetime(ser, errors="coerce", dayfirst=True)
-        mask_nat = d.isna()
-        if mask_nat.any():
-            d2 = pd.to_datetime(ser[mask_nat], errors="coerce", format="%Y-%m-%d")
-            d = d.where(~mask_nat, d2)
-        return d.dt.date
-    except Exception as e:
-        st.error(f"Une erreur s'est produite dans la fonction _to_date : {e}")
+    ser = _series(s, "string").fillna("").str.strip()
+    if ser.empty:
         return pd.Series([], dtype="object")
+    # 1) tentative flexible dayfirst
+    d = pd.to_datetime(ser, errors="coerce", dayfirst=True)
+    # 2) complète avec ISO si NaT
+    mask_nat = d.isna()
+    if mask_nat.any():
+        d2 = pd.to_datetime(ser[mask_nat], errors="coerce", format="%Y-%m-%d")
+        d = d.where(~mask_nat, d2)
+    return d.dt.date
 
 def _format_phone_e164(phone: str) -> str:
     s = re.sub(r"\D","", str(phone or ""))
@@ -160,34 +147,17 @@ BASE_COLS = [
 def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
     if raw is None: return pd.DataFrame()
     txt = raw.decode("utf-8", errors="ignore").replace("\ufeff","")
-    
-    # 1) Tenter le point-virgule en premier
-    try:
-        df = pd.read_csv(StringIO(txt), sep=';', dtype=str)
-        if df.shape[1] >= 3:
-            print(f"DEBUG: Délimiteur détecté : ';' avec {df.shape[1]} colonnes.")
-            return df
-    except Exception:
-        print("DEBUG: Délimiteur ';' a échoué.")
-        pass
-
-    # 2) Essayer les autres délimiteurs
-    for sep in [",", "\t", "|"]:
+    # essai multi-separateurs
+    for sep in [";", ",", "\t", "|"]:
         try:
             df = pd.read_csv(StringIO(txt), sep=sep, dtype=str)
             if df.shape[1] >= 3:
-                print(f"DEBUG: Délimiteur détecté : '{sep}' avec {df.shape[1]} colonnes.")
                 return df
         except Exception:
             continue
-    
-    print("DEBUG: Aucun délimiteur standard n'a fonctionné. Lecture avec délimiteur par défaut.")
     try:
-        df = pd.read_csv(StringIO(txt), dtype=str)
-        print(f"DEBUG: Lecture par défaut a réussi avec {df.shape[1]} colonnes.")
-        return df
+        return pd.read_csv(StringIO(txt), dtype=str)
     except Exception:
-        print("DEBUG: La lecture par défaut a également échoué.")
         return pd.DataFrame()
 
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
@@ -215,7 +185,7 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
 
     # numériques
     for n in ["prix_brut","commissions","frais_cb","menage","taxes_sejour","nuitees","charges","%","base"]:
-        df[n] = _to_num(df[n])
+        df[n] = _to_num(df[n]).fillna(0.0)
 
     # dates
     df["date_arrivee"] = _to_date(df["date_arrivee"])
@@ -268,7 +238,8 @@ def _load_file_bytes(path: str):
 @st.cache_data
 def charger_donnees():
     raw = _load_file_bytes(CSV_RESERVATIONS)
-    base_df = ensure_schema(_detect_delimiter_and_read(raw)) if raw is not None else pd.DataFrame(columns=BASE_COLS)
+    base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
+    df = ensure_schema(base_df)
 
     rawp = _load_file_bytes(CSV_PLATEFORMES)
     palette = DEFAULT_PALETTE.copy()
@@ -280,7 +251,7 @@ def charger_donnees():
                 palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
         except Exception:
             pass
-    return base_df, palette
+    return df, palette
 
 def sauvegarder_donnees(df: pd.DataFrame) -> bool:
     try:
@@ -340,46 +311,27 @@ def vue_reservations(df, palette):
     if plat != "Toutes":
         data = data[_series(data["plateforme"], "string").str.strip() == str(plat).strip()]
 
-    if data.empty:
-        brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
-    else:
-        try:
-            brut        = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
-            net         = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
-            commissions = float(pd.to_numeric(data["commissions"], errors="coerce").fillna(0).sum())
-            frais_cb    = float(pd.to_numeric(data["frais_cb"], errors="coerce").fillna(0).sum())
-            menage      = float(pd.to_numeric(data["menage"], errors="coerce").fillna(0).sum())
-            taxes       = float(pd.to_numeric(data["taxes_sejour"], errors="coerce").fillna(0).sum())
-            nuits       = int(pd.to_numeric(data["nuitees"], errors="coerce").fillna(0).sum())
-            nb_resas    = len(data)
-        except Exception as e:
-            st.error(f"Une erreur s'est produite dans vue_reservations: {e}")
-            brut, net, commissions, frais_cb, menage, taxes, nuits, nb_resas = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0
+    brut = float(pd.to_numeric(_series(data["prix_brut"]), errors="coerce").fillna(0).sum())
+    net  = float(pd.to_numeric(_series(data["prix_net"]),  errors="coerce").fillna(0).sum())
+    base = float(pd.to_numeric(_series(data["base"]),      errors="coerce").fillna(0).sum())
+    nuits= int(pd.to_numeric(_series(data["nuitees"]),     errors="coerce").fillna(0).sum())
+    adr  = (net/nuits) if nuits>0 else 0.0
+    charges = float(pd.to_numeric(_series(data["charges"]), errors="coerce").fillna(0).sum())
 
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="Revenu Brut Total", value=f"{brut:,.2f} €".replace(",", " "))
-    with col2:
-        st.metric(label="Revenu Net Total", value=f"{net:,.2f} €".replace(",", " "))
-    with col3:
-        st.metric(label="Commissions", value=f"{commissions:,.2f} €".replace(",", " "))
-
-    col4, col5, col6, col7, col8 = st.columns(5)
-    with col4:
-        st.metric(label="Frais CB", value=f"{frais_cb:,.2f} €".replace(",", " "))
-    with col5:
-        st.metric(label="Ménage", value=f"{menage:,.2f} €".replace(",", " "))
-    with col6:
-        st.metric(label="Taxes", value=f"{taxes:,.2f} €".replace(",", " "))
-    with col7:
-        st.metric(label="Total Nuitées", value=f"{nuits} nuits")
-    with col8:
-        st.metric(label="Total Réservations", value=f"{nb_resas} res.")
-
+    html = f"""
+    <div class='glass kpi-line'>
+      <span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
+      <span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
+      <span class='chip'><small>Charges</small><br><strong>{charges:,.2f} €</strong></span>
+      <span class='chip'><small>Base</small><br><strong>{base:,.2f} €</strong></span>
+      <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
+      <span class='chip'><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
+    </div>
+    """.replace(",", " ")
+    st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
+    # tri par date d'arrivée
     order = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").sort_values(ascending=False).index
     data = data.loc[order]
     st.dataframe(data, use_container_width=True)
@@ -547,31 +499,22 @@ def vue_rapport(df, palette):
     data = df[pd.to_numeric(_series(df["AAAA"]), errors="coerce")==year].copy()
     if month!="Tous": data = data[pd.to_numeric(_series(data["MM"]), errors="coerce")==int(month)]
     if plat!="Tous":  data = data[_series(data["plateforme"], "string")==plat]
-    
-    if data.empty:
-        st.warning("Aucune donnée après filtres."); 
-        return
+    if data.empty: st.warning("Aucune donnée après filtres."); return
 
-    try:
-        data["mois"] = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").dt.to_period("M").astype(str)
-        agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
-        total_val = float(pd.to_numeric(_series(agg[metric]), errors="coerce").fillna(0).sum())
+    data["mois"] = pd.to_datetime(_series(data["date_arrivee"]), errors="coerce").dt.to_period("M").astype(str)
+    agg = data.groupby(["mois","plateforme"], as_index=False).agg({metric:"sum"})
+    total_val = float(pd.to_numeric(_series(agg[metric]), errors="coerce").fillna(0).sum())
 
-        st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
-        st.dataframe(agg, use_container_width=True)
-    
-        chart = alt.Chart(agg).mark_bar().encode(
-            x="mois:N",
-            y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
-            color="plateforme:N",
-            tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
-        )
-        st.altair_chart(chart.properties(height=420), use_container_width=True)
+    st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
+    st.dataframe(agg, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Une erreur s'est produite dans vue_rapport : {e}")
-        st.stop()
-
+    chart = alt.Chart(agg).mark_bar().encode(
+        x="mois:N",
+        y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
+        color="plateforme:N",
+        tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+    )
+    st.altair_chart(chart.properties(height=420), use_container_width=True)
 
 def _copy_block(payload: str, height=180, key: str="copy"):
     st.text_area("Aperçu à copier", payload, height=height, key=f"ta_{key}")
@@ -759,7 +702,7 @@ def admin_sidebar(df):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
     st.sidebar.download_button(
-        "📥 Télécharger CSV",
+        "Télécharger CSV",
         data=ensure_schema(df).to_csv(sep=";", index=False).encode("utf-8"),
         file_name=CSV_RESERVATIONS, mime="text/csv"
     )
@@ -788,6 +731,7 @@ def admin_sidebar(df):
 
 # ============================== 5) MAIN ==============================
 def main():
+    # Mode sombre par défaut (lisible PC), toggle pour mode clair
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
