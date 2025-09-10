@@ -161,17 +161,34 @@ BASE_COLS = [
 def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
     if raw is None: return pd.DataFrame()
     txt = raw.decode("utf-8", errors="ignore").replace("\ufeff","")
-    # essai multi-separateurs
-    for sep in [";", ",", "\t", "|"]:
+    
+    # 1) Tenter le point-virgule en premier
+    try:
+        df = pd.read_csv(StringIO(txt), sep=';', dtype=str)
+        if df.shape[1] >= 3:
+            print(f"DEBUG: Délimiteur détecté : ';' avec {df.shape[1]} colonnes.")
+            return df
+    except Exception:
+        print("DEBUG: Délimiteur ';' a échoué.")
+        pass
+
+    # 2) Essayer les autres délimiteurs
+    for sep in [",", "\t", "|"]:
         try:
             df = pd.read_csv(StringIO(txt), sep=sep, dtype=str)
             if df.shape[1] >= 3:
+                print(f"DEBUG: Délimiteur détecté : '{sep}' avec {df.shape[1]} colonnes.")
                 return df
         except Exception:
             continue
+    
+    print("DEBUG: Aucun délimiteur standard n'a fonctionné. Lecture avec délimiteur par défaut.")
     try:
-        return pd.read_csv(StringIO(txt), dtype=str)
+        df = pd.read_csv(StringIO(txt), dtype=str)
+        print(f"DEBUG: Lecture par défaut a réussi avec {df.shape[1]} colonnes.")
+        return df
     except Exception:
+        print("DEBUG: La lecture par défaut a également échoué.")
         return pd.DataFrame()
 
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
