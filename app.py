@@ -693,6 +693,8 @@ def vue_clients(df, palette):
     clients = clients.sort_values(by="nom_client", kind="stable")
     st.dataframe(clients, use_container_width=True)
 
+
+
 def vue_rapport(df, palette):
     import pandas as pd
     import altair as alt
