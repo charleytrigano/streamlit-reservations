@@ -839,19 +839,15 @@ def main():
     df, palette_loaded = charger_donnees()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-    }
+   pages = {
+    "🏠 Accueil": vue_accueil,
+    "📋 Réservations": vue_reservations,
+    "📅 Calendrier": vue_calendrier,
+    "👥 Clients": vue_clients,
+    "📆 Export ICS": vue_export_ics,
+    "📊 Rapport": vue_rapport,
+    "🆔 ID": vue_id,
+}
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
     admin_sidebar(df)
