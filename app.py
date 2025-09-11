@@ -9,6 +9,162 @@ from calendar import monthrange, Calendar
 from urllib.parse import quote
 from io import StringIO
 
+# ===== ICS HELPERS (safe) =====
+from datetime import datetime, date
+
+def _safe_to_date(x):
+    """Accepte str/np.nan/date/datetime -> date ou None (ne jette jamais d'exception)."""
+    try:
+        if isinstance(x, date) and not isinstance(x, datetime):
+            return x
+        if isinstance(x, datetime):
+            return x.date()
+        # pandas to_datetime gère pas mal de formats (JJ/MM/AAAA, AAAA-MM-JJ…)
+        d = pd.to_datetime(x, errors="coerce", dayfirst=True)
+        if pd.isna(d):
+            return None
+        return d.date()
+    except Exception:
+        return None
+
+def _ics_uid_for_row(row):
+    # UID stable = sha1(res_id + nom + tel) @domaine
+    rid = str(row.get("res_id", "") or "")
+    nom = str(row.get("nom_client", "") or "")
+    tel = str(row.get("telephone", "") or "")
+    base = (rid + nom + tel).strip()
+    if not base:
+        base = str(uuid.uuid4())
+    return hashlib.sha1(base.encode("utf-8")).hexdigest() + "@villa-tobias"
+
+def _ics_escape(val: str) -> str:
+    if val is None:
+        return ""
+    s = str(val)
+    # Échapper les caractères réservés ICS
+    s = s.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+    return s
+
+def build_ics_from_df(df: pd.DataFrame) -> str:
+    """
+    Construit un .ics (VCALENDAR) à partir d’un DF normalisé contenant :
+    - date_arrivee, date_depart (dates)
+    - nom_client, telephone, plateforme, nuitees, prix_brut, res_id, ical_uid
+    Ne lève pas d’exception : ignore poliment les lignes invalides.
+    """
+    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+    def _fmt_date(d: date) -> str:
+        return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Villa Tobias//Reservations//FR",
+        "CALSCALE:GREGORIAN",
+    ]
+
+    if df is None or len(df) == 0:
+        lines.append("END:VCALENDAR")
+        return "\r\n".join(lines) + "\r\n"
+
+    # On ne suppose rien du type des colonnes.
+    for _, r in df.iterrows():
+        da = _safe_to_date(r.get("date_arrivee"))
+        dd = _safe_to_date(r.get("date_depart"))
+        if not (isinstance(da, date) and isinstance(dd, date)):
+            continue  # on saute proprement
+
+        uid = str(r.get("ical_uid") or "").strip() or _ics_uid_for_row(r)
+        nom = r.get("nom_client", "Sans nom")
+        plat = r.get("plateforme", "")
+        summary = f"Villa Tobias — {nom}"
+        if str(plat).strip():
+            summary += f" ({plat})"
+
+        try:
+            nuitees = int(pd.to_numeric(r.get("nuitees"), errors="coerce") or 0)
+        except Exception:
+            nuitees = 0
+
+        try:
+            brut = float(pd.to_numeric(r.get("prix_brut"), errors="coerce") or 0.0)
+        except Exception:
+            brut = 0.0
+
+        desc = "\n".join([
+            f"Client: {nom}",
+            f"Téléphone: {r.get('telephone','')}",
+            f"Nuitées: {nuitees}",
+            f"Prix brut: {brut:.2f} €",
+            f"res_id: {r.get('res_id','')}",
+        ])
+
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{_ics_escape(uid)}",
+            f"DTSTAMP:{nowstamp}",
+            f"DTSTART;VALUE=DATE:{_fmt_date(da)}",
+            f"DTEND;VALUE=DATE:{_fmt_date(dd)}",  # journée de départ non incluse (standard)
+            f"SUMMARY:{_ics_escape(summary)}",
+            f"DESCRIPTION:{_ics_escape(desc)}",
+            "TRANSP:OPAQUE",
+            "END:VEVENT",
+        ]
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
+
+# ===== PAGE : Export ICS =====
+def vue_export_ics(df: pd.DataFrame, palette: dict):
+    st.header("📆 Export ICS (Google Calendar)")
+
+    if df is None or df.empty:
+        st.info("Aucune réservation à exporter.")
+        return
+
+    # Années/plateformes (ultra défensif)
+    years_ser = pd.to_numeric(df.get("AAAA", pd.Series(dtype="float64")), errors="coerce")
+    years = sorted(years_ser.dropna().astype(int).unique().tolist(), reverse=True) if not years_ser.dropna().empty else []
+    plats = ["Tous"] + sorted(
+        df.get("plateforme", pd.Series(dtype="object"))
+          .astype(str)
+          .str.strip()
+          .replace({"": np.nan, "nan": np.nan})
+          .dropna()
+          .unique()
+          .tolist()
+    )
+
+    col1, col2 = st.columns(2)
+    if years:
+        year = col1.selectbox("Année (arrivées)", years, index=0)
+        data = df[pd.to_numeric(df["AAAA"], errors="coerce").fillna(-1).astype(int) == int(year)].copy()
+    else:
+        year = None
+        data = df.copy()
+
+    plat = col2.selectbox("Plateforme", plats, index=0)
+    if plat != "Tous":
+        data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+
+    # Génération de UID manquants (safe, en mémoire uniquement)
+    if "ical_uid" not in data.columns:
+        data["ical_uid"] = None
+    miss_uid = data["ical_uid"].astype(str).str.strip().isin(["", "nan", "None"])
+    if miss_uid.any():
+        data.loc[miss_uid, "ical_uid"] = data.loc[miss_uid].apply(_ics_uid_for_row, axis=1)
+
+    # Construction .ics
+    ics_blob = build_ics_from_df(data)
+    fname = f"reservations_{year if year else 'toutes'}.ics"
+    st.download_button("📥 Télécharger le fichier ICS", data=ics_blob.encode("utf-8"),
+                       file_name=fname, mime="text/calendar")
+
+    with st.expander("Aperçu du contenu ICS"):
+        st.code(ics_blob[:4000] + ("...\n" if len(ics_blob) > 4000 else ""), language="text")
+
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
 
@@ -299,6 +455,7 @@ def main():
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
         "👥 Clients": vue_clients,
+        "📆 Export ICS": vue_export_ics,
     }
     choice = st.sidebar.radio("Navigation", list(pages.keys()))
     pages[choice](df, palette)
