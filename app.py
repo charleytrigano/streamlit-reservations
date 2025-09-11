@@ -264,6 +264,105 @@ def vue_export_ics(df, palette):
     ics = "\r\n".join(lines)
     st.download_button("📥 Télécharger ICS", data=ics, file_name=f"reservations_{year}.ics", mime="text/calendar")
 
+
+# ============================== CALENDRIER (grille mensuelle) ==============================
+def vue_calendrier(df, palette):
+    st.header("📅 Calendrier (grille mensuelle)")
+
+    # Sécurité: dates -> date
+    dfx = df.copy()
+    dfx["date_arrivee"] = pd.to_datetime(dfx.get("date_arrivee"), errors="coerce").dt.date
+    dfx["date_depart"]  = pd.to_datetime(dfx.get("date_depart"),  errors="coerce").dt.date
+    dfx = dfx.dropna(subset=["date_arrivee", "date_depart"])
+
+    if dfx.empty:
+        st.info("Aucune réservation à afficher.")
+        return
+
+    # Choix année / mois
+    years = sorted({d.year for d in dfx["date_arrivee"] if isinstance(d, date)}, reverse=True)
+    today = date.today()
+    annee = st.selectbox("Année", options=years if years else [today.year], index=0)
+    mois  = st.selectbox("Mois", options=list(range(1, 13)), index=today.month - 1)
+
+    # En-têtes de jours
+    st.markdown(
+        "<div style='display:grid;grid-template-columns:repeat(7,1fr);font-weight:700;opacity:.8;margin-top:10px'>"
+        "<div>Lun</div><div>Mar</div><div>Mer</div><div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Petite fonction qui retourne les résas couvrant un jour donné (intervalle [arrivée, départ) )
+    def resas_du_jour(d):
+        m = (dfx["date_arrivee"] <= d) & (dfx["date_depart"] > d)
+        return dfx[m]
+
+    # Grille mensuelle
+    cal = Calendar(firstweekday=0)  # 0 = lundi
+    html = ["<div style='display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:8px'>"]
+    for week in cal.monthdatescalendar(annee, mois):
+        for d in week:
+            outside = (d.month != mois)
+            cell_cls = "opacity:.45;" if outside else ""
+            cell = (
+                f"<div style='border:1px solid rgba(17,24,39,.15);border-radius:10px;min-height:110px;"
+                f"padding:8px;position:relative;overflow:hidden;background:rgba(255,255,255,.03);{cell_cls}'>"
+                f"<div style='position:absolute;top:6px;right:8px;font-weight:700;font-size:.9rem;opacity:.7'>{d.day}</div>"
+            )
+            if not outside:
+                rs = resas_du_jour(d)
+                if not rs.empty:
+                    for _, r in rs.iterrows():
+                        color = palette.get(str(r.get("plateforme") or ""), "#888")
+                        name  = str(r.get("nom_client") or "")[:22]
+                        cell += (
+                            f"<div title='{r.get('nom_client','')}' "
+                            f"style='margin-top:22px;padding:4px 6px;border-radius:6px;font-size:.85rem;"
+                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;background:{color}'>"
+                            f"{name}</div>"
+                        )
+            cell += "</div>"
+            html.append(cell)
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+    # Détail du mois sélectionné + totaux
+    st.markdown("---")
+    st.subheader("Détail du mois sélectionné")
+    debut_mois = date(annee, mois, 1)
+    fin_mois   = date(annee, mois, monthrange(annee, mois)[1])
+
+    rows = dfx[(dfx["date_arrivee"] <= fin_mois) & (dfx["date_depart"] > debut_mois)].copy()
+    if rows.empty:
+        st.info("Aucune réservation sur ce mois.")
+        return
+
+    # Filtre plateforme
+    all_plats = sorted(rows["plateforme"].dropna().astype(str).unique().tolist())
+    plat = st.selectbox("Filtrer par plateforme", ["Toutes"] + all_plats, index=0, key="cal_plat")
+    if plat != "Toutes":
+        rows = rows[rows["plateforme"].astype(str) == plat]
+
+    # Totaux
+    brut = float(pd.to_numeric(rows.get("prix_brut"), errors="coerce").fillna(0).sum())
+    net  = float(pd.to_numeric(rows.get("prix_net"),  errors="coerce").fillna(0).sum())
+    nuits= int(pd.to_numeric(rows.get("nuitees"),    errors="coerce").fillna(0).sum())
+    kpi_html = (
+        "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
+        f"<span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>"
+        f"<span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>"
+        f"<span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>"
+        "</div>"
+    ).replace(",", " ")
+    st.markdown(kpi_html, unsafe_allow_html=True)
+
+    # Tableau
+    st.dataframe(
+        rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]],
+        use_container_width=True,
+    )
+
 # ============================== ADMIN ==============================
 def admin_sidebar(df):
     st.sidebar.markdown("---")
@@ -355,26 +454,36 @@ def vue_calendrier(df, palette):
         st.markdown(html, unsafe_allow_html=True)
         st.dataframe(rows[["nom_client","plateforme","date_arrivee","date_depart","nuitees","paye"]], use_container_width=True)
 
-# ====================main ==≠=======
+
+# ============================== MAIN ==============================
 def main():
+    # Thème clair/sombre
     try:
-        mode_clair = st.sidebar.toggle("🌓 Mode clair", value=False)
-    except:
-        mode_clair = False
-    apply_style(light=mode_clair)
+        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
+    except Exception:
+        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
+    apply_style(light=bool(mode_clair))
 
     st.title("✨ Villa Tobias — Gestion des Réservations")
-    df, palette = charger_donnees()
 
+    # Chargement des données
+    df, palette_loaded = charger_donnees()
+    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
+
+    # Navigation
     pages = {
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
         "👥 Clients": vue_clients,
+        "📅 Calendrier": vue_calendrier,   # ⬅️ le calendrier est bien ici
         "📆 Export ICS": vue_export_ics,
     }
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
+
+    # Panneau admin
     admin_sidebar(df)
+
 
 if __name__ == "__main__":
     main()
