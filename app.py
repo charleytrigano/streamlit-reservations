@@ -693,6 +693,67 @@ def vue_clients(df, palette):
     clients = clients.sort_values(by="nom_client", kind="stable")
     st.dataframe(clients, use_container_width=True)
 
+def vue_rapport(df, palette):
+    import pandas as pd
+    import altair as alt
+    st.header("📊 Rapport")
+
+    if df is None or df.empty:
+        st.info("Aucune donnée disponible.")
+        return
+
+    # Normalisations ultra-sécurisées
+    dfx = df.copy()
+    dfx["date_arrivee"] = pd.to_datetime(dfx.get("date_arrivee"), errors="coerce", dayfirst=True)
+    dfx["plateforme"]   = dfx.get("plateforme", "").astype(str).str.strip()
+    for col in ["prix_brut","prix_net","menage","nuitees"]:
+        dfx[col] = pd.to_numeric(dfx.get(col), errors="coerce")
+
+    # Filtres
+    years = sorted(dfx["date_arrivee"].dt.year.dropna().astype(int).unique(), reverse=True)
+    year  = st.selectbox("Année", ["Toutes"] + years, index=0)
+    months = ["Tous"] + list(range(1, 12+1))
+    month = st.selectbox("Mois", months, index=0)
+    plats = ["Tous"] + sorted([p for p in dfx["plateforme"].dropna().unique().tolist() if p])
+    plat  = st.selectbox("Plateforme", plats, index=0)
+    metric = st.selectbox("Métrique", ["prix_brut","prix_net","menage","nuitees"], index=0)
+
+    # Application filtres
+    data = dfx.copy()
+    if year != "Toutes":
+        data = data[data["date_arrivee"].dt.year == int(year)]
+    if month != "Tous":
+        data = data[data["date_arrivee"].dt.month == int(month)]
+    if plat != "Tous":
+        data = data[data["plateforme"] == plat]
+
+    if data.empty or data[metric].dropna().empty:
+        st.warning("Aucune donnée après application des filtres.")
+        return
+
+    data["mois"] = data["date_arrivee"].dt.to_period("M").astype(str)
+    agg = (data.groupby(["mois","plateforme"], as_index=False)
+               .agg({metric: "sum"})
+               .sort_values(["mois","plateforme"]))
+
+    total_val = float(pd.to_numeric(agg[metric], errors="coerce").fillna(0).sum())
+    st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
+
+    # Graphique
+    try:
+        chart = alt.Chart(agg).mark_bar().encode(
+            x="mois:N",
+            y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
+            color="plateforme:N",
+            tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+        ).properties(height=420)
+        st.altair_chart(chart, use_container_width=True)
+    except Exception as e:
+        st.info(f"Graphique indisponible : {e}")
+
+    # Tableau
+    st.dataframe(agg, use_container_width=True)
+
 # ================ ADMIN (restauration CSV/XLSX + cache) ================
 def admin_sidebar(df: pd.DataFrame):
     st.sidebar.markdown("---")
