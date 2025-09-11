@@ -285,6 +285,76 @@ def admin_sidebar(df):
     if st.sidebar.button("🧹 Vider le cache"):
         st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
 
+
+from calendar import Calendar, monthrange
+
+def vue_calendrier(df, palette):
+    st.header("📅 Calendrier (grille mensuelle)")
+
+    dfv = df.dropna(subset=["date_arrivee", "date_depart"]).copy()
+    if dfv.empty:
+        st.info("Aucune réservation à afficher.")
+        return
+
+    today = date.today()
+    years = sorted(pd.to_datetime(dfv["date_arrivee"], errors="coerce").dt.year.dropna().astype(int).unique(), reverse=True)
+    annee = st.selectbox("Année", options=years if years else [today.year], index=0)
+    mois  = st.selectbox("Mois", options=list(range(1,13)), index=today.month-1)
+
+    # Afficher en-tête du calendrier
+    st.markdown("<div class='cal-header'><div>Lun</div><div>Mar</div><div>Mer</div><div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div></div>", unsafe_allow_html=True)
+
+    def day_resas(d):
+        mask = (dfv['date_arrivee'] <= d) & (dfv['date_depart'] > d)
+        return dfv[mask]
+
+    cal = Calendar(firstweekday=0)  # lundi
+    html = ["<div class='cal-grid'>"]
+    for week in cal.monthdatescalendar(annee, mois):
+        for d in week:
+            outside = (d.month != mois)
+            classes = "cal-cell outside" if outside else "cal-cell"
+            cell = f"<div class='{classes}'>"
+            cell += f"<div class='cal-date'>{d.day}</div>"
+            if not outside:
+                rs = day_resas(d)
+                if not rs.empty:
+                    for _, r in rs.iterrows():
+                        color = palette.get(r.get('plateforme'), '#888')
+                        name  = str(r.get('nom_client') or '')[:20]
+                        cell += f"<div class='resa-pill' style='background:{color}' title='{r.get('nom_client','')}'>{name}</div>"
+            cell += "</div>"
+            html.append(cell)
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+    # Détail du mois
+    st.markdown("---")
+    st.subheader("Détail du mois sélectionné")
+    debut_mois = date(annee, mois, 1)
+    fin_mois = date(annee, mois, monthrange(annee, mois)[1])
+    rows = dfv[(dfv['date_arrivee'] <= fin_mois) & (dfv['date_depart'] > debut_mois)].copy()
+    if rows.empty:
+        st.info("Aucune réservation sur ce mois.")
+    else:
+        plats = ["Toutes"] + sorted(rows["plateforme"].dropna().unique().tolist())
+        plat = st.selectbox("Filtrer par plateforme", plats, index=0, key="cal_plat")
+        if plat != "Toutes":
+            rows = rows[rows["plateforme"] == plat]
+
+        brut = float(pd.to_numeric(rows["prix_brut"], errors="coerce").fillna(0).sum())
+        net  = float(pd.to_numeric(rows["prix_net"],  errors="coerce").fillna(0).sum())
+        nuits= int(pd.to_numeric(rows["nuitees"],    errors="coerce").fillna(0).sum())
+        html = f"""
+        <div class='glass kpi-line'>
+          <span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
+          <span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
+          <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
+        </div>
+        """.replace(",", " ")
+        st.markdown(html, unsafe_allow_html=True)
+        st.dataframe(rows[["nom_client","plateforme","date_arrivee","date_depart","nuitees","paye"]], use_container_width=True)
+
 # ============================== MAIN ==============================
 def main():
     try:
