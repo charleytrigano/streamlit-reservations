@@ -783,6 +783,7 @@ def main():
         "✏️ Modifier / Supprimer": vue_modifier,
         "🎨 Plateformes": vue_plateformes,
         "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,
         "✉️ SMS": vue_sms,
         "📆 Export ICS": vue_export_ics,
         "📝 Google Sheet": vue_google_sheet,
