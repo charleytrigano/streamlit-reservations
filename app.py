@@ -510,6 +510,80 @@ def _copy_button(label: str, payload: str, key: str):
     st.text_area("Aperçu", payload, height=200, key=f"ta_{key}")
     st.caption("Sélectionnez puis copiez (Ctrl/Cmd+C).")
 
+def vue_rapport(df, palette):
+    st.header("📊 Rapport")
+
+    if df is None or df.empty:
+        st.info("Aucune donnée."); 
+        return
+
+    # Base dates + filtres
+    dfa = df.copy()
+    dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
+
+    years_avail  = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    months_avail = list(range(1, 12+1))
+    plats_avail  = sorted(
+        dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
+    )
+
+    c1, c2, c3, c4 = st.columns([1,1,1,1.2])
+    year   = c1.selectbox("Année", ["Toutes"] + years_avail, index=0)
+    month  = c2.selectbox("Mois", ["Tous"] + months_avail, index=0)
+    plat   = c3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0)
+    metric = c4.selectbox("Métrique", ["prix_brut","prix_net","base","charges","menage","taxes_sejour","nuitees"], index=1)
+
+    data = dfa.copy()
+    if year != "Toutes":
+        data = data[data["date_arrivee_dt"].dt.year == int(year)]
+    if month != "Tous":
+        data = data[data["date_arrivee_dt"].dt.month == int(month)]
+    if plat != "Toutes":
+        data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+
+    if data.empty:
+        st.warning("Aucune donnée après filtres.")
+        return
+
+    # Colonne "mois" (YYYY-MM) pour agrégation
+    data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
+
+    # Total global (affiché en haut)
+    total_val = float(pd.to_numeric(data[metric], errors="coerce").fillna(0).sum())
+    st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
+
+    # Agrégations utiles : par mois, puis par mois+plateforme
+    agg_mois = (
+        data.groupby("mois", as_index=False)[metric]
+            .sum()
+            .sort_values("mois")
+    )
+
+    agg_mois_plat = (
+        data.groupby(["mois","plateforme"], as_index=False)[metric]
+            .sum()
+            .sort_values(["mois","plateforme"])
+    )
+
+    # Affichage tableaux + sous-totaux
+    with st.expander("Détail par mois", expanded=True):
+        st.dataframe(agg_mois, use_container_width=True)
+
+    with st.expander("Détail par mois et par plateforme", expanded=False):
+        st.dataframe(agg_mois_plat, use_container_width=True)
+
+    # Visualisation (barres empilées par plateforme)
+    try:
+        chart = alt.Chart(agg_mois_plat).mark_bar().encode(
+            x=alt.X("mois:N", sort=None, title="Mois"),
+            y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
+            color=alt.Color("plateforme:N", title="Plateforme"),
+            tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+        )
+        st.altair_chart(chart.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique indisponible : {e}")
+
 def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
 
@@ -798,18 +872,23 @@ def main():
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
     pages = {
+       
+        
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "✏️ Modifier / Supprimer": vue_modifier,
         "🎨 Plateformes": vue_plateformes,
         "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,          
         "✉️ SMS": vue_sms,
         "📆 Export ICS": vue_export_ics,
         "📝 Google Sheet": vue_google_sheet,
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
     }
+        
+    
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
     admin_sidebar(df)
