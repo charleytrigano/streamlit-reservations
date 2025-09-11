@@ -258,8 +258,7 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         st.error(f"Erreur de sauvegarde CSV : {e}")
         return False
 
-# ============================== VUES ==============================
-def vue_accueil(df, palette):
+# ============================= VUES ============================.                  def vue_accueil(df, palette):
     st.header("🏠 Accueil")
     today = date.today()
     st.write(f"**Aujourd'hui : {today.strftime('%d/%m/%Y')}**")
