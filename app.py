@@ -355,7 +355,7 @@ def vue_calendrier(df, palette):
         st.markdown(html, unsafe_allow_html=True)
         st.dataframe(rows[["nom_client","plateforme","date_arrivee","date_depart","nuitees","paye"]], use_container_width=True)
 
-# ============================== MAIN ==============================
+===========================
 def main():
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair", value=False)
