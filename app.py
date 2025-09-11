@@ -118,8 +118,6 @@ def _phone_e164(phone: str) -> str:
     return "+"+s
 
 # ============================== VUES ==============================
-
-
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
     today = date.today()
