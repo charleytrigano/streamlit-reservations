@@ -825,6 +825,29 @@ def admin_sidebar(df: pd.DataFrame):
         csv_bytes = b""
     st.sidebar.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
 
+
+# --- Export XLSX ---
+    try:
+        out_xlsx = ensure_schema(df).copy()
+        for col in ["date_arrivee","date_depart"]:
+            out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
+        xlsx_bytes, xlsx_err = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
+    except Exception as e:
+        xlsx_bytes, xlsx_err = None, e
+
+    st.sidebar.download_button(
+        "⬇️ Télécharger XLSX",
+        data=xlsx_bytes or b"",
+        file_name="reservations.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=(xlsx_bytes is None),
+        help="Génère un fichier Excel (.xlsx) — nécessite openpyxl"
+    )
+
+    if xlsx_bytes is None and xlsx_err:
+        st.sidebar.caption(
+            "Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`)."
+        )
     # Restauration CSV/XLSX
     up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="restore_uploader")
 
