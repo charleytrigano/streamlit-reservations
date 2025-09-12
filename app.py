@@ -260,6 +260,15 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         st.error(f"Erreur de sauvegarde CSV : {e}")
         return False
 
+def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
+    """Retourne un classeur XLSX en mémoire (bytes). Nécessite openpyxl."""
+    buf = BytesIO()
+    try:
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+        return buf.getvalue(), None
+    except Exception as e:
+        return None, e
 def _format_phone_e164(phone: str) -> str:
     s = re.sub(r"\D","", str(phone or ""))
     if not s: return ""
