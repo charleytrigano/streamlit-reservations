@@ -7,7 +7,7 @@ import re, uuid, hashlib
 from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
-from io import StringIO
+from io import StringIO, BytesIO
 
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
