@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
 from io import StringIO, BytesIO
-from zoneinfo import ZoneInfo  # ✅ pour “Aujourd’hui” en Europe/Paris
 
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
@@ -23,7 +22,6 @@ DEFAULT_PALETTE = {
     "Autre":   "#f59e0b",
 }
 
-# Liens Google (si tu les utilises)
 FORM_SHORT_URL = "https://urlr.me/kZuH94"
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
@@ -56,7 +54,6 @@ def apply_style(light: bool):
           }}
           .kpi-line strong {{ font-size:1.05rem; }}
 
-          /* Calendar grid */
           .cal-grid {{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; margin-top:8px; }}
           .cal-cell {{
             border:1px solid {border}; border-radius:10px; min-height:110px; padding:8px;
@@ -87,7 +84,6 @@ BASE_COLS = [
 ]
 
 def _as_series(x, index=None):
-    """Force en Series alignée à un index si possible."""
     if isinstance(x, pd.Series):
         return x
     if isinstance(x, (list, tuple, np.ndarray)):
@@ -95,7 +91,6 @@ def _as_series(x, index=None):
         if index is not None and len(index) == len(s):
             s.index = index
         return s
-    # scalaire -> réplication
     if index is None:
         return pd.Series([x])
     return pd.Series([x]*len(index), index=index)
@@ -118,11 +113,7 @@ def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
 
 def _to_bool_series(s: pd.Series) -> pd.Series:
     s = _as_series(s)
-    out = (
-        s.astype(str)
-         .str.strip().str.lower()
-         .isin(["true","1","oui","vrai","yes","y","t"])
-    )
+    out = s.astype(str).str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
     return out.fillna(False).astype(bool)
 
 def _to_num(s: pd.Series) -> pd.Series:
@@ -139,7 +130,6 @@ def _to_num(s: pd.Series) -> pd.Series:
 def _to_date(s: pd.Series) -> pd.Series:
     s = _as_series(s)
     d = pd.to_datetime(s, errors="coerce", dayfirst=True)
-    # si beaucoup de NaT, retente en YMD
     if len(d) and d.isna().mean() > 0.5:
         d2 = pd.to_datetime(s, errors="coerce", format="%Y-%m-%d")
         d = d.fillna(d2)
@@ -148,6 +138,7 @@ def _to_date(s: pd.Series) -> pd.Series:
 def build_stable_uid(row) -> str:
     base = f"{row.get('res_id','')}{row.get('nom_client','')}{row.get('telephone','')}"
     return hashlib.sha1(base.encode()).hexdigest() + "@villa-tobias"
+
 
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     if df_in is None or len(df_in) == 0:
@@ -169,7 +160,7 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = pd.Series([None]*len(df), index=df.index)
 
-    # Garantir Series alignées
+    # Harmoniser en Series alignées
     for c in df.columns:
         df[c] = _as_series(df[c], index=df.index)
 
@@ -193,11 +184,11 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
         df.loc[mask_ok, "nuitees"] = (dd - da).dt.days.clip(lower=0).astype(float)
 
     # Prix net / charges / base / %
-    prix_brut = _to_num(df["prix_brut"])
+    prix_brut   = _to_num(df["prix_brut"])
     commissions = _to_num(df["commissions"])
-    frais_cb = _to_num(df["frais_cb"])
-    menage = _to_num(df["menage"])
-    taxes = _to_num(df["taxes_sejour"])
+    frais_cb    = _to_num(df["frais_cb"])
+    menage      = _to_num(df["menage"])
+    taxes       = _to_num(df["taxes_sejour"])
 
     df["prix_net"] = (prix_brut - commissions - frais_cb).fillna(0.0)
     df["charges"]  = (prix_brut - df["prix_net"]).fillna(0.0)
@@ -262,7 +253,6 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         return False
 
 def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
-    """Retourne un classeur XLSX en mémoire (bytes). Nécessite openpyxl."""
     buf = BytesIO()
     try:
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -281,42 +271,34 @@ def _format_phone_e164(phone: str) -> str:
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
+    today = date.today()
+    st.write(f"**Aujourd'hui : {today.strftime('%d/%m/%Y')}**")
 
-    # Aujourd'hui en Europe/Paris (évite le décalage UTC)
-    today_paris = datetime.now(ZoneInfo("Europe/Paris")).date()
-    jour = st.date_input("Jour à afficher (Europe/Paris)", value=today_paris, key="accueil_jour")
+    dfv = df.copy()
+    dfv["date_arrivee"] = _to_date(dfv["date_arrivee"])
+    dfv["date_depart"]  = _to_date(dfv["date_depart"])
 
-    dfx = df.copy()
-    dfx["date_arrivee"] = _to_date(dfx["date_arrivee"])
-    dfx["date_depart"]  = _to_date(dfx["date_depart"])
+    # 🔵 Arrivées J0 (aujourd’hui)
+    arr = dfv[dfv["date_arrivee"] == today][["nom_client","telephone","plateforme"]].copy()
+    # 🔶 Arrivées J+1 (demain)
+    tomorrow = today + timedelta(days=1)
+    arr_plus1 = dfv[dfv["date_arrivee"] == tomorrow][["nom_client","telephone","plateforme"]].copy()
+    # 🔴 Départs J0 (aujourd’hui)
+    dep = dfv[dfv["date_depart"]  == today][["nom_client","telephone","plateforme"]].copy()
 
-    arr = dfx.loc[dfx["date_arrivee"] == jour, ["nom_client","telephone","plateforme"]].copy()
-    dep = dfx.loc[dfx["date_depart"]  == jour, ["nom_client","telephone","plateforme"]].copy()
-
-    st.write(f"**Jour affiché : {jour.strftime('%d/%m/%Y')}**")
-
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("🟢 Arrivées du jour")
-        if arr.empty:
-            st.info("Aucune arrivée.")
-        else:
-            for c in ["nom_client","telephone","plateforme"]:
-                arr[c] = arr[c].astype(str).str.strip()
-            st.dataframe(arr, use_container_width=True)
-
+        if arr.empty: st.info("Aucune arrivée.")
+        else: st.dataframe(arr, use_container_width=True)
     with c2:
+        st.subheader("🔶 Arrivées J+1 (demain)")
+        if arr_plus1.empty: st.info("Aucune arrivée demain.")
+        else: st.dataframe(arr_plus1, use_container_width=True)
+    with c3:
         st.subheader("🔴 Départs du jour")
-        if dep.empty:
-            st.info("Aucun départ.")
-        else:
-            for c in ["nom_client","telephone","plateforme"]:
-                dep[c] = dep[c].astype(str).str.strip()
-            st.dataframe(dep, use_container_width=True)
-
-    with st.expander("🔧 Debug dates (optionnel)"):
-        st.caption("Vérifie que les dates sont bien parsées (pas de NaT).")
-        st.dataframe(dfx[["date_arrivee", "date_depart"]].head(15))
+        if dep.empty: st.info("Aucun départ.")
+        else: st.dataframe(dep, use_container_width=True)
 
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
@@ -489,7 +471,7 @@ def vue_calendrier(df, palette):
         mask = (dfv['date_arrivee'] <= d) & (dfv['date_depart'] > d)
         return dfv[mask]
 
-    cal = Calendar(firstweekday=0)  # 0 = lundi
+    cal = Calendar(firstweekday=0)
     html = ["<div class='cal-grid'>"]
     for week in cal.monthdatescalendar(annee, mois):
         for d in week:
@@ -542,10 +524,9 @@ def vue_rapport(df, palette):
     st.header("📊 Rapport")
 
     if df is None or df.empty:
-        st.info("Aucune donnée."); 
+        st.info("Aucune donnée.")
         return
 
-    # Base dates + filtres
     dfa = df.copy()
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
 
@@ -573,34 +554,19 @@ def vue_rapport(df, palette):
         st.warning("Aucune donnée après filtres.")
         return
 
-    # Colonne "mois" (YYYY-MM) pour agrégation
     data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
 
-    # Total global (affiché en haut)
     total_val = float(pd.to_numeric(data[metric], errors="coerce").fillna(0).sum())
     st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
 
-    # Agrégations utiles : par mois, puis par mois+plateforme
-    agg_mois = (
-        data.groupby("mois", as_index=False)[metric]
-            .sum()
-            .sort_values("mois")
-    )
+    agg_mois = data.groupby("mois", as_index=False)[metric].sum().sort_values("mois")
+    agg_mois_plat = data.groupby(["mois","plateforme"], as_index=False)[metric].sum().sort_values(["mois","plateforme"])
 
-    agg_mois_plat = (
-        data.groupby(["mois","plateforme"], as_index=False)[metric]
-            .sum()
-            .sort_values(["mois","plateforme"])
-    )
-
-    # Affichage tableaux + sous-totaux
     with st.expander("Détail par mois", expanded=True):
         st.dataframe(agg_mois, use_container_width=True)
-
     with st.expander("Détail par mois et par plateforme", expanded=False):
         st.dataframe(agg_mois_plat, use_container_width=True)
 
-    # Visualisation (barres empilées par plateforme)
     try:
         chart = alt.Chart(agg_mois_plat).mark_bar().encode(
             x=alt.X("mois:N", sort=None, title="Mois"),
@@ -640,24 +606,14 @@ def vue_sms(df, palette):
                 f"Nuitées : {int(pd.to_numeric(r.get('nuitees'), errors='coerce') or 0)}\n\n"
                 f"Bonjour {r.get('nom_client')}\n"
                 "Bienvenue chez nous ! \n\n "
-                "Nous sommes ravis de vous accueillir bientôt à Nice.Aussi afin d'organiser au mieuw votre reception nous vous demandons de "
-                "demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant : \n"
+                "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, "
+                "merci de remplir la fiche suivante : \n"
                 f"{FORM_SHORT_URL}\n\n"
-                "Un parking est à votre disposition sur place.\n\n"
-                "Le check-in se fait à partir de 14:00 h et le check-out avant 11:00 h. \n\n"
-                "Vous trouverez des consignes à bagages dans chaque quartier, à Nice. \n\n"
-                "Nous vous souhaitons un excellent voyage et nous nous rejouissons de vous rencontrer tres bientot. \n\n"
-                "Annick & Charley \n\n"
-                "****** \n\n"
-                "Welcome to our establishment! \n\n"
-                "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible,"
-                "we kindly ask you to fill out the form that you will find by clicking on the following link:"
-                f" {FORM_SHORT_URL}\n\n"
-                "Parking is available on site.\n\n"
-                "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. \n\n"
-                "You will find luggage storage facilities in every district of Nice. \n\n"
-                "We wish you a pleasant journey and look forward to meeting you very soon.\n\n"
-                "Annick & Charley"                
+                "Parking sur place. Check-in 14:00, check-out 11:00.\n\n"
+                "Annick & Charley\n\n"
+                "EN — Please fill this arrival form:\n"
+                f"{FORM_SHORT_URL}\n"
+                "Parking on site. Check-in 2pm, check-out 11am."
             )
             enc = quote(msg); e164 = _format_phone_e164(r["telephone"]); wa = re.sub(r"\D","", e164)
             _copy_button("📋 Copier le message", msg, key=f"pre_{i}")
@@ -693,7 +649,7 @@ def vue_sms(df, palette):
                 f"Bonjour {name},\n\n"
                 "Un grand merci d'avoir choisi notre appartement pour votre séjour.\n"
                 "Nous espérons que vous avez passé un moment agréable.\n"
-                "Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.\n\n"
+                "Si vous souhaitez revenir, notre porte vous sera toujours grande ouverte.\n\n"
                 "Au plaisir de vous accueillir à nouveau.\n\n"
                 "Annick & Charley\n"
                 f"\nHello {name},\n\n"
@@ -844,7 +800,7 @@ def admin_sidebar(df: pd.DataFrame):
         csv_bytes = b""
     st.sidebar.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
 
-    # --- Export XLSX ---
+    # Export XLSX
     try:
         out_xlsx = ensure_schema(df).copy()
         for col in ["date_arrivee","date_depart"]:
@@ -861,11 +817,8 @@ def admin_sidebar(df: pd.DataFrame):
         disabled=(xlsx_bytes is None),
         help="Génère un fichier Excel (.xlsx) — nécessite openpyxl"
     )
-
     if xlsx_bytes is None and xlsx_err:
-        st.sidebar.caption(
-            "Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`)."
-        )
+        st.sidebar.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
 
     # Restauration CSV/XLSX
     up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="restore_uploader")
@@ -910,7 +863,7 @@ def admin_sidebar(df: pd.DataFrame):
             except Exception as e:
                 st.sidebar.error(f"Erreur écriture : {e}")
 
-    # Purge cache (et via URL ?clear=1)
+    # Purge cache
     if st.sidebar.button("🧹 Vider le cache & recharger"):
         try: st.cache_data.clear()
         except Exception: pass
