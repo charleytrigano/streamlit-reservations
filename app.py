@@ -434,6 +434,9 @@ def vue_modifier(df, palette):
 def vue_plateformes(df, palette):
     st.header("🎨 Plateformes & couleurs")
 
+    # Détecte si ColorColumn existe dans ta version de Streamlit
+    HAS_COLORCOL = hasattr(getattr(st, "column_config", object), "ColorColumn")
+
     # Union : toutes les plateformes vues dans df + celles de la palette existante
     plats_df = sorted(
         df.get("plateforme", pd.Series([], dtype=str))
@@ -442,37 +445,82 @@ def vue_plateformes(df, palette):
           .dropna().unique().tolist()
     )
     all_plats = sorted(set(list(palette.keys()) + plats_df))
+
     # DataFrame avec hex par défaut si manquant
     base = pd.DataFrame({
         "plateforme": all_plats,
         "couleur": [palette.get(p, "#666666") for p in all_plats],
     })
 
+    # Configuration des colonnes (fallback si ColorColumn indisponible)
+    if HAS_COLORCOL:
+        col_cfg = {
+            "plateforme": st.column_config.TextColumn("Plateforme"),
+            "couleur":   st.column_config.ColorColumn("Couleur (hex)"),
+        }
+        help_txt = None
+    else:
+        col_cfg = {
+            "plateforme": st.column_config.TextColumn("Plateforme"),
+            "couleur":   st.column_config.TextColumn(
+                "Couleur (hex)",
+                help="Ex: #1e90ff. Ta version de Streamlit ne supporte pas encore le sélecteur couleur.",
+                validate=r"^#([0-9A-Fa-f]{6})$",
+                width="small",
+            ),
+        }
+        help_txt = "Aperçu affiché ci-dessous. Utilise un code hex valide (ex: #e74c3c)."
+
     edited = st.data_editor(
         base,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "plateforme": st.column_config.TextColumn("Plateforme"),
-            # ColorColumn = éditeur + prévisualisation + code hex
-            "couleur": st.column_config.ColorColumn("Couleur (hex)"),
-        }
+        column_config=col_cfg,
     )
+
+    # Petit aperçu si on n'a pas ColorColumn
+    if not HAS_COLORCOL and not edited.empty:
+        st.caption(help_txt or "")
+        chips = []
+        for _, r in edited.iterrows():
+            plat = str(r["plateforme"]).strip()
+            col  = str(r["couleur"]).strip()
+            if not plat:
+                continue
+            chips.append(
+                f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
+                f"border-radius:12px;background:{col if re.match(r'^#([0-9A-Fa-f]{6})$', col) else '#666'};"
+                f"color:#fff;'>{plat} {col}</span>"
+            )
+        if chips:
+            st.markdown("".join(chips), unsafe_allow_html=True)
 
     c1, c2 = st.columns([0.6,0.4])
     if c1.button("💾 Enregistrer la palette"):
         try:
-            edited.to_csv(CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8")
-            st.success("Palette enregistrée ✅"); st.rerun()
+            to_save = edited.copy()
+            to_save["plateforme"] = to_save["plateforme"].astype(str).str.strip()
+            to_save["couleur"]    = to_save["couleur"].astype(str).str.strip()
+            to_save = to_save[to_save["plateforme"] != ""].drop_duplicates(subset=["plateforme"])
+
+            if not HAS_COLORCOL:
+                ok = to_save["couleur"].str.match(r"^#([0-9A-Fa-f]{6})$")
+                to_save.loc[~ok, "couleur"] = "#666666"
+
+            to_save.to_csv(CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8")
+            st.success("Palette enregistrée ✅")
+            st.rerun()
         except Exception as e:
             st.error(f"Erreur : {e}")
+
     if c2.button("↩️ Restaurer palette par défaut"):
         try:
             pd.DataFrame(list(DEFAULT_PALETTE.items()), columns=["plateforme","couleur"]).to_csv(
                 CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8"
             )
-            st.success("Palette par défaut restaurée."); st.rerun()
+            st.success("Palette par défaut restaurée.")
+            st.rerun()
         except Exception as e:
             st.error(f"Erreur : {e}")
 
