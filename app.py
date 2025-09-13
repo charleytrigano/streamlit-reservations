@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
 from urllib.parse import quote
 from io import StringIO, BytesIO
+from zoneinfo import ZoneInfo  # ✅ pour “Aujourd’hui” en Europe/Paris
 
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
@@ -269,6 +270,7 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
         return buf.getvalue(), None
     except Exception as e:
         return None, e
+
 def _format_phone_e164(phone: str) -> str:
     s = re.sub(r"\D","", str(phone or ""))
     if not s: return ""
@@ -279,25 +281,42 @@ def _format_phone_e164(phone: str) -> str:
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
-    today = date.today()
-    st.write(f"**Aujourd'hui : {today.strftime('%d/%m/%Y')}**")
 
-    dfv = df.copy()
-    dfv["date_arrivee"] = _to_date(dfv["date_arrivee"])
-    dfv["date_depart"]  = _to_date(dfv["date_depart"])
+    # Aujourd'hui en Europe/Paris (évite le décalage UTC)
+    today_paris = datetime.now(ZoneInfo("Europe/Paris")).date()
+    jour = st.date_input("Jour à afficher (Europe/Paris)", value=today_paris, key="accueil_jour")
 
-    arr = dfv[dfv["date_arrivee"] == today][["nom_client","telephone","plateforme"]].copy()
-    dep = dfv[dfv["date_depart"]  == today][["nom_client","telephone","plateforme"]].copy()
+    dfx = df.copy()
+    dfx["date_arrivee"] = _to_date(dfx["date_arrivee"])
+    dfx["date_depart"]  = _to_date(dfx["date_depart"])
+
+    arr = dfx.loc[dfx["date_arrivee"] == jour, ["nom_client","telephone","plateforme"]].copy()
+    dep = dfx.loc[dfx["date_depart"]  == jour, ["nom_client","telephone","plateforme"]].copy()
+
+    st.write(f"**Jour affiché : {jour.strftime('%d/%m/%Y')}**")
 
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("🟢 Arrivées du jour")
-        if arr.empty: st.info("Aucune arrivée.")
-        else: st.dataframe(arr, use_container_width=True)
+        if arr.empty:
+            st.info("Aucune arrivée.")
+        else:
+            for c in ["nom_client","telephone","plateforme"]:
+                arr[c] = arr[c].astype(str).str.strip()
+            st.dataframe(arr, use_container_width=True)
+
     with c2:
         st.subheader("🔴 Départs du jour")
-        if dep.empty: st.info("Aucun départ.")
-        else: st.dataframe(dep, use_container_width=True)
+        if dep.empty:
+            st.info("Aucun départ.")
+        else:
+            for c in ["nom_client","telephone","plateforme"]:
+                dep[c] = dep[c].astype(str).str.strip()
+            st.dataframe(dep, use_container_width=True)
+
+    with st.expander("🔧 Debug dates (optionnel)"):
+        st.caption("Vérifie que les dates sont bien parsées (pas de NaT).")
+        st.dataframe(dfx[["date_arrivee", "date_depart"]].head(15))
 
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
@@ -825,8 +844,7 @@ def admin_sidebar(df: pd.DataFrame):
         csv_bytes = b""
     st.sidebar.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
 
-
-# --- Export XLSX ---
+    # --- Export XLSX ---
     try:
         out_xlsx = ensure_schema(df).copy()
         for col in ["date_arrivee","date_depart"]:
@@ -848,6 +866,7 @@ def admin_sidebar(df: pd.DataFrame):
         st.sidebar.caption(
             "Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`)."
         )
+
     # Restauration CSV/XLSX
     up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="restore_uploader")
 
@@ -917,23 +936,19 @@ def main():
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
     pages = {
-       
-        
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
         "➕ Ajouter": vue_ajouter,
         "✏️ Modifier / Supprimer": vue_modifier,
         "🎨 Plateformes": vue_plateformes,
         "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,          
+        "📊 Rapport": vue_rapport,
         "✉️ SMS": vue_sms,
         "📆 Export ICS": vue_export_ics,
         "📝 Google Sheet": vue_google_sheet,
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
     }
-        
-    
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
     admin_sidebar(df)
