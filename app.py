@@ -431,7 +431,7 @@ def vue_modifier(df, palette):
                 st.warning("Supprimé."); st.rerun()
 
 
-def vue_plateformes(df, palette):
+vue_plateformes(df, palette):
     st.header("🎨 Plateformes & couleurs")
 
     # Union : toutes les plateformes vues dans df + celles de la palette existante
