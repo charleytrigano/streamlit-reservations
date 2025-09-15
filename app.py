@@ -141,6 +141,107 @@ def build_stable_uid(row) -> str:
     base = f"{row.get('res_id', '')}{row.get('nom_client', '')}{row.get('telephone', '')}"
     return hashlib.sha1(base.encode()).hexdigest() + "@villa-tobias"
 
+def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
+    if df_in is None or len(df_in) == 0:
+        return pd.DataFrame(columns=BASE_COLS)
+
+    df = df_in.copy()
+    df.columns = df.columns.astype(str).str.strip()
+
+    rename_map = {
+        'Payé': 'paye', 'Client': 'nom_client', 'Plateforme': 'plateforme',
+        'Arrivée': 'date_arrivee', 'Départ': 'date_depart', 'Nuits': 'nuitees',
+        'Brut (€)': 'prix_brut'
+    }
+    df.rename(columns=rename_map, inplace=True)
+
+    for c in BASE_COLS:
+        if c not in df.columns:
+            df[c] = pd.Series([None] * len(df), index=df.index)
+
+    for c in df.columns:
+        df[c] = _as_series(df[c], index=df.index)
+
+    for b in ["paye", "sms_envoye", "post_depart_envoye"]:
+        df[b] = _to_bool_series(df[b])
+
+    for n in ["prix_brut", "commissions", "frais_cb", "menage", "taxes_sejour", "nuitees", "charges", "%", "base"]:
+        df[n] = _to_num(df[n]).fillna(0.0)
+
+    df["date_arrivee"] = _to_date(df["date_arrivee"])
+    df["date_depart"] = _to_date(df["date_depart"])
+
+    mask_ok = pd.notna(df["date_arrivee"]) & pd.notna(df["date_depart"])
+    if mask_ok.any():
+        da = pd.to_datetime(df.loc[mask_ok, "date_arrivee"])
+        dd = pd.to_datetime(df.loc[mask_ok, "date_depart"])
+        df.loc[mask_ok, "nuitees"] = (dd - da).dt.days.clip(lower=0).astype(float)
+
+    prix_brut = _to_num(df["prix_brut"])
+    commissions = _to_num(df["commissions"])
+    frais_cb = _to_num(df["frais_cb"])
+    menage = _to_num(df["menage"])
+    taxes = _to_num(df["taxes_sejour"])
+
+    df["prix_net"] = (prix_brut - commissions - frais_cb).fillna(0.0)
+    df["charges"] = (prix_brut - df["prix_net"]).fillna(0.0)
+    df["base"] = (df["prix_net"] - menage - taxes).fillna(0.0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct = np.where(prix_brut > 0, (df["charges"] / prix_brut * 100), 0.0)
+    df["%"] = pd.Series(pct, index=df.index).astype(float)
+
+    miss_res = df["res_id"].isna() | (df["res_id"].astype(str).str.strip() == "")
+    if miss_res.any():
+        df.loc[miss_res, "res_id"] = [str(uuid.uuid4()) for _ in range(int(miss_res.sum()))]
+
+    miss_uid = df["ical_uid"].isna() | (df["ical_uid"].astype(str).str.strip() == "")
+    if miss_uid.any():
+        df.loc[miss_uid, "ical_uid"] = df.loc[miss_uid].apply(build_stable_uid, axis=1)
+
+    for c in ["nom_client", "plateforme", "telephone", "email"]:
+        df[c] = df[c].astype(str).replace({"nan": "", "None": ""}).str.strip()
+
+    return df[BASE_COLS]
+
+@st.cache_data
+def _load_file_bytes(path: str):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+@st.cache_data
+def charger_donnees():
+    raw = _load_file_bytes(CSV_RESERVATIONS)
+    base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
+    df = ensure_schema(base_df)
+
+    rawp = _load_file_bytes(CSV_PLATEFORMES)
+    palette = DEFAULT_PALETTE.copy()
+    if rawp is not None:
+        try:
+            pal_df = _detect_delimiter_and_read(rawp)
+            pal_df.columns = pal_df.columns.astype(str).str.strip()
+            if {"plateforme", "couleur"}.issubset(pal_df.columns):
+                palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
+        except Exception:
+            pass
+    return df, palette
+
+def sauvegarder_donnees(df: pd.DataFrame) -> bool:
+    try:
+        out = ensure_schema(df).copy()
+        for col in ["date_arrivee", "date_depart"]:
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
+        out.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8")
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde CSV : {e}")
+        return False
+
 def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
     buf = BytesIO()
     try:
@@ -529,7 +630,7 @@ def vue_rapport(df, palette):
         st.warning("Aucune donnée après filtres.")
         return
 
-    # ===== TAUX D'OCCUPATION =====
+    # --- Calcul du taux d'occupation ---
     st.markdown("---")
     st.subheader("📅 Taux d'occupation")
 
@@ -537,8 +638,8 @@ def vue_rapport(df, palette):
     data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
     data["nuitees"] = (data["date_depart_dt"] - data["date_arrivee_dt"]).dt.days
 
-    # 2. Nombre total de nuitées occupées par mois/plateforme
-    occ_mois = data.groupby(["mois", "plateforme"], as_index=False)["nuitees"].sum()
+    # 2. Nombre total de nuitées occupées par mois
+    occ_mois = data.groupby("mois", as_index=False)["nuitees"].sum()
     occ_mois.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
 
     # 3. Nombre total de jours dans chaque mois (pour calculer le taux)
@@ -554,110 +655,27 @@ def vue_rapport(df, palette):
     total_jours_disponibles = occ_mois["jours_dans_mois"].sum()
     taux_global = (total_nuitees_occupees / total_jours_disponibles) * 100 if total_jours_disponibles > 0 else 0
 
-    # ===== FILTRES SUPPLÉMENTAIRES POUR L'OCCUPATION =====
-    st.markdown("---")
-    col_plat, col_export = st.columns([1, 1])
-    plat_occ = col_plat.selectbox("Filtrer par plateforme (occupation)", ["Toutes"] + plats_avail, index=0)
-
-    # Application du filtre par plateforme pour l'occupation
-    occ_filtered = occ_mois.copy()
-    if plat_occ != "Toutes":
-        occ_filtered = occ_filtered[occ_filtered["plateforme"] == plat_occ]
-
-    # Recalcul du taux global après filtre
-    filtered_nuitees = occ_filtered["nuitees_occupees"].sum()
-    filtered_jours = occ_filtered["jours_dans_mois"].sum()
-    taux_global_filtered = (filtered_nuitees / filtered_jours) * 100 if filtered_jours > 0 else 0
-
-    # ===== AFFICHAGE =====
+    # Affichage du taux global
     st.markdown(
         f"""
         <div class='glass kpi-line'>
-            <span class='chip'><small>Taux global</small><br><strong>{taux_global_filtered:.1f}%</strong></span>
-            <span class='chip'><small>Nuitées occupées</small><br><strong>{filtered_nuitees}</strong></span>
-            <span class='chip'><small>Jours disponibles</small><br><strong>{filtered_jours}</strong></span>
+            <span class='chip'><small>Taux global</small><br><strong>{taux_global:.1f}%</strong></span>
+            <span class='chip'><small>Nuitées occupées</small><br><strong>{total_nuitees_occupees}</strong></span>
+            <span class='chip'><small>Jours disponibles</small><br><strong>{total_jours_disponibles}</strong></span>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # Export CSV/Excel
-    occ_export = occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]].copy()
-    occ_export = occ_export.sort_values(["mois", "plateforme"], ascending=[False, True])
-
-    csv_occ = occ_export.to_csv(index=False).encode("utf-8")
-    col_export.download_button(
-        "⬇️ Exporter les données d'occupation (CSV)",
-        data=csv_occ,
-        file_name="taux_occupation.csv",
-        mime="text/csv"
-    )
-
-    xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
-    if xlsx_occ:
-        col_export.download_button(
-            "⬇️ Exporter les données d'occupation (Excel)",
-            data=xlsx_occ,
-            file_name="taux_occupation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-    # Tableau détaillé
+    # Affichage du détail par mois
     st.dataframe(
-        occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+        occ_mois[["mois", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]]
+        .sort_values("mois", ascending=False)
+        .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
         use_container_width=True
     )
 
-    # ===== COMPARAISON ENTRE ANNÉES =====
-    st.markdown("---")
-    st.subheader("📊 Comparaison des taux d'occupation par année")
-
-    # Calcul des taux par année
-    occ_annee = data.groupby(["date_arrivee_dt"].dt.year.rename("annee"), "plateforme")["nuitees"].sum().reset_index()
-    occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
-
-    # Calcul du nombre de jours par année
-    def jours_dans_annee(annee):
-        return 366 if (annee % 4 == 0 and annee % 100 != 0) or (annee % 400 == 0) else 365
-
-    occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
-    occ_annee["taux_occupation"] = (occ_annee["nuitees_occupees"] / occ_annee["jours_dans_annee"]) * 100
-
-    # Filtre pour la comparaison
-    annees_comparaison = st.multiselect(
-        "Sélectionner les années à comparer",
-        options=sorted(occ_annee["annee"].unique()),
-        default=sorted(occ_annee["annee"].unique())[-2:]  # 2 dernières années par défaut
-    )
-
-    if not annees_comparaison:
-        st.warning("Veuillez sélectionner au moins une année.")
-    else:
-        occ_comparaison = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
-
-        # Graphique de comparaison
-        try:
-            chart_comparaison = alt.Chart(occ_comparaison).mark_bar().encode(
-                x=alt.X("annee:N", title="Année"),
-                y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
-                color=alt.Color("plateforme:N", title="Plateforme"),
-                tooltip=["annee", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
-            ).properties(
-                height=400
-            )
-            st.altair_chart(chart_comparaison, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Graphique de comparaison indisponible : {e}")
-
-        # Tableau de comparaison
-        st.dataframe(
-            occ_comparaison[["annee", "plateforme", "nuitees_occupees", "taux_occupation"]]
-            .sort_values(["annee", "plateforme"])
-            .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
-            use_container_width=True
-        )
-
-    # ===== SUITE DU RAPPORT (MÉTRIQUES FINANCIÈRES) =====
+    # --- Suite du rapport existant (métriques) ---
     st.markdown("---")
     st.subheader("💰 Métriques financières")
 
@@ -685,16 +703,15 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # Graphique du taux d'occupation (original)
+    # --- Graphique du taux d'occupation ---
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
 
     try:
-        chart_occ = alt.Chart(occ_filtered).mark_line(point=True).encode(
+        chart_occ = alt.Chart(occ_mois).mark_line(point=True).encode(
             x=alt.X("mois:N", sort=None, title="Mois"),
             y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
-            color=alt.Color("plateforme:N", title="Plateforme"),
-            tooltip=["mois", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
+            tooltip=["mois", alt.Tooltip("taux_occupation:Q", format=".1f")]
         )
         st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
     except Exception as e:
