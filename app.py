@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -209,15 +210,27 @@ def _load_file_bytes(path: str):
     try:
         with open(path, "rb") as f:
             return f.read()
-    except Exception:
+    except Exception as e:
+        st.warning(f"Fichier {path} introuvable ou illisible. Un fichier vide sera créé.")
         return None
 
 @st.cache_data
 def charger_donnees():
+    # Créer les fichiers s'ils n'existent pas
+    for fichier, header in [
+        (CSV_RESERVATIONS, "nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut\n"),
+        (CSV_PLATEFORMES, "plateforme,couleur\nBooking,#1e90ff\nAirbnb,#e74c3c\n")
+    ]:
+        if not os.path.exists(fichier):
+            with open(fichier, "w") as f:
+                f.write(header)
+
+    # Charger les réservations
     raw = _load_file_bytes(CSV_RESERVATIONS)
     base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
     df = ensure_schema(base_df)
 
+    # Charger la palette
     rawp = _load_file_bytes(CSV_PLATEFORMES)
     palette = DEFAULT_PALETTE.copy()
     if rawp is not None:
@@ -226,8 +239,9 @@ def charger_donnees():
             pal_df.columns = pal_df.columns.astype(str).str.strip()
             if {"plateforme", "couleur"}.issubset(pal_df.columns):
                 palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
-        except Exception:
-            pass
+        except Exception as e:
+            st.warning(f"Erreur de chargement de la palette : {e}")
+
     return df, palette
 
 def sauvegarder_donnees(df: pd.DataFrame) -> bool:
@@ -239,7 +253,7 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Erreur de sauvegarde CSV : {e}")
+        st.error(f"Erreur de sauvegarde : {e}")
         return False
 
 def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
@@ -249,6 +263,7 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
             df.to_excel(writer, index=False, sheet_name=sheet_name)
         return buf.getvalue(), None
     except Exception as e:
+        st.warning(f"Impossible de générer le fichier Excel (openpyxl requis) : {e}")
         return None, e
 
 def _format_phone_e164(phone: str) -> str:
@@ -630,7 +645,7 @@ def vue_rapport(df, palette):
         st.warning("Aucune donnée après filtres.")
         return
 
-    # --- Calcul du taux d'occupation ---
+    # ===== TAUX D'OCCUPATION =====
     st.markdown("---")
     st.subheader("📅 Taux d'occupation")
 
@@ -638,8 +653,8 @@ def vue_rapport(df, palette):
     data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
     data["nuitees"] = (data["date_depart_dt"] - data["date_arrivee_dt"]).dt.days
 
-    # 2. Nombre total de nuitées occupées par mois
-    occ_mois = data.groupby("mois", as_index=False)["nuitees"].sum()
+    # 2. Nombre total de nuitées occupées par mois/plateforme
+    occ_mois = data.groupby(["mois", "plateforme"], as_index=False)["nuitees"].sum()
     occ_mois.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
 
     # 3. Nombre total de jours dans chaque mois (pour calculer le taux)
@@ -655,27 +670,110 @@ def vue_rapport(df, palette):
     total_jours_disponibles = occ_mois["jours_dans_mois"].sum()
     taux_global = (total_nuitees_occupees / total_jours_disponibles) * 100 if total_jours_disponibles > 0 else 0
 
-    # Affichage du taux global
+    # ===== FILTRES SUPPLÉMENTAIRES POUR L'OCCUPATION =====
+    st.markdown("---")
+    col_plat, col_export = st.columns([1, 1])
+    plat_occ = col_plat.selectbox("Filtrer par plateforme (occupation)", ["Toutes"] + plats_avail, index=0)
+
+    # Application du filtre par plateforme pour l'occupation
+    occ_filtered = occ_mois.copy()
+    if plat_occ != "Toutes":
+        occ_filtered = occ_filtered[occ_filtered["plateforme"] == plat_occ]
+
+    # Recalcul du taux global après filtre
+    filtered_nuitees = occ_filtered["nuitees_occupees"].sum()
+    filtered_jours = occ_filtered["jours_dans_mois"].sum()
+    taux_global_filtered = (filtered_nuitees / filtered_jours) * 100 if filtered_jours > 0 else 0
+
+    # ===== AFFICHAGE =====
     st.markdown(
         f"""
         <div class='glass kpi-line'>
-            <span class='chip'><small>Taux global</small><br><strong>{taux_global:.1f}%</strong></span>
-            <span class='chip'><small>Nuitées occupées</small><br><strong>{total_nuitees_occupees}</strong></span>
-            <span class='chip'><small>Jours disponibles</small><br><strong>{total_jours_disponibles}</strong></span>
+            <span class='chip'><small>Taux global</small><br><strong>{taux_global_filtered:.1f}%</strong></span>
+            <span class='chip'><small>Nuitées occupées</small><br><strong>{filtered_nuitees}</strong></span>
+            <span class='chip'><small>Jours disponibles</small><br><strong>{filtered_jours}</strong></span>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # Affichage du détail par mois
+    # Export CSV/Excel
+    occ_export = occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]].copy()
+    occ_export = occ_export.sort_values(["mois", "plateforme"], ascending=[False, True])
+
+    csv_occ = occ_export.to_csv(index=False).encode("utf-8")
+    col_export.download_button(
+        "⬇️ Exporter les données d'occupation (CSV)",
+        data=csv_occ,
+        file_name="taux_occupation.csv",
+        mime="text/csv"
+    )
+
+    xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
+    if xlsx_occ:
+        col_export.download_button(
+            "⬇️ Exporter les données d'occupation (Excel)",
+            data=xlsx_occ,
+            file_name="taux_occupation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # Tableau détaillé
     st.dataframe(
-        occ_mois[["mois", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]]
-        .sort_values("mois", ascending=False)
-        .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+        occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
         use_container_width=True
     )
 
-    # --- Suite du rapport existant (métriques) ---
+    # ===== COMPARAISON ENTRE ANNÉES =====
+    st.markdown("---")
+    st.subheader("📊 Comparaison des taux d'occupation par année")
+
+    # Calcul des taux par année
+    occ_annee = data.groupby(["date_arrivee_dt"].dt.year.rename("annee"), "plateforme")["nuitees"].sum().reset_index()
+    occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
+
+    # Calcul du nombre de jours par année
+    def jours_dans_annee(annee):
+        return 366 if (annee % 4 == 0 and annee % 100 != 0) or (annee % 400 == 0) else 365
+
+    occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
+    occ_annee["taux_occupation"] = (occ_annee["nuitees_occupees"] / occ_annee["jours_dans_annee"]) * 100
+
+    # Filtre pour la comparaison
+    annees_comparaison = st.multiselect(
+        "Sélectionner les années à comparer",
+        options=sorted(occ_annee["annee"].unique()),
+        default=sorted(occ_annee["annee"].unique())[-2:]  # 2 dernières années par défaut
+    )
+
+    if not annees_comparaison:
+        st.warning("Veuillez sélectionner au moins une année.")
+    else:
+        occ_comparaison = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
+
+        # Graphique de comparaison
+        try:
+            chart_comparaison = alt.Chart(occ_comparaison).mark_bar().encode(
+                x=alt.X("annee:N", title="Année"),
+                y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
+                color=alt.Color("plateforme:N", title="Plateforme"),
+                tooltip=["annee", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
+            ).properties(
+                height=400
+            )
+            st.altair_chart(chart_comparaison, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Graphique de comparaison indisponible : {e}")
+
+        # Tableau de comparaison
+        st.dataframe(
+            occ_comparaison[["annee", "plateforme", "nuitees_occupees", "taux_occupation"]]
+            .sort_values(["annee", "plateforme"])
+            .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+            use_container_width=True
+        )
+
+    # ===== SUITE DU RAPPORT (MÉTRIQUES FINANCIÈRES) =====
     st.markdown("---")
     st.subheader("💰 Métriques financières")
 
@@ -703,15 +801,16 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # --- Graphique du taux d'occupation ---
+    # Graphique du taux d'occupation (original)
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
 
     try:
-        chart_occ = alt.Chart(occ_mois).mark_line(point=True).encode(
+        chart_occ = alt.Chart(occ_filtered).mark_line(point=True).encode(
             x=alt.X("mois:N", sort=None, title="Mois"),
             y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
-            tooltip=["mois", alt.Tooltip("taux_occupation:Q", format=".1f")]
+            color=alt.Color("plateforme:N", title="Plateforme"),
+            tooltip=["mois", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
         )
         st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
     except Exception as e:
