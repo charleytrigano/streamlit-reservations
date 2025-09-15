@@ -142,6 +142,45 @@ def build_stable_uid(row) -> str:
     base = f"{row.get('res_id', '')}{row.get('nom_client', '')}{row.get('telephone', '')}"
     return hashlib.sha1(base.encode()).hexdigest() + "@villa-tobias"
 
+@st.cache_data
+def _load_file_bytes(path: str):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except Exception as e:
+        st.warning(f"Fichier {path} introuvable ou illisible. Un fichier vide sera créé.")
+        return None
+
+@st.cache_data
+def charger_donnees():
+    # Créer les fichiers s'ils n'existent pas
+    for fichier, header in [
+        (CSV_RESERVATIONS, "nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut\n"),
+        (CSV_PLATEFORMES, "plateforme,couleur\nBooking,#1e90ff\nAirbnb,#e74c3c\n")
+    ]:
+        if not os.path.exists(fichier):
+            with open(fichier, "w") as f:
+                f.write(header)
+
+    # Charger les réservations
+    raw = _load_file_bytes(CSV_RESERVATIONS)
+    base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
+    df = ensure_schema(base_df)
+
+    # Charger la palette
+    rawp = _load_file_bytes(CSV_PLATEFORMES)
+    palette = DEFAULT_PALETTE.copy()
+    if rawp is not None:
+        try:
+            pal_df = _detect_delimiter_and_read(rawp)
+            pal_df.columns = pal_df.columns.astype(str).str.strip()
+            if {"plateforme", "couleur"}.issubset(pal_df.columns):
+                palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
+        except Exception as e:
+            st.warning(f"Erreur de chargement de la palette : {e}")
+
+    return df, palette
+
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     if df_in is None or len(df_in) == 0:
         return pd.DataFrame(columns=BASE_COLS)
@@ -204,45 +243,6 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
         df[c] = df[c].astype(str).replace({"nan": "", "None": ""}).str.strip()
 
     return df[BASE_COLS]
-
-@st.cache_data
-def _load_file_bytes(path: str):
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except Exception as e:
-        st.warning(f"Fichier {path} introuvable ou illisible. Un fichier vide sera créé.")
-        return None
-
-@st.cache_data
-def charger_donnees():
-    # Créer les fichiers s'ils n'existent pas
-    for fichier, header in [
-        (CSV_RESERVATIONS, "nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut\n"),
-        (CSV_PLATEFORMES, "plateforme,couleur\nBooking,#1e90ff\nAirbnb,#e74c3c\n")
-    ]:
-        if not os.path.exists(fichier):
-            with open(fichier, "w") as f:
-                f.write(header)
-
-    # Charger les réservations
-    raw = _load_file_bytes(CSV_RESERVATIONS)
-    base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
-    df = ensure_schema(base_df)
-
-    # Charger la palette
-    rawp = _load_file_bytes(CSV_PLATEFORMES)
-    palette = DEFAULT_PALETTE.copy()
-    if rawp is not None:
-        try:
-            pal_df = _detect_delimiter_and_read(rawp)
-            pal_df.columns = pal_df.columns.astype(str).str.strip()
-            if {"plateforme", "couleur"}.issubset(pal_df.columns):
-                palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
-        except Exception as e:
-            st.warning(f"Erreur de chargement de la palette : {e}")
-
-    return df, palette
 
 def sauvegarder_donnees(df: pd.DataFrame) -> bool:
     try:
@@ -728,8 +728,9 @@ def vue_rapport(df, palette):
     st.markdown("---")
     st.subheader("📊 Comparaison des taux d'occupation par année")
 
-    # Calcul des taux par année
-    occ_annee = data.groupby(["date_arrivee_dt"].dt.year.rename("annee"), "plateforme")["nuitees"].sum().reset_index()
+    # Calcul des taux par année (CORRECTION ICI)
+    data["annee"] = data["date_arrivee_dt"].dt.year  # Ajout de la colonne annee
+    occ_annee = data.groupby(["annee", "plateforme"])["nuitees"].sum().reset_index()
     occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
 
     # Calcul du nombre de jours par année
@@ -801,7 +802,7 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # Graphique du taux d'occupation (original)
+    # Graphique du taux d'occupation
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
 
