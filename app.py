@@ -602,9 +602,11 @@ def vue_rapport(df, palette):
 
     dfa = df.copy()
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
+    dfa["date_depart_dt"] = pd.to_datetime(dfa["date_depart"], errors="coerce")
 
+    # Filtres
     years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
-    months_avail = list(range(1, 12 + 1))
+    months_avail = list(range(1, 13))
     plats_avail = sorted(
         dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
     )
@@ -615,6 +617,7 @@ def vue_rapport(df, palette):
     plat = c3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0)
     metric = c4.selectbox("Métrique", ["prix_brut", "prix_net", "base", "charges", "menage", "taxes_sejour", "nuitees"], index=1)
 
+    # Application des filtres
     data = dfa.copy()
     if year != "Toutes":
         data = data[data["date_arrivee_dt"].dt.year == int(year)]
@@ -626,6 +629,55 @@ def vue_rapport(df, palette):
     if data.empty:
         st.warning("Aucune donnée après filtres.")
         return
+
+    # --- Calcul du taux d'occupation ---
+    st.markdown("---")
+    st.subheader("📅 Taux d'occupation")
+
+    # 1. Calcul des nuitées occupées par mois
+    data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
+    data["nuitees"] = (data["date_depart_dt"] - data["date_arrivee_dt"]).dt.days
+
+    # 2. Nombre total de nuitées occupées par mois
+    occ_mois = data.groupby("mois", as_index=False)["nuitees"].sum()
+    occ_mois.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
+
+    # 3. Nombre total de jours dans chaque mois (pour calculer le taux)
+    def jours_dans_mois(periode_str):
+        annee, mois = map(int, periode_str.split("-"))
+        return monthrange(annee, mois)[1]
+
+    occ_mois["jours_dans_mois"] = occ_mois["mois"].apply(jours_dans_mois)
+    occ_mois["taux_occupation"] = (occ_mois["nuitees_occupees"] / occ_mois["jours_dans_mois"]) * 100
+
+    # 4. Taux d'occupation global (toutes périodes confondues)
+    total_nuitees_occupees = occ_mois["nuitees_occupees"].sum()
+    total_jours_disponibles = occ_mois["jours_dans_mois"].sum()
+    taux_global = (total_nuitees_occupees / total_jours_disponibles) * 100 if total_jours_disponibles > 0 else 0
+
+    # Affichage du taux global
+    st.markdown(
+        f"""
+        <div class='glass kpi-line'>
+            <span class='chip'><small>Taux global</small><br><strong>{taux_global:.1f}%</strong></span>
+            <span class='chip'><small>Nuitées occupées</small><br><strong>{total_nuitees_occupees}</strong></span>
+            <span class='chip'><small>Jours disponibles</small><br><strong>{total_jours_disponibles}</strong></span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Affichage du détail par mois
+    st.dataframe(
+        occ_mois[["mois", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]]
+        .sort_values("mois", ascending=False)
+        .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+        use_container_width=True
+    )
+
+    # --- Suite du rapport existant (métriques) ---
+    st.markdown("---")
+    st.subheader("💰 Métriques financières")
 
     data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
     total_val = float(pd.to_numeric(data[metric], errors="coerce").fillna(0).sum())
@@ -650,6 +702,20 @@ def vue_rapport(df, palette):
         st.altair_chart(chart.properties(height=420), use_container_width=True)
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
+
+    # --- Graphique du taux d'occupation ---
+    st.markdown("---")
+    st.subheader("📈 Évolution du taux d'occupation")
+
+    try:
+        chart_occ = alt.Chart(occ_mois).mark_line(point=True).encode(
+            x=alt.X("mois:N", sort=None, title="Mois"),
+            y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
+            tooltip=["mois", alt.Tooltip("taux_occupation:Q", format=".1f")]
+        )
+        st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique du taux d'occupation indisponible : {e}")
 
 def _copy_button(label: str, payload: str, key: str):
     st.text_area("Aperçu", payload, height=200, key=f"ta_{key}")
@@ -1036,3 +1102,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
