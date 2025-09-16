@@ -337,6 +337,21 @@ def vue_accueil(df, palette):
     dep = dfv[dfv["date_depart"] == today][["nom_client", "telephone", "plateforme"]].copy()
     arr_plus1 = dfv[dfv["date_arrivee"] == tomorrow][["nom_client", "telephone", "plateforme"]].copy()
 
+    # ➕ pays dans les listes
+    for d in (arr, dep, arr_plus1):
+        if not d.empty:
+            d["pays"] = d["telephone"].apply(_phone_country)
+            # Replacer les colonnes pour visibilité
+            cols = ["nom_client", "pays", "telephone", "plateforme"]
+            d = d.reindex(columns=cols)
+            # assign back
+            if d.equals(arr):
+                arr = d
+            elif d.equals(dep):
+                dep = d
+            else:
+                arr_plus1 = d
+
     c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("🟢 Arrivées du jour")
@@ -405,9 +420,23 @@ def vue_reservations(df, palette):
     st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
+    # Tri et ajout du pays pour l'affichage
     order_idx = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
-    data = data.loc[order_idx]
-    st.dataframe(data.drop(columns=["date_arrivee_dt"]), use_container_width=True)
+    data = data.loc[order_idx].drop(columns=["date_arrivee_dt"])
+    data["pays"] = data["telephone"].apply(_phone_country)
+
+    # Re-ordonner colonnes pour visibilité (pays après nom)
+    cols = list(data.columns)
+    if "pays" in cols:
+        cols.remove("pays")
+        if "nom_client" in cols:
+            insert_at = cols.index("nom_client") + 1
+        else:
+            insert_at = 0
+        cols = cols[:insert_at] + ["pays"] + cols[insert_at:]
+        data = data.reindex(columns=cols)
+
+    st.dataframe(data, use_container_width=True)
 
 def vue_ajouter(df, palette):
     st.header("➕ Ajouter une réservation")
@@ -641,6 +670,9 @@ def vue_calendrier(df, palette):
         if plat != "Toutes":
             rows = rows[rows["plateforme"] == plat]
 
+        # ➕ pays pour le tableau de détail
+        rows["pays"] = rows["telephone"].apply(_phone_country)
+
         brut = float(pd.to_numeric(rows["prix_brut"], errors="coerce").fillna(0).sum())
         net = float(pd.to_numeric(rows["prix_net"], errors="coerce").fillna(0).sum())
         nuits = int(pd.to_numeric(rows["nuitees"], errors="coerce").fillna(0).sum())
@@ -653,7 +685,11 @@ def vue_calendrier(df, palette):
         </div>
         """.replace(",", " ")
         st.markdown(html, unsafe_allow_html=True)
-        st.dataframe(rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]], use_container_width=True)
+
+        st.dataframe(
+            rows[["nom_client", "pays", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]],
+            use_container_width=True
+        )
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
@@ -743,7 +779,7 @@ def vue_rapport(df, palette):
         unsafe_allow_html=True
     )
 
-    # Export CSV/Excel
+    # Export CSV/Excel (inchangé conceptuellement)
     occ_export = occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]].copy()
     occ_export = occ_export.sort_values(["mois", "plateforme"], ascending=[False, True])
 
@@ -774,23 +810,20 @@ def vue_rapport(df, palette):
     st.markdown("---")
     st.subheader("📊 Comparaison des taux d'occupation par année")
 
-    # Calcul des taux par année (CORRECTION ICI)
-    data["annee"] = data["date_arrivee_dt"].dt.year  # Ajout de la colonne annee
+    data["annee"] = data["date_arrivee_dt"].dt.year
     occ_annee = data.groupby(["annee", "plateforme"])["nuitees"].sum().reset_index()
     occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
 
-    # Calcul du nombre de jours par année
     def jours_dans_annee(annee):
         return 366 if (annee % 4 == 0 and annee % 100 != 0) or (annee % 400 == 0) else 365
 
     occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
     occ_annee["taux_occupation"] = (occ_annee["nuitees_occupees"] / occ_annee["jours_dans_annee"]) * 100
 
-    # Filtre pour la comparaison
     annees_comparaison = st.multiselect(
         "Sélectionner les années à comparer",
         options=sorted(occ_annee["annee"].unique()),
-        default=sorted(occ_annee["annee"].unique())[-2:]  # 2 dernières années par défaut
+        default=sorted(occ_annee["annee"].unique())[-2:]
     )
 
     if not annees_comparaison:
@@ -798,21 +831,17 @@ def vue_rapport(df, palette):
     else:
         occ_comparaison = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
 
-        # Graphique de comparaison
         try:
             chart_comparaison = alt.Chart(occ_comparaison).mark_bar().encode(
                 x=alt.X("annee:N", title="Année"),
                 y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
                 color=alt.Color("plateforme:N", title="Plateforme"),
                 tooltip=["annee", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
-            ).properties(
-                height=400
-            )
+            ).properties(height=400)
             st.altair_chart(chart_comparaison, use_container_width=True)
         except Exception as e:
             st.warning(f"Graphique de comparaison indisponible : {e}")
 
-        # Tableau de comparaison
         st.dataframe(
             occ_comparaison[["annee", "plateforme", "nuitees_occupees", "taux_occupation"]]
             .sort_values(["annee", "plateforme"])
@@ -820,7 +849,7 @@ def vue_rapport(df, palette):
             use_container_width=True
         )
 
-    # ===== SUITE DU RAPPORT (MÉTRIQUES FINANCIÈRES) =====
+    # ===== MÉTRIQUES FINANCIÈRES =====
     st.markdown("---")
     st.subheader("💰 Métriques financières")
 
@@ -848,7 +877,7 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # Graphique du taux d'occupation
+    # Évolution taux d'occupation
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
 
@@ -1099,14 +1128,20 @@ def vue_clients(df, palette):
     for c in ["nom_client", "telephone", "email", "plateforme", "res_id"]:
         clients[c] = clients[c].astype(str).str.strip().replace({"nan": ""})
 
-    clients = clients.loc[clients["nom_client"] != ""]
-    clients = clients.drop_duplicates()
+    clients = clients.loc[clients["nom_client"] != ""].drop_duplicates().copy()
 
     # ➕ Pays depuis l’indicatif téléphonique
     clients["pays"] = clients["telephone"].apply(_phone_country)
 
+    # 🔁 Ordre pour visibilité
+    cols_order = ["nom_client", "pays", "telephone", "email", "plateforme", "res_id"]
+    clients = clients.reindex(columns=cols_order)
+
     clients = clients.sort_values(by="nom_client", kind="stable")
     st.dataframe(clients, use_container_width=True)
+
+    if clients["pays"].fillna("").eq("").all():
+        st.caption("Astuce : si 'Pays' est vide, vérifie que les numéros ont un indicatif (+33, 0033 ou 0 pour France).")
 
 def vue_id(df, palette):
     st.header("🆔 Identifiants des réservations")
@@ -1120,6 +1155,11 @@ def vue_id(df, palette):
 
     tbl = tbl.dropna(subset=["res_id"])
     tbl = tbl[tbl["res_id"] != ""].drop_duplicates()
+
+    # ➕ pays
+    tbl["pays"] = tbl["telephone"].apply(_phone_country)
+    tbl = tbl[["res_id", "nom_client", "pays", "telephone", "email", "plateforme"]]
+
     st.dataframe(tbl, use_container_width=True)
 
 # ============================== ADMIN ==============================
@@ -1127,8 +1167,10 @@ def admin_sidebar(df: pd.DataFrame):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
 
+    # ===== Export CSV incluant 'pays' (calculé) =====
     try:
         out = ensure_schema(df).copy()
+        out["pays"] = out["telephone"].apply(_phone_country)
         for col in ["date_arrivee", "date_depart"]:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
         csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
@@ -1142,8 +1184,10 @@ def admin_sidebar(df: pd.DataFrame):
         mime="text/csv"
     )
 
+    # ===== Export XLSX incluant 'pays' (calculé) =====
     try:
         out_xlsx = ensure_schema(df).copy()
+        out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
         for col in ["date_arrivee", "date_depart"]:
             out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
         xlsx_bytes, xlsx_err = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
@@ -1162,6 +1206,7 @@ def admin_sidebar(df: pd.DataFrame):
     if xlsx_bytes is None and xlsx_err:
         st.sidebar.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
 
+    # ===== Restauration =====
     up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader")
 
     if "restore_preview" not in st.session_state:
