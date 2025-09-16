@@ -276,6 +276,52 @@ def _format_phone_e164(phone: str) -> str:
         return "+33" + s[1:]
     return "+" + s
 
+# ➕ Helper pays depuis indicatif (E.164)
+def _phone_country(phone: str) -> str:
+    """
+    Retourne le pays estimé à partir de l'indicatif téléphonique (E.164).
+    Table simplifiée couvrant les principaux codes.
+    """
+    s = re.sub(r"\D", "", str(phone or ""))
+    if not s:
+        return ""
+
+    # Normalisation vers E.164 proche de _format_phone_e164
+    if s.startswith("33"):
+        e164 = "+" + s
+    elif s.startswith("0"):
+        e164 = "+33" + s[1:]
+    elif phone and str(phone).strip().startswith("+"):
+        e164 = "+" + s
+    else:
+        e164 = "+" + s
+
+    # Table des indicatifs (principaux)
+    codes = {
+        "33": "France", "32": "Belgique", "352": "Luxembourg", "41": "Suisse", "49": "Allemagne",
+        "34": "Espagne", "39": "Italie", "351": "Portugal", "44": "Royaume-Uni", "353": "Irlande",
+        "31": "Pays-Bas", "43": "Autriche", "30": "Grèce", "36": "Hongrie", "48": "Pologne",
+        "46": "Suède", "47": "Norvège", "45": "Danemark", "420": "Tchéquie", "421": "Slovaquie",
+        "386": "Slovénie", "385": "Croatie", "372": "Estonie", "371": "Lettonie", "370": "Lituanie",
+        "1": "États-Unis/Canada", "52": "Mexique", "55": "Brésil", "54": "Argentine", "56": "Chili",
+        "57": "Colombie", "58": "Venezuela", "61": "Australie", "64": "Nouvelle-Zélande",
+        "81": "Japon", "82": "Corée du Sud", "86": "Chine", "91": "Inde", "62": "Indonésie",
+        "63": "Philippines", "65": "Singapour", "66": "Thaïlande", "84": "Vietnam",
+        "90": "Turquie", "971": "Émirats arabes unis", "966": "Arabie saoudite", "974": "Qatar",
+        "973": "Bahreïn", "968": "Oman", "965": "Koweït",
+        "212": "Maroc", "213": "Algérie", "216": "Tunisie", "20": "Égypte",
+        "27": "Afrique du Sud", "254": "Kenya", "256": "Ouganda", "255": "Tanzanie", "251": "Éthiopie",
+        "972": "Israël", "970": "Palestine", "376": "Andorre", "377": "Monaco", "379": "Vatican"
+    }
+
+    # Chercher l’indicatif le plus long (ex: 352 avant 35)
+    digits = re.sub(r"\D", "", e164)
+    for ln in (4, 3, 2, 1):
+        code = digits[:ln]
+        if code in codes:
+            return codes[code]
+    return ""
+
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
@@ -1055,6 +1101,10 @@ def vue_clients(df, palette):
 
     clients = clients.loc[clients["nom_client"] != ""]
     clients = clients.drop_duplicates()
+
+    # ➕ Pays depuis l’indicatif téléphonique
+    clients["pays"] = clients["telephone"].apply(_phone_country)
+
     clients = clients.sort_values(by="nom_client", kind="stable")
     st.dataframe(clients, use_container_width=True)
 
