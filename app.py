@@ -1586,6 +1586,7 @@ def admin_sidebar(df: pd.DataFrame):
         st.sidebar.success("Cache vidé.")
         st.rerun()
 
+
 # ============================== MAIN ==============================
 def main():
     params = st.query_params
@@ -1622,9 +1623,26 @@ def main():
         "🌍 Indicatifs": vue_indicatifs,
     }
 
-    choice = st.sidebar.radio("Aller à", list(pages.keys()))
+    # --- clé stable pour éviter les KeyError de session state
+    page_names = list(pages.keys())
+    if "nav_choice" not in st.session_state:
+        st.session_state.nav_choice = page_names[0]
+
+    choice = st.sidebar.radio(
+        "Aller à",
+        page_names,
+        index=page_names.index(st.session_state.nav_choice) if st.session_state.nav_choice in page_names else 0,
+        key="nav_choice",
+    )
+
+    # Sécurité : si une ancienne valeur n’existe plus
+    if choice not in pages:
+        choice = page_names[0]
+
+    # Afficher la page sélectionnée
     pages[choice](df, palette)
     admin_sidebar(df)
+
 
 if __name__ == "__main__":
     main()
