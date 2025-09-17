@@ -1071,7 +1071,14 @@ def vue_export_ics(df, palette):
 
     miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip() == "")
     if miss.any():
-        data.loc[miss, "ical_uid"] = data.loc[miss].apply(build_stable_uid, axis=1)
+        data.loc[miss, "ical_uid"] = 
+  
+
+
+
+
+
+data.loc[miss].apply(build_stable_uid, axis=1)
 
     nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
@@ -1207,131 +1214,5 @@ def admin_sidebar(df: pd.DataFrame):
     try:
         out = ensure_schema(df).copy()
         out["pays"] = out["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
-    except Exception:
-        csv_bytes = b""
-
-    st.sidebar.download_button(
-        "⬇️ Télécharger CSV",
-        data=csv_bytes,
-        file_name="reservations.csv",
-        mime="text/csv"
-    )
-
-    # Export XLSX (avec pays calculé)
-    try:
-        out_xlsx = ensure_schema(df).copy()
-        out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        xlsx_bytes, xlsx_err = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
-    except Exception as e:
-        xlsx_bytes, xlsx_err = None, e
-
-    st.sidebar.download_button(
-        "⬇️ Télécharger XLSX",
-        data=xlsx_bytes or b"",
-        file_name="reservations.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=(xlsx_bytes is None),
-        help="Génère un fichier Excel (.xlsx)"
-    )
-
-    if xlsx_bytes is None and xlsx_err:
-        st.sidebar.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
-
-    # Restauration
-    up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader")
-
-    if "restore_preview" not in st.session_state:
-        st.session_state.restore_preview = None
-        st.session_state.restore_source = ""
-
-    if up is not None:
-        try:
-            if up.name.lower().endswith(".xlsx"):
-                xls = pd.ExcelFile(up)
-                sheet = st.sidebar.selectbox("Feuille Excel", xls.sheet_names, index=0, key="restore_sheet")
-                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-                st.session_state.restore_source = f"XLSX — feuille « {sheet} »"
-            else:
-                raw = up.read()
-                tmp = _detect_delimiter_and_read(raw)
-                st.session_state.restore_source = "CSV"
-
-            prev = ensure_schema(tmp)
-            st.session_state.restore_preview = prev
-            st.sidebar.success(f"Aperçu chargé ({st.session_state.restore_source})")
-
-            with st.sidebar.expander("Aperçu (10 premières lignes)", expanded=False):
-                st.dataframe(prev.head(10), use_container_width=True)
-        except Exception as e:
-            st.session_state.restore_preview = None
-            st.sidebar.error(f"Erreur de lecture : {e}")
-
-    if st.session_state.restore_preview is not None:
-        if st.sidebar.button("✅ Confirmer la restauration"):
-            try:
-                save = st.session_state.restore_preview.copy()
-                for col in ["date_arrivee", "date_depart"]:
-                    save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                save.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8")
-                st.cache_data.clear()
-                st.sidebar.success("Fichier restauré — rechargement…")
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Erreur écriture : {e}")
-
-    if st.sidebar.button("🧹 Vider le cache & recharger"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.sidebar.success("Cache vidé.")
-        st.rerun()
-
-# ============================== MAIN ==============================
-def main():
-    params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-
-    try:
-        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
-    except Exception:
-        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
-
-    apply_style(light=bool(mode_clair))
-    st.title("✨ Villa Tobias — Gestion des Réservations")
-
-    df, palette_loaded = charger_donnees()
-    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
-
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-        "🆔 ID": vue_id,
-    }
-
-    choice = st.sidebar.radio("Aller à", list(pages.keys()))
-    pages[choice](df, palette)
-    admin_sidebar(df)
-
-if __name__ == "__main__":
-    main()
-  
+        for col in ["date_arrivee", 
   
