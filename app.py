@@ -624,22 +624,22 @@ def vue_plateformes(df, palette):
         column_config=col_cfg,
     )
 
+    # ---- Aperçu chips (pour versions sans ColorColumn)
     if not HAS_COLORCOL and not edited.empty:
-    st.caption(help_txt or "")
-    chips = []
-    for _, r in edited.iterrows():
-        plat = str(r["plateforme"]).strip()
-        col = str(r["couleur"]).strip()
-        if not plat:
-            continue
-        chips.append(
-            f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
-            f"border-radius:12px;background:{col if re.match(r'^#([0-9A-Fa-f]{6})$', col) else '#666'};"
-            f"color:#fff;'>{plat} {col}</span>"
-        )
-    if chips:
-        st.markdown("".join(chips), unsafe_allow_html=True)
-
+        st.caption(help_txt or "")
+        chips = []
+        for _, r in edited.iterrows():
+            plat = str(r["plateforme"]).strip()
+            col = str(r["couleur"]).strip()
+            if not plat:
+                continue
+            chips.append(
+                f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
+                f"border-radius:12px;background:{col if re.match(r'^#([0-9A-Fa-f]{6})$', col) else '#666'};"
+                f"color:#fff;'>{plat} {col}</span>"
+            )
+        if chips:
+            st.markdown("".join(chips), unsafe_allow_html=True)
 
     c1, c2 = st.columns([0.6, 0.4])
     if c1.button("💾 Enregistrer la palette"):
@@ -666,6 +666,7 @@ def vue_plateformes(df, palette):
             st.rerun()
         except Exception as e:
             st.error(f"Erreur : {e}")
+
 
 def vue_calendrier(df, palette):
     st.header("📅 Calendrier (grille mensuelle)")
