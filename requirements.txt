@@ -10,3 +10,85 @@ httplib2==0.22.0
 uritemplate==4.1.1
 gspread==6.1.2
 openpyxl==3.1.5
+# requirements.txt (si possible)
+# phonenumberslite==8.13.43  # ou phonenumbers==8.13.43
+
+try:
+    import phonenumbers
+    from phonenumbers import geocoder as pn_geocoder
+    _HAS_PN = True
+except Exception:
+    _HAS_PN = False
+
+# dictionnaire étendu (garde ton existant + ajouts)
+_DIAL_TO_COUNTRY = {
+    "33": "France", "41": "Suisse", "32": "Belgique", "49": "Allemagne",
+    "34": "Espagne", "39": "Italie", "44": "Royaume-Uni", "352": "Luxembourg",
+    "31": "Pays-Bas", "351": "Portugal", "43": "Autriche", "420": "Tchéquie",
+    "1": "États-Unis/Canada", "61": "Australie", "64": "Nouvelle-Zélande",
+    "81": "Japon", "82": "Corée du Sud", "86": "Chine", "971": "Émirats arabes unis",
+    "212": "Maroc", "216": "Tunisie", "90": "Turquie", "7": "Russie",
+    # ajouts utiles
+    "353": "Irlande", "45": "Danemark", "46": "Suède", "47": "Norvège", "48": "Pologne",
+    "30": "Grèce", "36": "Hongrie", "40": "Roumanie", "358": "Finlande",
+    "386": "Slovénie", "385": "Croatie", "372": "Estonie", "371": "Lettonie", "370": "Lituanie",
+    "380": "Ukraine", "375": "Biélorussie", "376": "Andorre", "377": "Monaco", "41": "Suisse",
+}
+
+def _clean_phone(raw: str) -> str:
+    if not raw:
+        return ""
+    s = str(raw)
+    # enlever extensions / 2e numéro courant
+    s = re.split(r"(?:ext|poste|post|x|/|;|,)", s, flags=re.I)[0]
+    # normaliser espaces (y compris insécables)
+    s = re.sub(r"\s+", "", s.replace("\u00A0", " "))
+    # remplacer 00 par +
+    if s.startswith("00"):
+        s = "+" + s[2:]
+    return s
+
+def _phone_country(phone: str) -> str:
+    """Détermine un pays depuis l’indicatif. Tente phonenumbers si dispo, sinon fallback dictionnaire."""
+    if not phone:
+        return ""
+    s = _clean_phone(phone)
+
+    # Cas local France (10 chiffres débutant par 0) → France
+    if s.startswith("0") and not s.startswith("+"):
+        # heuristique : bcp de numéros locaux .fr arrivent ainsi
+        return "France"
+
+    # Si lib phonenumbers dispo, on l’utilise (meilleur taux de détection)
+    if _HAS_PN:
+        try:
+            # supposer FR par défaut si pas d’indicatif
+            default_region = "FR"
+            num = phonenumbers.parse(s, default_region)
+            if phonenumbers.is_possible_number(num) or phonenumbers.is_valid_number(num):
+                # description locale en français si dispo, sinon anglais
+                country_name = pn_geocoder.description_for_number(num, "fr") or pn_geocoder.description_for_number(num, "en")
+                # parfois la description renvoie la région (ex: "California") → fallback pays via country_code
+                if not country_name or country_name.strip() == "":
+                    cc = str(num.country_code)
+                    country_name = _DIAL_TO_COUNTRY.get(cc, "")
+                # normaliser quelques libellés
+                if country_name.lower() in {"united states", "usa"}:
+                    country_name = "États-Unis"
+                elif country_name.lower() == "united kingdom":
+                    country_name = "Royaume-Uni"
+                return country_name or ""
+        except Exception:
+            pass  # on tombera sur le fallback dictionnaire
+
+    # Fallback simple : on lit les chiffres après +
+    if s.startswith("+"):
+        digits = re.sub(r"\D", "", s[1:])
+    else:
+        digits = re.sub(r"\D", "", s)
+    # Cherche le préfixe le plus long
+    for k in sorted(_DIAL_TO_COUNTRY.keys(), key=len, reverse=True):
+        if digits.startswith(k):
+            return _DIAL_TO_COUNTRY[k]
+
+    return ""
