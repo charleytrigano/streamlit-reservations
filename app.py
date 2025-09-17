@@ -647,8 +647,9 @@ def vue_calendrier(df, palette):
 
 
 
-  st.header("📊 Rapport")
-    if df is None or df.empty:
+  
+
+  if df is None or df.empty:
         st.info("Aucune donnée.")
         return
 
@@ -1326,4 +1327,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+  
   
