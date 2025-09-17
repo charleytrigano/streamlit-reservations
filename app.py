@@ -664,6 +664,12 @@ def vue_calendrier(df, palette):
         dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
     )
 
+# Exemple : normaliser 'telephone' avant tout usage
+df["telephone"] = df["telephone"].astype(str).map(_clean_phone)
+
+
+
+
     # Pays disponibles (calculés à la volée à partir des numéros)
     dfa["_pays"] = dfa["telephone"].apply(_phone_country).replace("", "Inconnu")
     pays_avail = sorted(dfa["_pays"].unique().tolist())
