@@ -17,6 +17,7 @@ st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="�
 
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES = "plateformes.csv"
+CSV_INDICATIFS = "indicatifs.csv"  # <— nouvelle table d’indicatifs (auto-créée)
 
 DEFAULT_PALETTE = {
     "Booking": "#1e90ff",
@@ -85,6 +86,7 @@ BASE_COLS = [
     "prix_brut", "commissions", "frais_cb", "prix_net", "menage", "taxes_sejour", "base", "charges", "%",
     "res_id", "ical_uid"
 ]
+# Remarque : on ne stocke pas "pays" en base ; on le calcule partout à l’affichage/export pour éviter les incohérences.
 
 def _as_series(x, index=None):
     if isinstance(x, pd.Series):
@@ -147,9 +149,133 @@ def _load_file_bytes(path: str):
     try:
         with open(path, "rb") as f:
             return f.read()
-    except Exception as e:
+    except Exception:
         st.warning(f"Fichier {path} introuvable ou illisible. Un fichier vide sera créé.")
         return None
+
+# ---------- TABLE D’INDICATIFS : chargement + helpers ----------
+@st.cache_data
+def charger_indicatifs() -> pd.DataFrame:
+    """Charge le tableau d'indicatifs (code -> pays). Crée un CSV de base si absent."""
+    if not os.path.exists(CSV_INDICATIFS):
+        base = """code,pays
+33,France
+32,Belgique
+41,Suisse
+49,Allemagne
+39,Italie
+34,Espagne
+44,Royaume-Uni
+31,Pays-Bas
+351,Portugal
+352,Luxembourg
+43,Autriche
+45,Danemark
+46,Suède
+47,Norvège
+48,Pologne
+420,République tchèque
+36,Hongrie
+30,Grèce
+40,Roumanie
+386,Slovénie
+385,Croatie
+381,Serbie
+386,Slovénie
+372,Estonie
+371,Lettonie
+370,Lituanie
+353,Irlande
+356,Malte
+357,Chypre
+354,Islande
+1,États-Unis / Canada (NANP)
+52,Mexique
+55,Brésil
+57,Colombie
+54,Argentine
+56,Chili
+51,Pérou
+61,Australie
+64,Nouvelle-Zélande
+81,Japon
+82,Corée du Sud
+86,Chine
+91,Inde
+90,Turquie
+971,Émirats arabes unis
+966,Arabie saoudite
+972,Israël
+974,Qatar
+212,Maroc
+213,Algérie
+216,Tunisie
+218,Libye
+20,Égypte
+27,Afrique du Sud
+234,Nigeria
+237,Cameroun
+221,Sénégal
+225,Côte d’Ivoire
+"""
+        with open(CSV_INDICATIFS, "w", encoding="utf-8") as f:
+            f.write(base)
+
+    try:
+        df = pd.read_csv(CSV_INDICATIFS, dtype=str)
+        df["code"] = df["code"].astype(str).str.replace(r"\D", "", regex=True)
+        df["pays"] = df["pays"].astype(str).str.strip()
+        df = df.dropna(subset=["code", "pays"])
+        df = df[df["code"] != ""]
+        df["len"] = df["code"].str.len().astype(int)
+        df = df.sort_values("len", ascending=False)
+        return df[["code", "pays"]]
+    except Exception as e:
+        st.warning(f"Impossible de charger {CSV_INDICATIFS} : {e}")
+        return pd.DataFrame(columns=["code", "pays"])
+
+_INDICATIFS = charger_indicatifs()
+
+def _parse_phone_digits(phone: str) -> str:
+    """Normalise un numéro en digits, en gérant + et 00."""
+    s = str(phone or "").strip()
+    s = s.replace(" ", "").replace("\u00a0", "")
+    s = s.replace("(", "").replace(")", "").replace("-", "")
+    s = re.sub(r"^00", "+", s)
+    s = re.sub(r"[^\d+]", "", s)
+    if s.startswith("+"):
+        s = s[1:]
+    return s
+
+def _phone_country(phone: str) -> str:
+    """
+    Détermine le pays à partir de l'indicatif en utilisant la table CSV.
+    Règles :
+      - +XX… / 00XX… : match du préfixe le plus long (table)
+      - 0XXXXXXXXX (sans +/00) : France par défaut
+      - sinon : "" (Inconnu)
+    """
+    raw = str(phone or "").strip()
+    if not raw:
+        return ""
+
+    digits = _parse_phone_digits(raw)
+
+    if raw.startswith("0") and not (raw.startswith("+") or raw.startswith("00")):
+        return "France"
+
+    if not (raw.startswith("+") or raw.startswith("00")):
+        return ""
+
+    if _INDICATIFS is None or _INDICATIFS.empty:
+        return ""
+
+    for code in _INDICATIFS["code"].tolist():
+        if digits.startswith(code):
+            pays = _INDICATIFS.loc[_INDICATIFS["code"] == code, "pays"].iloc[0]
+            return pays
+
+    return ""
 
 @st.cache_data
 def charger_donnees():
@@ -274,43 +400,7 @@ def _format_phone_e164(phone: str) -> str:
         return "+" + s
     if s.startswith("0"):
         return "+33" + s[1:]
-    if s.startswith("00"):
-        return "+" + s[2:]
     return "+" + s
-
-# === Détection du pays depuis l'indicatif téléphonique ===
-_DIAL_TO_COUNTRY = {
-    "33": "France", "41": "Suisse", "32": "Belgique", "49": "Allemagne",
-    "34": "Espagne", "39": "Italie", "44": "Royaume-Uni", "352": "Luxembourg",
-    "31": "Pays-Bas", "351": "Portugal", "43": "Autriche", "420": "Tchéquie",
-    "1": "États-Unis/Canada", "61": "Australie", "64": "Nouvelle-Zélande",
-    "81": "Japon", "82": "Corée du Sud", "86": "Chine", "971": "Émirats arabes unis",
-    "212": "Maroc", "216": "Tunisie", "90": "Turquie", "7": "Russie",
-}
-
-def _phone_country(phone: str) -> str:
-    if not phone:
-        return ""
-    p = str(phone).strip()
-    # Normalise
-    p = p.replace(" ", "")
-    if p.startswith("00"):
-        p = "+" + p[2:]
-    if p.startswith("0") and not p.startswith("00"):
-        # On considère "0" = France (numéro domestique)
-        return "France"
-    if p.startswith("+"):
-        digits = re.sub(r"[^\d]", "", p[1:])
-        # Cherche préfixe le plus long d'abord
-        for k in sorted(_DIAL_TO_COUNTRY.keys(), key=len, reverse=True):
-            if digits.startswith(k):
-                return _DIAL_TO_COUNTRY[k]
-    # fallback : essaie de lire chiffres au début
-    digits = re.sub(r"\D", "", p)
-    for k in sorted(_DIAL_TO_COUNTRY.keys(), key=len, reverse=True):
-        if digits.startswith(k):
-            return _DIAL_TO_COUNTRY[k]
-    return ""
 
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
@@ -544,7 +634,7 @@ def vue_plateformes(df, palette):
                 continue
             chips.append(
                 f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
-                f"border-radius:12px;background:{col if re.match(r'^#([0-9A-Fa-f]{6})$', col) else '#666'};"
+                f"border-radius:12px;background:{col if re.match(r"^#([0-9A-Fa-f]{6})$", col) else '#666'};"
                 f"color:#fff;'>{plat} {col}</span>"
             )
         if chips:
@@ -645,10 +735,6 @@ def vue_calendrier(df, palette):
         st.markdown(html, unsafe_allow_html=True)
         st.dataframe(rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]], use_container_width=True)
 
-
-
-
-
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
     if df is None or df.empty:
@@ -664,7 +750,7 @@ def vue_rapport(df, palette):
     months_avail = list(range(1, 13))
     plats_avail = sorted(dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist())
 
-    # Pays disponibles (à partir des numéros, via _phone_country défini en Partie 1)
+    # Pays disponibles (à partir des numéros)
     dfa["_pays"] = dfa["telephone"].apply(_phone_country).replace("", "Inconnu")
     pays_avail = sorted(dfa["_pays"].unique().tolist())
     if "France" in pays_avail:
@@ -945,11 +1031,9 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique du taux d'occupation indisponible : {e}")
 
-
 def _copy_button(label: str, payload: str, key: str):
     st.text_area("Aperçu", payload, height=200, key=f"ta_{key}")
     st.caption("Sélectionnez puis copiez (Ctrl/Cmd+C).")
-
 
 def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
@@ -1063,7 +1147,6 @@ def vue_sms(df, palette):
                     st.success("Marqué ✅")
                     st.rerun()
 
-
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
     if df.empty:
@@ -1147,7 +1230,6 @@ def vue_export_ics(df, palette):
         mime="text/calendar"
     )
 
-
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
@@ -1175,7 +1257,6 @@ def vue_google_sheet(df, palette):
     except Exception as e:
         st.error(f"Impossible de charger la feuille publiée : {e}")
 
-
 def vue_clients(df, palette):
     st.header("👥 Liste des clients")
     if df.empty:
@@ -1198,7 +1279,6 @@ def vue_clients(df, palette):
     if clients["pays"].fillna("").eq("").all():
         st.caption("Astuce : si 'Pays' est vide, vérifie que les numéros ont un indicatif (+33, 0033 ou 0 pour France).")
 
-
 def vue_id(df, palette):
     st.header("🆔 Identifiants des réservations")
     if df is None or df.empty:
@@ -1216,7 +1296,6 @@ def vue_id(df, palette):
     tbl = tbl[["res_id", "nom_client", "pays", "telephone", "email", "plateforme"]]
 
     st.dataframe(tbl, use_container_width=True)
-
 
 # ============================== ADMIN ==============================
 def admin_sidebar(df: pd.DataFrame):
@@ -1312,7 +1391,6 @@ def admin_sidebar(df: pd.DataFrame):
         st.sidebar.success("Cache vidé.")
         st.rerun()
 
-
 # ============================== MAIN ==============================
 def main():
     params = st.query_params
@@ -1351,7 +1429,6 @@ def main():
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
     admin_sidebar(df)
-
 
 if __name__ == "__main__":
     main()
