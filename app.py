@@ -647,7 +647,9 @@ def vue_calendrier(df, palette):
 
 
 
-  def vue_rapport(df, palette):
+
+
+def vue_rapport(df, palette):
     st.header("📊 Rapport")
     if df is None or df.empty:
         st.info("Aucune donnée.")
@@ -767,8 +769,6 @@ def vue_calendrier(df, palette):
     occ_annee = data.groupby(["annee", "plateforme"])["nuitees"].sum().reset_index()
     occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
 
-   
-    # Correction: variable 'annee' dans la condition précédente
     def jours_dans_annee(annee):
         return 366 if (annee % 4 == 0 and annee % 100 != 0) or (annee % 400 == 0) else 365
 
