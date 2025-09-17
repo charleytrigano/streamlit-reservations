@@ -916,6 +916,7 @@ def vue_rapport(df, palette):
         st.warning(f"Graphique du taux d'occupation indisponible : {e}")
 
 
+
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
     if df is None or df.empty:
@@ -936,7 +937,6 @@ def vue_rapport(df, palette):
     # Pays disponibles (calculés à la volée à partir des numéros)
     dfa["_pays"] = dfa["telephone"].apply(_phone_country).replace("", "Inconnu")
     pays_avail = sorted(dfa["_pays"].unique().tolist())
-    # place "France" en tête si présent
     if "France" in pays_avail:
         pays_avail.remove("France")
         pays_avail = ["France"] + pays_avail
@@ -1153,13 +1153,14 @@ def vue_rapport(df, palette):
         cexp2.download_button("⬇️ Exporter analyse pays (Excel)", data=xlsx_pays, file_name="analyse_pays.xlsx",
                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+    # ⚠️ Correction du SyntaxError : on évite un nom d'argument avec '%'
     st.dataframe(
         agg_pays.assign(
             prix_brut=lambda x: x["prix_brut"].round(2),
             prix_net=lambda x: x["prix_net"].round(2),
             ADR_net=lambda x: x["ADR_net"].round(2),
-            part_revenu_%=lambda x: x["part_revenu_%"].round(1),
-        ),
+            part_revenu=lambda x: x["part_revenu_%"].round(1),
+        ).rename(columns={"part_revenu": "part_revenu_%"}),
         use_container_width=True
     )
 
