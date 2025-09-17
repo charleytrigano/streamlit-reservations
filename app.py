@@ -17,7 +17,7 @@ st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="�
 
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES = "plateformes.csv"
-CSV_INDICATIFS = "indicatifs.csv"  # <— nouvelle table d’indicatifs (auto-créée)
+CSV_INDICATIFS = "indicatifs.csv"  # table d’indicatifs (auto-créée si absente)
 
 DEFAULT_PALETTE = {
     "Booking": "#1e90ff",
@@ -86,7 +86,7 @@ BASE_COLS = [
     "prix_brut", "commissions", "frais_cb", "prix_net", "menage", "taxes_sejour", "base", "charges", "%",
     "res_id", "ical_uid"
 ]
-# Remarque : on ne stocke pas "pays" en base ; on le calcule partout à l’affichage/export pour éviter les incohérences.
+# 'pays' n’est pas stocké en base ; il est calculé à l’affichage/export.
 
 def _as_series(x, index=None):
     if isinstance(x, pd.Series):
@@ -156,77 +156,228 @@ def _load_file_bytes(path: str):
 # ---------- TABLE D’INDICATIFS : chargement + helpers ----------
 @st.cache_data
 def charger_indicatifs() -> pd.DataFrame:
-    """Charge le tableau d'indicatifs (code -> pays). Crée un CSV de base si absent."""
+    """Charge le tableau d'indicatifs (code -> pays). Crée un CSV de base si absent (Europe + Monde étendu)."""
     if not os.path.exists(CSV_INDICATIFS):
         base = """code,pays
-33,France
-32,Belgique
-41,Suisse
-49,Allemagne
-39,Italie
-34,Espagne
-44,Royaume-Uni
+# Europe
+30,Grèce
 31,Pays-Bas
-351,Portugal
-352,Luxembourg
+32,Belgique
+33,France
+34,Espagne
+36,Hongrie
+39,Italie
+40,Roumanie
+41,Suisse
 43,Autriche
+44,Royaume-Uni
 45,Danemark
 46,Suède
 47,Norvège
 48,Pologne
-420,République tchèque
-36,Hongrie
-30,Grèce
-40,Roumanie
-386,Slovénie
-385,Croatie
-381,Serbie
-386,Slovénie
-372,Estonie
-371,Lettonie
-370,Lituanie
+49,Allemagne
+351,Portugal
+352,Luxembourg
 353,Irlande
+354,Islande
+355,Albanie
 356,Malte
 357,Chypre
-354,Islande
-1,États-Unis / Canada (NANP)
-52,Mexique
-55,Brésil
-57,Colombie
-54,Argentine
-56,Chili
-51,Pérou
-61,Australie
-64,Nouvelle-Zélande
-81,Japon
-82,Corée du Sud
-86,Chine
-91,Inde
+358,Finlande
+359,Bulgarie
+370,Lituanie
+371,Lettonie
+372,Estonie
+373,Moldavie
+374,Arménie
+375,Biélorussie
+376,Andorre
+377,Monaco
+378,Saint-Marin
+380,Ukraine
+381,Serbie
+382,Monténégro
+383,Kosovo
+385,Croatie
+386,Slovénie
+387,Bosnie-Herzégovine
+389,Macédoine du Nord
+420,République tchèque
+421,Slovaquie
+423,Liechtenstein
+# Moyen-Orient
 90,Turquie
+970,Palestine
 971,Émirats arabes unis
-966,Arabie saoudite
 972,Israël
+973,Bahreïn
 974,Qatar
+975,Bhoutan
+976,Mongolie
+977,Népal
+# Afrique
+20,Égypte
+211,Soudan du Sud
 212,Maroc
 213,Algérie
 216,Tunisie
 218,Libye
-20,Égypte
-27,Afrique du Sud
-234,Nigeria
-237,Cameroun
+220,Gambie
 221,Sénégal
+222,Mauritanie
+223,Mali
+224,Guinée
 225,Côte d’Ivoire
+226,Burkina Faso
+227,Niger
+228,Togo
+229,Bénin
+230,Maurice
+231,Liberia
+232,Sierra Leone
+233,Ghana
+234,Nigeria
+235,Tchad
+236,Centrafrique
+237,Cameroun
+238,Cap-Vert
+239,Sao Tomé-et-Principe
+240,Guinée équatoriale
+241,Gabon
+242,Congo
+243,République démocratique du Congo
+244,Angola
+245,Guinée-Bissau
+246,Diego Garcia
+247,Ascension
+248,Seychelles
+249,Soudan
+250,Rwanda
+251,Éthiopie
+252,Somalie
+253,Djibouti
+254,Kenya
+255,Tanzanie
+256,Ouganda
+257,Burundi
+258,Mozambique
+260,Zambie
+261,Madagascar
+262,La Réunion/Mayotte
+263,Zimbabwe
+264,Namibie
+265,Malawi
+266,Lesotho
+267,Botswana
+268,Eswatini
+269,Comores
+27,Afrique du Sud
+# Amériques
+1,États-Unis / Canada (NANP)
+1242,Bahamas
+1246,Barbade
+1264,Anguilla
+1268,Antigua-et-Barbuda
+1284,Îles Vierges britanniques
+1340,Îles Vierges américaines
+1345,Îles Caïmans
+1441,Bermudes
+1473,Grenade
+1649,Îles Turques-et-Caïques
+1664,Montserrat
+1670,Îles Mariannes du Nord
+1671,Guam
+1684,Samoa américaines
+1758,Sainte-Lucie
+1767,Dominique
+1784,Saint-Vincent-et-les-Grenadines
+1787,Porto Rico
+1809,République dominicaine
+1829,République dominicaine (alt)
+1849,République dominicaine (alt2)
+1868,Trinité-et-Tobago
+1869,Saint-Christophe-et-Niévès
+1876,Jamaïque
+1907,Jamaïque (alt)
+20,Égypte
+52,Mexique
+53,Cuba
+54,Argentine
+55,Brésil
+56,Chili
+57,Colombie
+58,Venezuela
+500,Malouines
+501,Belize
+502,Guatemala
+503,Salvador
+504,Honduras
+505,Nicaragua
+506,Costa Rica
+507,Panama
+508,Saint-Pierre-et-Miquelon
+509,Haïti
+# Asie / Océanie
+60,Malaisie
+61,Australie
+62,Indonésie
+63,Philippines
+64,Nouvelle-Zélande
+65,Singapour
+66,Thaïlande
+81,Japon
+82,Corée du Sud
+84,Vietnam
+86,Chine
+850,Corée du Nord
+852,Hong Kong
+853,Macao
+855,Cambodge
+856,Laos
+880,Bangladesh
+886,Taïwan
+960,Maldives
+961,Liban
+962,Jordanie
+963,Syrie
+964,Irak
+965,Koweït
+966,Arabie saoudite
+968,Oman
+98,Iran
+91,Inde
+92,Pakistan
+93,Afghanistan
+94,Sri Lanka
+95,Myanmar
+960,Maldives
+# Divers territoires
+290,Sainte-Hélène
+297,Aruba
+298,Féroé
+299,Groenland
+350,Gibraltar
+354,Islande
+389,Macédoine du Nord
 """
         with open(CSV_INDICATIFS, "w", encoding="utf-8") as f:
-            f.write(base)
+            # On filtre lignes de commentaires/vides pour garder un CSV propre
+            lines = []
+            for L in base.splitlines():
+                Ls = L.strip()
+                if not Ls or Ls.startswith("#"):
+                    continue
+                lines.append(Ls)
+            f.write("\n".join(lines))
 
     try:
         df = pd.read_csv(CSV_INDICATIFS, dtype=str)
         df["code"] = df["code"].astype(str).str.replace(r"\D", "", regex=True)
         df["pays"] = df["pays"].astype(str).str.strip()
         df = df.dropna(subset=["code", "pays"])
-        df = df[df["code"] != ""]
+        df = df[(df["code"] != "") & (df["pays"] != "")]
+        # garder 1 ligne par code (si doublons éventuels)
+        df = df.drop_duplicates(subset=["code"], keep="first")
         df["len"] = df["code"].str.len().astype(int)
         df = df.sort_values("len", ascending=False)
         return df[["code", "pays"]]
@@ -624,7 +775,7 @@ def vue_plateformes(df, palette):
         column_config=col_cfg,
     )
 
-    # ---- Aperçu chips (pour versions sans ColorColumn)
+    # Aperçu chips (pour versions sans ColorColumn)
     if not HAS_COLORCOL and not edited.empty:
         st.caption(help_txt or "")
         chips = []
@@ -666,7 +817,6 @@ def vue_plateformes(df, palette):
             st.rerun()
         except Exception as e:
             st.error(f"Erreur : {e}")
-
 
 def vue_calendrier(df, palette):
     st.header("📅 Calendrier (grille mensuelle)")
@@ -1299,6 +1449,49 @@ def vue_id(df, palette):
 
     st.dataframe(tbl, use_container_width=True)
 
+def vue_indicatifs():
+    st.header("🌍 Table des indicatifs (code ➜ pays)")
+    st.caption("Le champ 'code' ne doit contenir **que des chiffres** (sans + ni 00).")
+
+    # Charger le CSV existant
+    try:
+        df_ind = pd.read_csv(CSV_INDICATIFS, dtype=str)
+    except Exception:
+        df_ind = pd.DataFrame(columns=["code", "pays"])
+
+    df_ind["code"] = df_ind.get("code", "").astype(str).str.replace(r"\D", "", regex=True)
+    df_ind["pays"] = df_ind.get("pays", "").astype(str).str.strip()
+
+    edited = st.data_editor(
+        df_ind,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "code": st.column_config.TextColumn("Indicatif (ex: 33)"),
+            "pays": st.column_config.TextColumn("Pays"),
+        }
+    )
+
+    c1, c2 = st.columns([0.6, 0.4])
+    if c1.button("💾 Enregistrer les indicatifs"):
+        try:
+            out = edited.copy()
+            out["code"] = out["code"].astype(str).str.replace(r"\D", "", regex=True)
+            out["pays"] = out["pays"].astype(str).str.strip()
+            out = out.dropna(subset=["code", "pays"])
+            out = out[(out["code"] != "") & (out["pays"] != "")]
+            out = out.drop_duplicates(subset=["code"], keep="first")
+            out.to_csv(CSV_INDICATIFS, index=False, encoding="utf-8")
+            st.success("Table enregistrée ✅")
+            st.cache_data.clear()
+        except Exception as e:
+            st.error(f"Erreur de sauvegarde : {e}")
+
+    if c2.button("↩️ Recharger depuis le disque"):
+        st.cache_data.clear()
+        st.success("Rechargé. Change d’onglet pour appliquer.")
+
 # ============================== ADMIN ==============================
 def admin_sidebar(df: pd.DataFrame):
     st.sidebar.markdown("---")
@@ -1426,6 +1619,7 @@ def main():
         "📝 Google Sheet": vue_google_sheet,
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
+        "🌍 Indicatifs": vue_indicatifs,
     }
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
@@ -1434,3 +1628,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
