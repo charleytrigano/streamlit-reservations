@@ -1449,7 +1449,11 @@ def vue_id(df, palette):
 
     st.dataframe(tbl, use_container_width=True)
 
-def vue_indicatifs():
+# AVANT
+# def vue_indicatifs():
+
+# APRÈS
+def vue_indicatifs(df=None, palette=None):
     st.header("🌍 Table des indicatifs (code ➜ pays)")
     st.caption("Le champ 'code' ne doit contenir **que des chiffres** (sans + ni 00).")
 
