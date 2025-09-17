@@ -86,7 +86,7 @@ BASE_COLS = [
     "prix_brut", "commissions", "frais_cb", "prix_net", "menage", "taxes_sejour", "base", "charges", "%",
     "res_id", "ical_uid"
 ]
-# 'pays' n’est pas stocké en base ; il est calculé à l’affichage/export.
+# 'pays' n’est pas stocké ; il est calculé depuis le téléphone.
 
 def _as_series(x, index=None):
     if isinstance(x, pd.Series):
@@ -156,7 +156,7 @@ def _load_file_bytes(path: str):
 # ---------- TABLE D’INDICATIFS : chargement + helpers ----------
 @st.cache_data
 def charger_indicatifs() -> pd.DataFrame:
-    """Charge le tableau d'indicatifs (code -> pays). Crée un CSV de base si absent (Europe + Monde étendu)."""
+    """Charge indicatifs (code -> pays). Crée un CSV Europe + Monde étendu si absent."""
     if not os.path.exists(CSV_INDICATIFS):
         base = """code,pays
 # Europe
@@ -299,7 +299,6 @@ def charger_indicatifs() -> pd.DataFrame:
 1869,Saint-Christophe-et-Niévès
 1876,Jamaïque
 1907,Jamaïque (alt)
-20,Égypte
 52,Mexique
 53,Cuba
 54,Argentine
@@ -350,7 +349,6 @@ def charger_indicatifs() -> pd.DataFrame:
 93,Afghanistan
 94,Sri Lanka
 95,Myanmar
-960,Maldives
 # Divers territoires
 290,Sainte-Hélène
 297,Aruba
@@ -361,7 +359,6 @@ def charger_indicatifs() -> pd.DataFrame:
 389,Macédoine du Nord
 """
         with open(CSV_INDICATIFS, "w", encoding="utf-8") as f:
-            # On filtre lignes de commentaires/vides pour garder un CSV propre
             lines = []
             for L in base.splitlines():
                 Ls = L.strip()
@@ -376,7 +373,6 @@ def charger_indicatifs() -> pd.DataFrame:
         df["pays"] = df["pays"].astype(str).str.strip()
         df = df.dropna(subset=["code", "pays"])
         df = df[(df["code"] != "") & (df["pays"] != "")]
-        # garder 1 ligne par code (si doublons éventuels)
         df = df.drop_duplicates(subset=["code"], keep="first")
         df["len"] = df["code"].str.len().astype(int)
         df = df.sort_values("len", ascending=False)
@@ -388,10 +384,9 @@ def charger_indicatifs() -> pd.DataFrame:
 _INDICATIFS = charger_indicatifs()
 
 def _parse_phone_digits(phone: str) -> str:
-    """Normalise un numéro en digits, en gérant + et 00."""
+    """Normalise un numéro en digits, gère + et 00."""
     s = str(phone or "").strip()
-    s = s.replace(" ", "").replace("\u00a0", "")
-    s = s.replace("(", "").replace(")", "").replace("-", "")
+    s = s.replace(" ", "").replace("\u00a0", "").replace("(", "").replace(")", "").replace("-", "")
     s = re.sub(r"^00", "+", s)
     s = re.sub(r"[^\d+]", "", s)
     if s.startswith("+"):
@@ -400,10 +395,9 @@ def _parse_phone_digits(phone: str) -> str:
 
 def _phone_country(phone: str) -> str:
     """
-    Détermine le pays à partir de l'indicatif en utilisant la table CSV.
-    Règles :
-      - +XX… / 00XX… : match du préfixe le plus long (table)
-      - 0XXXXXXXXX (sans +/00) : France par défaut
+    Détermine le pays à partir de l'indicatif (CSV).
+      - +XX… / 00XX… : match du préfixe le plus long
+      - 0XXXXXXXXX (national FR) : France
       - sinon : "" (Inconnu)
     """
     raw = str(phone or "").strip()
@@ -430,7 +424,7 @@ def _phone_country(phone: str) -> str:
 
 @st.cache_data
 def charger_donnees():
-    # Créer les fichiers s'ils n'existent pas
+    # Créer fichiers si absents
     for fichier, header in [
         (CSV_RESERVATIONS, "nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut\n"),
         (CSV_PLATEFORMES, "plateforme,couleur\nBooking,#1e90ff\nAirbnb,#e74c3c\n")
@@ -439,12 +433,12 @@ def charger_donnees():
             with open(fichier, "w") as f:
                 f.write(header)
 
-    # Charger les réservations
+    # Réservations
     raw = _load_file_bytes(CSV_RESERVATIONS)
     base_df = _detect_delimiter_and_read(raw) if raw is not None else pd.DataFrame()
     df = ensure_schema(base_df)
 
-    # Charger la palette
+    # Palette
     rawp = _load_file_bytes(CSV_PLATEFORMES)
     palette = DEFAULT_PALETTE.copy()
     if rawp is not None:
@@ -552,6 +546,9 @@ def _format_phone_e164(phone: str) -> str:
     if s.startswith("0"):
         return "+33" + s[1:]
     return "+" + s
+
+
+
 
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
@@ -887,6 +884,10 @@ def vue_calendrier(df, palette):
         st.markdown(html, unsafe_allow_html=True)
         st.dataframe(rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]], use_container_width=True)
 
+
+
+
+
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
     if df is None or df.empty:
@@ -897,12 +898,10 @@ def vue_rapport(df, palette):
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
     dfa["date_depart_dt"] = pd.to_datetime(dfa["date_depart"], errors="coerce")
 
-    # Filtres (Année / Mois / Plateforme / Pays / Métrique)
     years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
     months_avail = list(range(1, 13))
     plats_avail = sorted(dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist())
 
-    # Pays disponibles (à partir des numéros)
     dfa["_pays"] = dfa["telephone"].apply(_phone_country).replace("", "Inconnu")
     pays_avail = sorted(dfa["_pays"].unique().tolist())
     if "France" in pays_avail:
@@ -916,7 +915,6 @@ def vue_rapport(df, palette):
     payf = c4.selectbox("Pays", ["Tous"] + pays_avail, index=0)
     metric = c5.selectbox("Métrique", ["prix_brut", "prix_net", "base", "charges", "menage", "taxes_sejour", "nuitees"], index=1)
 
-    # Application des filtres
     data = dfa.copy()
     data["pays"] = data["_pays"]
     if year != "Toutes":
@@ -949,7 +947,6 @@ def vue_rapport(df, palette):
     occ_mois["jours_dans_mois"] = occ_mois["mois"].apply(jours_dans_mois)
     occ_mois["taux_occupation"] = (occ_mois["nuitees_occupees"] / occ_mois["jours_dans_mois"]) * 100
 
-    # Filtres d’affichage occupation
     st.markdown("---")
     col_plat, col_export = st.columns([1, 1])
     plat_occ = col_plat.selectbox("Filtrer par plateforme (occupation)", ["Toutes"] + plats_avail, index=0)
@@ -974,30 +971,17 @@ def vue_rapport(df, palette):
         unsafe_allow_html=True
     )
 
-    # Exports occupation
     occ_export = occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]].copy()
     occ_export = occ_export.sort_values(["mois", "plateforme"], ascending=[False, True])
 
     csv_occ = occ_export.to_csv(index=False).encode("utf-8")
-    col_export.download_button(
-        "⬇️ Exporter les données d'occupation (CSV)",
-        data=csv_occ,
-        file_name="taux_occupation.csv",
-        mime="text/csv"
-    )
+    col_export.download_button("⬇️ Exporter les données d'occupation (CSV)", data=csv_occ, file_name="taux_occupation.csv", mime="text/csv")
     xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
     if xlsx_occ:
-        col_export.download_button(
-            "⬇️ Exporter les données d'occupation (Excel)",
-            data=xlsx_occ,
-            file_name="taux_occupation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        col_export.download_button("⬇️ Exporter les données d'occupation (Excel)", data=xlsx_occ, file_name="taux_occupation.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    st.dataframe(
-        occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
-        use_container_width=True
-    )
+    st.dataframe(occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)), use_container_width=True)
 
     # ===== COMPARAISON ENTRE ANNÉES =====
     st.markdown("---")
@@ -1023,7 +1007,6 @@ def vue_rapport(df, palette):
         st.warning("Veuillez sélectionner au moins une année.")
     else:
         occ_comparaison = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
-
         try:
             chart_comparaison = alt.Chart(occ_comparaison).mark_bar().encode(
                 x=alt.X("annee:N", title="Année"),
@@ -1074,7 +1057,12 @@ def vue_rapport(df, palette):
     st.markdown("---")
     st.subheader("🌍 Analyse par pays")
 
+    years_pays_avail = sorted(data["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    annee_pays = st.selectbox("Année (analyse par pays)", ["Toutes"] + years_pays_avail, index=0, key="pays_year")
+
     data_p = data.copy()
+    if annee_pays != "Toutes":
+        data_p = data_p[data_p["date_arrivee_dt"].dt.year == int(annee_pays)]
     data_p["pays"] = data_p["pays"].replace("", "Inconnu")
 
     agg_pays = data_p.groupby("pays", as_index=False).agg(
@@ -1104,7 +1092,7 @@ def vue_rapport(df, palette):
 
     agg_pays = agg_pays.sort_values(["prix_net", "reservations"], ascending=[False, False])
 
-    nb_pays = int(agg_pays["pays"].nunique())
+    nb_pays = int(agg_pays["pays"].nunique()) if not agg_pays.empty else 0
     top_pays = agg_pays.iloc[0]["pays"] if not agg_pays.empty else "—"
     st.markdown(
         f"""
@@ -1125,34 +1113,24 @@ def vue_rapport(df, palette):
         cexp2.download_button("⬇️ Exporter analyse pays (Excel)", data=xlsx_pays, file_name="analyse_pays.xlsx",
                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Coercition stricte + arrondis
     disp = agg_pays.copy()
-    num_cols = [
-        "reservations", "nuitees", "prix_brut", "prix_net",
-        "menage", "taxes_sejour", "charges", "base",
-        "ADR_net", "part_revenu_%"
-    ]
+    num_cols = ["reservations", "nuitees", "prix_brut", "prix_net", "menage", "taxes_sejour", "charges", "base", "ADR_net", "part_revenu_%"]
     for c in num_cols:
         disp[c] = pd.to_numeric(disp[c], errors="coerce")
-
     disp["reservations"] = disp["reservations"].fillna(0).astype("int64")
     disp["pays"] = disp["pays"].astype(str).replace({"nan": "Inconnu", "": "Inconnu"})
-
     disp["prix_brut"] = disp["prix_brut"].round(2)
     disp["prix_net"] = disp["prix_net"].round(2)
     disp["ADR_net"] = disp["ADR_net"].round(2)
     disp["part_revenu_%"] = disp["part_revenu_%"].round(1)
 
-    order_cols = [
-        "pays", "reservations", "nuitees", "prix_brut", "prix_net",
-        "charges", "menage", "taxes_sejour", "base", "ADR_net", "part_revenu_%"
-    ]
+    order_cols = ["pays", "reservations", "nuitees", "prix_brut", "prix_net", "charges", "menage", "taxes_sejour", "base", "ADR_net", "part_revenu_%"]
     disp = disp[[c for c in order_cols if c in disp.columns]]
 
     st.dataframe(disp, use_container_width=True)
 
     try:
-        topN = st.slider("Afficher les N premiers pays (par CA net)", min_value=3, max_value=20, value=12, step=1)
+        topN = st.slider("Afficher les N premiers pays (par CA net)", min_value=3, max_value=20, value=12, step=1, key="topN_pays")
         chart_pays = alt.Chart(agg_pays.head(topN)).mark_bar().encode(
             x=alt.X("pays:N", sort="-y", title="Pays"),
             y=alt.Y("prix_net:Q", title="CA net (€)"),
@@ -1168,7 +1146,7 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique 'Analyse par pays' indisponible : {e}")
 
-    # ===== ÉVOLUTION DU TAUX D'OCCUPATION =====
+    # ===== 📈 ÉVOLUTION DU TAUX D'OCCUPATION =====
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
 
@@ -1320,6 +1298,8 @@ def vue_export_ics(df, palette):
         st.warning("Rien à exporter.")
         return
 
+    miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.trim().str.strip() == "")
+    # .trim() n'existe pas sur pandas < correction :
     miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip() == "")
     if miss.any():
         data.loc[miss, "ical_uid"] = data.loc[miss].apply(build_stable_uid, axis=1)
@@ -1375,26 +1355,15 @@ def vue_export_ics(df, palette):
 
     lines.append("END:VCALENDAR")
     ics = "\r\n".join(lines) + "\r\n"
-    st.download_button(
-        "📥 Télécharger .ics",
-        data=ics.encode("utf-8"),
-        file_name=f"reservations_{year}.ics",
-        mime="text/calendar"
-    )
+    st.download_button("📥 Télécharger .ics", data=ics.encode("utf-8"), file_name=f"reservations_{year}.ics", mime="text/calendar")
 
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
-    st.markdown(
-        f'<iframe src="{GOOGLE_FORM_URL}" width="100%" height="900" frameborder="0"></iframe>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<iframe src="{GOOGLE_FORM_URL}" width="100%" height="900" frameborder="0"></iframe>', unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Feuille Google intégrée")
-    st.markdown(
-        f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>', unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Réponses (CSV publié)")
     try:
@@ -1449,15 +1418,10 @@ def vue_id(df, palette):
 
     st.dataframe(tbl, use_container_width=True)
 
-# AVANT
-# def vue_indicatifs():
-
-# APRÈS
 def vue_indicatifs(df=None, palette=None):
     st.header("🌍 Table des indicatifs (code ➜ pays)")
     st.caption("Le champ 'code' ne doit contenir **que des chiffres** (sans + ni 00).")
 
-    # Charger le CSV existant
     try:
         df_ind = pd.read_csv(CSV_INDICATIFS, dtype=str)
     except Exception:
@@ -1501,7 +1465,6 @@ def admin_sidebar(df: pd.DataFrame):
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ Administration")
 
-    # Export CSV (avec pays calculé)
     try:
         out = ensure_schema(df).copy()
         out["pays"] = out["telephone"].apply(_phone_country)
@@ -1511,14 +1474,8 @@ def admin_sidebar(df: pd.DataFrame):
     except Exception:
         csv_bytes = b""
 
-    st.sidebar.download_button(
-        "⬇️ Télécharger CSV",
-        data=csv_bytes,
-        file_name="reservations.csv",
-        mime="text/csv"
-    )
+    st.sidebar.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
 
-    # Export XLSX (avec pays calculé)
     try:
         out_xlsx = ensure_schema(df).copy()
         out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
@@ -1540,7 +1497,6 @@ def admin_sidebar(df: pd.DataFrame):
     if xlsx_bytes is None and xlsx_err:
         st.sidebar.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
 
-    # Restauration
     up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader")
 
     if "restore_preview" not in st.session_state:
@@ -1590,7 +1546,6 @@ def admin_sidebar(df: pd.DataFrame):
         st.sidebar.success("Cache vidé.")
         st.rerun()
 
-
 # ============================== MAIN ==============================
 def main():
     params = st.query_params
@@ -1627,7 +1582,6 @@ def main():
         "🌍 Indicatifs": vue_indicatifs,
     }
 
-    # --- clé stable pour éviter les KeyError de session state
     page_names = list(pages.keys())
     if "nav_choice" not in st.session_state:
         st.session_state.nav_choice = page_names[0]
@@ -1639,15 +1593,11 @@ def main():
         key="nav_choice",
     )
 
-    # Sécurité : si une ancienne valeur n’existe plus
     if choice not in pages:
         choice = page_names[0]
 
-    # Afficher la page sélectionnée
     pages[choice](df, palette)
     admin_sidebar(df)
 
-
 if __name__ == "__main__":
     main()
-
