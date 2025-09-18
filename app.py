@@ -38,7 +38,7 @@ GOOGLE_FORM_BASE = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9
 
 # Mappe les champs du Form (IDs entry.xxxxx à ajuster si besoin)
 FORM_ENTRY_MAP = {
-    "res_id":       ""entry.1972868847",   # ✅ ton res_id
+    "res_id":       "entry.1972868847",   # ✅ ton res_id
     "nom_client":   "entry.937556468",
     "telephone":    "entry.702324920",
     "date_arrivee": "entry.1099006415",
