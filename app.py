@@ -284,6 +284,7 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
 
 
 
+
 # ======== Apartments.csv loader solide + diagnostic ========
 @st.cache_data
 def _load_apartments_csv(path: str = "apartments.csv") -> pd.DataFrame:
@@ -330,16 +331,20 @@ def _debug_apartments_panel():
             except Exception as e:
                 st.warning(f"Lecture apartments.csv KO : {e}")
 
-def _force_write_apartments_csv():
+# >>>>>>>> CORRIGÉ : key_prefix pour éviter les clés dupliquées <<<<<<<<
+def _force_write_apartments_csv(key_prefix: str = "main"):
     with st.expander("🧰 Écraser apartments.csv (outil secours)", expanded=False):
         st.caption("Colle ci-dessous le contenu EXACT de apartments.csv (UTF-8, séparateur virgule).")
         default_csv = (
             "slug,name,password_hash\n"
-            "villa-tobias,Villa Tobias,2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea\n"
-            "le-turenne,Le Turenne,d2bfc8025ea4935a806fc25efa328dd3491fb3e89b1c4f3095f1fea9d6ef09e8\n"
+            "villa-tobias,Villa Tobias,\n"
+            "le-turenne,Le Turenne,\n"
         )
-        txt = st.text_area("Contenu apartments.csv", value=default_csv, height=140, key="force_apts_txt")
-        if st.button("💾 ÉCRASER apartments.csv", key="force_apts_btn"):
+        ta_key  = f"{key_prefix}_force_apts_txt"
+        btn_key = f"{key_prefix}_force_apts_btn"
+
+        txt = st.text_area("Contenu apartments.csv", value=default_csv, height=140, key=ta_key)
+        if st.button("💾 ÉCRASER apartments.csv", key=btn_key):
             try:
                 with open("apartments.csv","w",encoding="utf-8",newline="\n") as f:
                     f.write(txt)
@@ -461,7 +466,8 @@ def charger_donnees(_cache_key: tuple):
 def _auth_gate_in_sidebar() -> bool:
     st.sidebar.subheader("🔐 Appartement")
     _debug_apartments_panel()
-    _force_write_apartments_csv()
+    # >>>>>>>> Appel corrigé avec key_prefix=sidebar
+    _force_write_apartments_csv(key_prefix="sidebar")
 
     df_apts = _load_apartments_csv("apartments.csv")
     if df_apts.empty:
@@ -858,10 +864,10 @@ def vue_rapport(df, palette):
     occ_export = occ_filtered[["mois","plateforme","nuitees_occupees","jours_dans_mois","taux_occupation"]].copy() \
                  .sort_values(["mois","plateforme"], ascending=[False,True])
     csv_occ = occ_export.to_csv(index=False).encode("utf-8")
-    col_export.download_button("⬇️ Exporter occupation (CSV)", data=csv_occ, file_name="taux_occupation.csv", mime="text/csv")
+    col_export.download_button("⬇️ Export occupation (CSV)", data=csv_occ, file_name="taux_occupation.csv", mime="text/csv")
     xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
     if xlsx_occ:
-        col_export.download_button("⬇️ Exporter occupation (Excel)", data=xlsx_occ, file_name="taux_occupation.xlsx",
+        col_export.download_button("⬇️ Export occupation (Excel)", data=xlsx_occ, file_name="taux_occupation.xlsx",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     st.dataframe(occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)), use_container_width=True)
 
@@ -937,11 +943,11 @@ def vue_rapport(df, palette):
         <span class='chip'><small>Top pays (CA net)</small><br><strong>{top_pays}</strong></span>
         </div>""", unsafe_allow_html=True)
     cexp1, cexp2 = st.columns(2)
-    cexp1.download_button("⬇️ Exporter analyse pays (CSV)", data=agg_pays.to_csv(index=False).encode("utf-8"),
+    cexp1.download_button("⬇️ Export analyse pays (CSV)", data=agg_pays.to_csv(index=False).encode("utf-8"),
                           file_name="analyse_pays.csv", mime="text/csv")
     xlsx_pays,_ = _df_to_xlsx_bytes(agg_pays, "Analyse pays")
     if xlsx_pays:
-        cexp2.download_button("⬇️ Exporter analyse pays (Excel)", data=xlsx_pays,
+        cexp2.download_button("⬇️ Export analyse pays (Excel)", data=xlsx_pays,
                               file_name="analyse_pays.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     disp = agg_pays.copy()
     for c in ["reservations","nuitees"]: disp[c] = pd.to_numeric(disp[c], errors="coerce").fillna(0).astype("int64")
@@ -1134,7 +1140,7 @@ def vue_id(df, palette):
     tbl["pays"]=tbl["telephone"].apply(_phone_country)
     st.dataframe(tbl[["res_id","nom_client","pays","telephone","email","plateforme"]], use_container_width=True)
 
-# ============ NOUVEL ONGLET PARAMÈTRES ============
+# ============ ONGLEt PARAMÈTRES ============
 def vue_settings(df, palette):
     st.header("⚙️ Paramètres")
     print_buttons()
@@ -1253,7 +1259,8 @@ def vue_settings(df, palette):
 
     st.markdown("---")
     st.markdown("### 🧰 Écraser `apartments.csv`")
-    _force_write_apartments_csv()
+    # >>>>>>>> Appel corrigé avec key_prefix=settings
+    _force_write_apartments_csv(key_prefix="settings")
 
 # ============================== MAIN ==============================
 def main():
