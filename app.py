@@ -9,7 +9,7 @@ import uuid
 import hashlib
 from datetime import date, datetime, timedelta
 from calendar import monthrange, Calendar
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from io import StringIO, BytesIO
 
 # ============================== CONFIG ==============================
@@ -31,6 +31,19 @@ FORM_SHORT_URL = "https://urlr.me/kZuH94"
 GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?output=csv"
+
+# ===== Préremplissage Google Form =====
+# Base "viewform" (ton lien)
+GOOGLE_FORM_BASE = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
+
+# Mappe les champs du Form (IDs entry.xxxxx à ajuster si besoin)
+FORM_ENTRY_MAP = {
+    "res_id":       "",                # <-- à compléter si tu ajoutes un champ res_id dans la fiche
+    "nom_client":   "entry.937556468",
+    "telephone":    "entry.702324920",
+    "date_arrivee": "entry.1099006415",
+    "date_depart":  "entry.2013910918",
+}
 
 # ============================== STYLE ==============================
 def apply_style(light: bool):
@@ -183,7 +196,6 @@ def _read_indicatifs() -> pd.DataFrame:
         df = df.dropna(subset=["code","pays"])
         df = df[(df["code"]!="") & (df["pays"]!="")]
         df = df.drop_duplicates(subset=["code"], keep="first")
-        # Tri décroissant pour tester les codes longs avant les courts
         df["len"] = df["code"].str.len().astype(int)
         df = df.sort_values("len", ascending=False).drop(columns=["len"])
         return df
@@ -204,12 +216,11 @@ def _format_phone_e164(phone: str) -> str:
     return "+" + s
 
 def _phone_country(phone: str) -> str:
-    """Déduit le pays à partir de l'indicatif ; « France » si 0XXXXXXXXX ; vide si inconnu."""
     s = str(phone or "").strip()
     if s == "":
         return ""
     d = _normalize_phone_digits(s)
-    if d.startswith("0") and len(d) in (9,10,11):  # 0 + 9/10 digits (FR)
+    if d.startswith("0") and len(d) in (9,10,11):
         return "France"
     ind = _read_indicatifs()
     for _, r in ind.iterrows():
@@ -220,7 +231,6 @@ def _phone_country(phone: str) -> str:
 
 @st.cache_data
 def charger_donnees():
-    # Créer fichiers si absents
     for fichier, header in [
         (CSV_RESERVATIONS, "nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut\n"),
         (CSV_PLATEFORMES, "plateforme,couleur\nBooking,#1e90ff\nAirbnb,#e74c3c\n")
@@ -570,7 +580,6 @@ def vue_plateformes(df, palette):
 
     if not HAS_COLORCOL and not edited.empty:
         st.caption(help_txt or "")
-        # aperçu simple
         chips = []
         for _, r in edited.iterrows():
             plat = str(r["plateforme"]).strip()
@@ -680,6 +689,7 @@ def vue_calendrier(df, palette):
         """.replace(",", " ")
         st.markdown(html, unsafe_allow_html=True)
         st.dataframe(rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye"]], use_container_width=True)
+
 
 
 
@@ -819,6 +829,56 @@ def _match_form_row(res_row: pd.Series, rep_df: pd.DataFrame):
     ]
     out["details"] = " | ".join(details)
     return out
+
+# ===== Préremplissage Google Form (définition/guard ici au cas où Partie 1 non mise à jour) =====
+if "FORM_ENTRY_MAP" not in globals():
+    FORM_ENTRY_MAP = {
+        "res_id":       "",  # tu pourras le renseigner plus tard si tu ajoutes ce champ dans le Form
+        "nom_client":   "entry.937556468",
+        "telephone":    "entry.702324920",
+        "date_arrivee": "entry.1099006415",
+        "date_depart":  "entry.2013910918",
+    }
+if "GOOGLE_FORM_BASE" not in globals():
+    GOOGLE_FORM_BASE = GOOGLE_FORM_URL  # même URL que ta fiche (mode viewform)
+
+def _fmt_date_for_form(x):
+    try:
+        d = pd.to_datetime(x, errors="coerce")
+        if pd.isna(d):
+            return ""
+        return d.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+def build_prefilled_form_url(row: pd.Series) -> str:
+    try:
+        # import local pour éviter une dépendance d'import global
+        from urllib.parse import urlencode
+        # si la map est vide => fallback
+        if not any((FORM_ENTRY_MAP.get(k, "") or "").strip() for k in FORM_ENTRY_MAP):
+            return FORM_SHORT_URL
+        params = {}
+        k = (FORM_ENTRY_MAP.get("res_id", "") or "").strip()
+        if k:
+            params[k] = str(row.get("res_id", "") or "")
+        k = (FORM_ENTRY_MAP.get("nom_client", "") or "").strip()
+        if k:
+            params[k] = str(row.get("nom_client", "") or "")
+        k = (FORM_ENTRY_MAP.get("telephone", "") or "").strip()
+        if k:
+            params[k] = str(row.get("telephone", "") or "")
+        k = (FORM_ENTRY_MAP.get("date_arrivee", "") or "").strip()
+        if k:
+            params[k] = _fmt_date_for_form(row.get("date_arrivee"))
+        k = (FORM_ENTRY_MAP.get("date_depart", "") or "").strip()
+        if k:
+            params[k] = _fmt_date_for_form(row.get("date_depart"))
+        q = urlencode(params, doseq=True)
+        base = GOOGLE_FORM_BASE or GOOGLE_FORM_URL or FORM_SHORT_URL
+        return f"{base}?{q}" if q else (FORM_SHORT_URL or base)
+    except Exception:
+        return FORM_SHORT_URL
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
@@ -1082,7 +1142,6 @@ def vue_rapport(df, palette):
     # ===== 📈 ÉVOLUTION DU TAUX D'OCCUPATION =====
     st.markdown("---")
     st.subheader("📈 Évolution du taux d'occupation")
-
     try:
         chart_occ = alt.Chart(occ_filtered).mark_line(point=True).encode(
             x=alt.X("mois:N", sort=None, title="Mois"),
@@ -1125,6 +1184,7 @@ def vue_sms(df, palette):
             i = int(pick.split(":")[0])
             r = pre.loc[i]
 
+            # Vérification fiche
             rep_df = _load_form_responses()
             check = _match_form_row(r, rep_df)
 
@@ -1150,6 +1210,10 @@ def vue_sms(df, palette):
 
             ignore = st.checkbox("Ignorer et autoriser l'envoi même si la fiche ne correspond pas", value=False)
 
+            # --- Lien de fiche PRÉREMPLI ---
+            prefilled_url = build_prefilled_form_url(r)
+
+            # --- Message
             msg = (
                 "VILLA TOBIAS\n"
                 f"Plateforme : {r.get('plateforme', 'N/A')}\n"
@@ -1159,8 +1223,8 @@ def vue_sms(df, palette):
                 f"Bonjour {r.get('nom_client')}\n"
                 "Bienvenue chez nous ! \n\n "
                 "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, "
-                "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant : \n"
-                f"{FORM_SHORT_URL}\n\n"
+                "merci de remplir votre fiche à ce lien (déjà prérempli pour vous) : \n"
+                f"{prefilled_url}\n\n"
                 "Un parking est à votre disposition sur place.\n\n"
                 "Le check-in se fait à partir de 14:00 h et le check-out avant 11:00 h. \n\n"
                 "Vous trouverez des consignes à bagages dans chaque quartier, à Nice. \n\n"
@@ -1169,8 +1233,8 @@ def vue_sms(df, palette):
                 "****** \n\n"
                 "Welcome to our establishment! \n\n"
                 "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible,"
-                "we kindly ask you to fill out the form that you will find by clicking on the following link:"
-                f" {FORM_SHORT_URL}\n\n"
+                "we kindly ask you to fill out the form at the following link (already prefilled for you):"
+                f" {prefilled_url}\n\n"
                 "Parking is available on site.\n\n"
                 "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. \n\n"
                 "You will find luggage storage facilities in every district of Nice. \n\n"
@@ -1428,6 +1492,7 @@ def vue_indicatifs(df=None, palette=None):
     if c2.button("↩️ Recharger depuis le disque"):
         st.cache_data.clear()
         st.success("Rechargé. Change d’onglet pour appliquer.")
+
 
 
 
