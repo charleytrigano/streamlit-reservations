@@ -463,6 +463,40 @@ def sauvegarder_donnees(df: pd.DataFrame) -> bool:
         st.error(f"Erreur de sauvegarde : {e}")
         return False
 
+def _debug_sources_panel():
+    try:
+        slug = st.session_state.get("apt_slug", None) or "(non connecté)"
+        paths = {}
+        if slug and isinstance(slug, str):
+            from pathlib import Path
+            p = _paths_for_slug(slug)
+            paths = {
+                "CSV_RESERVATIONS": p["CSV_RESERVATIONS"],
+                "CSV_PLATEFORMES": p["CSV_PLATEFORMES"],
+            }
+        else:
+            paths = {"CSV_RESERVATIONS": CSV_RESERVATIONS, "CSV_PLATEFORMES": CSV_PLATEFORMES}
+
+        with st.expander("🔎 Diagnostic fichiers", expanded=False):
+            st.write(f"**Appartement courant (slug)** : `{slug}`")
+            for k, v in paths.items():
+                abspath = os.path.abspath(v)
+                exists = os.path.exists(v)
+                size = os.path.getsize(v) if exists else 0
+                st.write(f"- **{k}** → `{v}`")
+                st.caption(f"Chemin absolu : {abspath}")
+                st.write(f"Existe : {exists} — Taille : {size} octets")
+                if exists:
+                    try:
+                        raw = _load_file_bytes(v)
+                        df_test = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
+                        st.write(f"Lignes lues : {len(df_test)} — Colonnes : {list(df_test.columns)}")
+                    except Exception as e:
+                        st.warning(f"Lecture impossible : {e}")
+    except Exception as e:
+        st.warning(f"Diagnostic indisponible : {e}")
+
+
 
 
 
@@ -481,6 +515,17 @@ def print_button(label: str = ""):
         )
 
 # ============================== VUES (1/2) ==============================
+def vue_accueil(df, palette):
+    st.header("🏠 Accueil")
+    _debug_sources_panel()  # <— AJOUT
+    # ... le reste inchangé
+
+
+
+
+
+
+
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
     print_button("Accueil")
