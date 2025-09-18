@@ -520,6 +520,35 @@ def vue_accueil(df, palette):
     _debug_sources_panel()  # <— AJOUT
     # ... le reste inchangé
 
+def vue_import_force(df, palette):
+    st.header("⛑️ Import manuel (force)")
+    st.caption("Charge un CSV ou XLSX et remplace immédiatement le fichier de l'appartement en cours.")
+    up = st.file_uploader("Choisir un fichier (CSV ou XLSX)", type=["csv", "xlsx"])
+
+    if not up:
+        st.info("Sélectionne un fichier à importer.")
+        return
+
+    try:
+        if up.name.lower().endswith(".xlsx"):
+            xls = pd.ExcelFile(up)
+            sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0)
+            tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
+        else:
+            raw = up.read()
+            tmp = _detect_delimiter_and_read(raw)
+
+        prev = ensure_schema(tmp)  # normalise colonnes + types
+        # Sauvegarde immédiate dans le fichier courant de l'appartement
+        if sauvegarder_donnees(prev):
+            st.success("Import terminé — données enregistrées ✅")
+            st.rerun()
+        else:
+            st.error("Échec de sauvegarde.")
+    except Exception as e:
+        st.error(f"Erreur d'import : {e}")
+
+
 
 
 
@@ -1689,6 +1718,7 @@ def main():
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
         "🌍 Indicatifs": vue_indicatifs,
+        "⛑️ Import manuel": vue_import_force,  # <— AJOUT
     }
 
     page_names = list(pages.keys())
