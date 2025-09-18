@@ -73,7 +73,26 @@ def apply_style(light: bool):
             display:grid; grid-template-columns: repeat(7, 1fr);
             font-weight:700; opacity:.8; margin-top:10px;
           }}
+          @media print {{
+            [data-testid="stSidebar"], footer, header {{ display: none !important; }}
+            .no-print {{ display: none !important; }}
+            .print-block {{ display: block !important; }}
+          }}
         </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ============================== UTILS (bouton print) ==============================
+def render_print_button(label: str = "🖨️ Imprimer cette page"):
+    st.markdown(
+        f"""
+        <div class="no-print" style="display:flex; justify-content:flex-end; margin: 4px 0 8px 0;">
+            <button onclick="window.print()" style="
+                padding:8px 12px; border-radius:10px; border:1px solid rgba(0,0,0,.1);
+                background:#ffffff08; cursor:pointer;
+            ">{label}</button>
+        </div>
         """,
         unsafe_allow_html=True
     )
@@ -86,7 +105,7 @@ BASE_COLS = [
     "prix_brut", "commissions", "frais_cb", "prix_net", "menage", "taxes_sejour", "base", "charges", "%",
     "res_id", "ical_uid"
 ]
-# 'pays' n’est pas stocké ; il est calculé depuis le téléphone.
+# 'pays' est calculé à la volée depuis le téléphone (indicatif), pas stocké.
 
 def _as_series(x, index=None):
     if isinstance(x, pd.Series):
@@ -549,9 +568,9 @@ def _format_phone_e164(phone: str) -> str:
 
 
 
-
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
+    render_print_button()
     st.header("🏠 Accueil")
     today = date.today()
     tomorrow = today + timedelta(days=1)
@@ -586,6 +605,7 @@ def vue_accueil(df, palette):
             st.dataframe(arr_plus1, use_container_width=True)
 
 def vue_reservations(df, palette):
+    render_print_button()
     st.header("📋 Réservations")
     if df is None or df.empty:
         st.info("Aucune réservation.")
@@ -593,6 +613,7 @@ def vue_reservations(df, palette):
 
     dfa = df.copy()
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
+    dfa["paye_bool"] = _to_bool_series(dfa.get("paye", False))
 
     years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
     months_avail = list(range(1, 13))
@@ -600,10 +621,11 @@ def vue_reservations(df, palette):
         dfa["plateforme"].dropna().astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
     )
 
-    colf1, colf2, colf3 = st.columns(3)
+    colf1, colf2, colf3, colf4 = st.columns(4)
     year = colf1.selectbox("Année", ["Toutes"] + years_avail, index=0)
     month = colf2.selectbox("Mois", ["Tous"] + months_avail, index=0)
     plat = colf3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0)
+    paye_filter = colf4.selectbox("Statut paiement", ["Tous", "Payé", "Non payé"], index=0)
 
     data = dfa.copy()
     if year != "Toutes":
@@ -612,6 +634,8 @@ def vue_reservations(df, palette):
         data = data[data["date_arrivee_dt"].dt.month == int(month)]
     if plat != "Toutes":
         data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+    if paye_filter != "Tous":
+        data = data[data["paye_bool"] == (paye_filter == "Payé")]
 
     brut = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
     net = float(pd.to_numeric(data["prix_net"], errors="coerce").fillna(0).sum())
@@ -619,6 +643,8 @@ def vue_reservations(df, palette):
     nuits = int(pd.to_numeric(data["nuitees"], errors="coerce").fillna(0).sum())
     adr = (net / nuits) if nuits > 0 else 0.0
     charges = float(pd.to_numeric(data["charges"], errors="coerce").fillna(0).sum())
+    nb_res = int(len(data))
+    nb_payees = int(data["paye_bool"].sum())
 
     html = f"""
     <div class='glass kpi-line'>
@@ -628,16 +654,18 @@ def vue_reservations(df, palette):
       <span class='chip'><small>Base</small><br><strong>{base:,.2f} €</strong></span>
       <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
       <span class='chip'><small>ADR (net)</small><br><strong>{adr:,.2f} €</strong></span>
+      <span class='chip'><small>Réservations</small><br><strong>{nb_res} ({nb_payees} payées)</strong></span>
     </div>
     """.replace(",", " ")
     st.markdown(html, unsafe_allow_html=True)
     st.markdown("---")
 
     order_idx = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
-    data = data.loc[order_idx]
+    data = data.loc[order_idx].drop(columns=["paye_bool"], errors="ignore")
     st.dataframe(data.drop(columns=["date_arrivee_dt"]), use_container_width=True)
 
 def vue_ajouter(df, palette):
+    render_print_button()
     st.header("➕ Ajouter une réservation")
     with st.form("form_add", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -673,6 +701,7 @@ def vue_ajouter(df, palette):
                     st.rerun()
 
 def vue_modifier(df, palette):
+    render_print_button()
     st.header("✏️ Modifier / Supprimer")
     if df.empty:
         st.info("Aucune réservation.")
@@ -732,6 +761,7 @@ def vue_modifier(df, palette):
                 st.rerun()
 
 def vue_plateformes(df, palette):
+    render_print_button()
     st.header("🎨 Plateformes & couleurs")
     HAS_COLORCOL = hasattr(getattr(st, "column_config", object), "ColorColumn")
     plats_df = sorted(
@@ -816,6 +846,7 @@ def vue_plateformes(df, palette):
             st.error(f"Erreur : {e}")
 
 def vue_calendrier(df, palette):
+    render_print_button()
     st.header("📅 Calendrier (grille mensuelle)")
     dfv = df.dropna(subset=['date_arrivee', 'date_depart']).copy()
     if dfv.empty:
@@ -887,9 +918,25 @@ def vue_calendrier(df, palette):
 
 
 
+# --- Helper bouton Imprimer (définit si absent) ---
+try:
+    print_button
+except NameError:
+    def print_button(label: str = ""):
+        btn_label = "🖨️ Imprimer" + (f" — {label}" if label else "")
+        if st.button(btn_label, key=f"print_{label or 'page'}"):
+            st.markdown(
+                """
+                <script>
+                try { window.print(); } catch(e) {}
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
 
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
+    print_button("Rapport")
     if df is None or df.empty:
         st.info("Aucune donnée.")
         return
@@ -978,8 +1025,12 @@ def vue_rapport(df, palette):
     col_export.download_button("⬇️ Exporter les données d'occupation (CSV)", data=csv_occ, file_name="taux_occupation.csv", mime="text/csv")
     xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
     if xlsx_occ:
-        col_export.download_button("⬇️ Exporter les données d'occupation (Excel)", data=xlsx_occ, file_name="taux_occupation.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        col_export.download_button(
+            "⬇️ Exporter les données d'occupation (Excel)",
+            data=xlsx_occ,
+            file_name="taux_occupation.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     st.dataframe(occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)), use_container_width=True)
 
@@ -1167,6 +1218,7 @@ def _copy_button(label: str, payload: str, key: str):
 
 def vue_sms(df, palette):
     st.header("✉️ SMS & WhatsApp")
+    print_button("SMS & WhatsApp")
     st.subheader("🛬 Pré-arrivée (arrivées J+1)")
     target_arrivee = st.date_input("Arrivées du", date.today() + timedelta(days=1), key="pre_date")
     pre = df.dropna(subset=["telephone", "nom_client", "date_arrivee"]).copy()
@@ -1279,6 +1331,7 @@ def vue_sms(df, palette):
 
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
+    print_button("Export ICS")
     if df.empty:
         st.info("Aucune réservation.")
         return
@@ -1298,8 +1351,6 @@ def vue_export_ics(df, palette):
         st.warning("Rien à exporter.")
         return
 
-    miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.trim().str.strip() == "")
-    # .trim() n'existe pas sur pandas < correction :
     miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip() == "")
     if miss.any():
         data.loc[miss, "ical_uid"] = data.loc[miss].apply(build_stable_uid, axis=1)
@@ -1359,6 +1410,7 @@ def vue_export_ics(df, palette):
 
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
+    print_button("Google Sheet")
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
     st.markdown(f'<iframe src="{GOOGLE_FORM_URL}" width="100%" height="900" frameborder="0"></iframe>', unsafe_allow_html=True)
     st.markdown("---")
@@ -1380,6 +1432,7 @@ def vue_google_sheet(df, palette):
 
 def vue_clients(df, palette):
     st.header("👥 Liste des clients")
+    print_button("Clients")
     if df.empty:
         st.info("Aucun client.")
         return
@@ -1402,6 +1455,7 @@ def vue_clients(df, palette):
 
 def vue_id(df, palette):
     st.header("🆔 Identifiants des réservations")
+    print_button("Identifiants")
     if df is None or df.empty:
         st.info("Aucune réservation.")
         return
@@ -1420,6 +1474,7 @@ def vue_id(df, palette):
 
 def vue_indicatifs(df=None, palette=None):
     st.header("🌍 Table des indicatifs (code ➜ pays)")
+    print_button("Table indicatifs")
     st.caption("Le champ 'code' ne doit contenir **que des chiffres** (sans + ni 00).")
 
     try:
@@ -1459,6 +1514,9 @@ def vue_indicatifs(df=None, palette=None):
     if c2.button("↩️ Recharger depuis le disque"):
         st.cache_data.clear()
         st.success("Rechargé. Change d’onglet pour appliquer.")
+
+
+
 
 # ============================== ADMIN ==============================
 def admin_sidebar(df: pd.DataFrame):
