@@ -1838,6 +1838,13 @@ def _set_current_apartment(slug: str):
     CSV_PLATEFORMES  = p["CSV_PLATEFORMES"]
 
 
+
+# Dans _auth_gate_in_sidebar() (ou sur l'accueil)
+_debug_apartments_panel()
+_force_write_apartments_csv()
+
+
+
 # ======== Panneau diagnostic fichiers (utile sur Accueil) ========
 def _debug_sources_panel():
     """Montre quels fichiers sont réellement utilisés pour le slug courant."""
@@ -1929,6 +1936,24 @@ def _auth_gate_in_sidebar() -> bool:
 
     return bool(st.session_state.get("apt_slug"))
 
+def _force_write_apartments_csv():
+    with st.expander("🧰 Écraser apartments.csv (outil secours)", expanded=False):
+        st.caption("Colle ci-dessous le contenu EXACT de apartments.csv (UTF-8, séparateur virgule).")
+        default_csv = (
+            "slug,name,password_hash\n"
+            "villa-tobias,Villa Tobias,2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea\n"
+            "le-turenne,Le Turenne,d2bfc8025ea4935a806fc25efa328dd3491fb3e89b1c4f3095f1fea9d6ef09e8\n"
+        )
+        txt = st.text_area("Contenu apartments.csv", value=default_csv, height=140)
+        if st.button("💾 ÉCRASER apartments.csv"):
+            try:
+                with open("apartments.csv", "w", encoding="utf-8", newline="\n") as f:
+                    f.write(txt)
+                st.cache_data.clear()
+                st.success("Écrit ✅ — rechargement…")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Échec écriture : {e}")
 
 
 # ============================== MAIN ==============================
