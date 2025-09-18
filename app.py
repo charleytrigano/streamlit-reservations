@@ -16,7 +16,7 @@ import altair as alt
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
 
-# Chemins par défaut (seront remplacés après login par _set_current_apartment)
+# Chemins par défaut (remplacés après login par _set_current_apartment)
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
 
@@ -27,13 +27,14 @@ DEFAULT_PALETTE = {
     "Autre": "#f59e0b",
 }
 
-# Google Form — préremplissage (exemple)
+# Google Form — préremplissage
 GOOGLE_FORM_BASE = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GF_RES_ID = "entry.1972868847"
 GF_NAME   = "entry.937556468"
 GF_PHONE  = "entry.702324920"
 GF_ARR    = "entry.1099006415"  # yyyy-mm-dd
 GF_DEP    = "entry.2013910918"  # yyyy-mm-dd
+
 def build_form_url(res_id:str, nom:str, tel:str, d_arr:date, d_dep:date) -> str:
     params = {
         GF_RES_ID: str(res_id or ""),
@@ -78,9 +79,28 @@ def apply_style(light: bool):
     )
 
 def print_buttons():
-    col = st.columns([1,1,6])[0]
-    with col:
-        st.button("🖨️ Imprimer", on_click=lambda: st.markdown("<script>window.print()</script>", unsafe_allow_html=True), type="secondary")
+    # Bandeau avec nom de l'appartement + bouton Imprimer
+    apt_name = st.session_state.get("apt_name") or st.session_state.get("apt_slug") or ""
+    if apt_name:
+        st.markdown(
+            f"""
+            <div class='glass' style='display:flex;align-items:center;justify-content:space-between;margin-top:-6px;margin-bottom:8px'>
+              <div style="font-size:1.75rem;font-weight:800;letter-spacing:.5px">{apt_name}</div>
+              <button onclick="window.print()" class="no-print" style="border:1px solid rgba(17,24,39,.12);padding:8px 12px;border-radius:10px;background:transparent;cursor:pointer">
+                🖨️ Imprimer
+              </button>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        col = st.columns([1,1,6])[0]
+        with col:
+            st.button(
+                "🖨️ Imprimer",
+                on_click=lambda: st.markdown("<script>window.print()</script>", unsafe_allow_html=True),
+                type="secondary"
+            )
 
 # ============================== DATA HELPERS ==============================
 BASE_COLS = [
@@ -174,7 +194,6 @@ def _phone_country(tel: str) -> str:
     if s.startswith("+"): s = s[1:]
     if s.startswith("00"): s = s[2:]
     if s.startswith("0"): return "France"  # 0X régional -> France
-    # on teste préfixes longs d'abord
     for k in sorted(PHONE_CC.keys(), key=lambda x: -len(x)):
         if s.startswith(k):
             return PHONE_CC[k]
@@ -262,7 +281,6 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
     except Exception as e:
         st.warning(f"Impossible de générer l'Excel (openpyxl requis) : {e}")
         return None, e
-
 
 
 
@@ -377,11 +395,44 @@ def _debug_sources_panel():
     except Exception as e:
         st.warning(f"Diagnostic indisponible : {e}")
 
+# ======== Clé de cache dépendante de l'appartement et des fichiers ========
+def _files_cache_key() -> tuple:
+    slug = st.session_state.get("apt_slug", "")
+    r = CSV_RESERVATIONS
+    p = CSV_PLATEFORMES
+    try:
+        r_m = os.path.getmtime(r)
+    except Exception:
+        r_m = 0
+    try:
+        p_m = os.path.getmtime(p)
+    except Exception:
+        p_m = 0
+    return (slug, r, r_m, p, p_m)
+
+# ============================== CHANGEMENT DE MOT DE PASSE ==============================
+def _update_apartment_password(slug: str, new_plain_pwd: str) -> bool:
+    try:
+        path = "apartments.csv"
+        df = _load_apartments_csv(path)
+        if df.empty:
+            st.error("apartments.csv introuvable ou vide.")
+            return False
+        if slug not in df["slug"].tolist():
+            st.error(f"Appartement {slug} introuvable dans apartments.csv.")
+            return False
+        new_hash = hashlib.sha256(new_plain_pwd.encode("utf-8")).hexdigest()
+        df.loc[df["slug"] == slug, "password_hash"] = new_hash
+        df.to_csv(path, index=False, encoding="utf-8")
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Échec de mise à jour du mot de passe : {e}")
+        return False
+
 # ============================== CHARGEMENT DONNÉES ==============================
 @st.cache_data
-def charger_donnees():
-    # s'assure que les fichiers existent déjà en fonction du slug courant
-    # (le slug est défini après login via _set_current_apartment)
+def charger_donnees(_cache_key: tuple):
     if not os.path.exists(CSV_RESERVATIONS):
         with open(CSV_RESERVATIONS,"w",encoding="utf-8") as f:
             f.write("nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut,paye\n")
@@ -443,6 +494,7 @@ def _auth_gate_in_sidebar() -> bool:
             st.session_state["apt_slug"] = slug
             st.session_state["apt_name"] = row["name"]
             _set_current_apartment(slug)
+            st.cache_data.clear()
             st.sidebar.success(f"Connecté à {row['name']} ({slug}) ✅")
             st.rerun()
         else:
@@ -453,7 +505,37 @@ def _auth_gate_in_sidebar() -> bool:
         if st.sidebar.button("Changer d'appartement"):
             st.session_state.pop("apt_slug", None)
             st.session_state.pop("apt_name", None)
+            st.cache_data.clear()
             st.rerun()
+
+        # --- panneau "Changer le mot de passe"
+        with st.sidebar.expander("🔑 Changer le mot de passe", expanded=False):
+            st.caption("Change le mot de passe de l'appartement courant.")
+            old_pwd = st.text_input("Ancien mot de passe", type="password")
+            new_pwd = st.text_input("Nouveau mot de passe", type="password")
+            new_pwd2 = st.text_input("Confirme le nouveau mot de passe", type="password")
+            if st.button("Mettre à jour le mot de passe"):
+                df_apts = _load_apartments_csv("apartments.csv")
+                row = df_apts[df_apts["slug"] == st.session_state["apt_slug"]].iloc[0]
+                ph = str(row.get("password_hash", "") or "")
+                ok_old = True
+                if ph:
+                    try:
+                        ok_old = (hashlib.sha256(old_pwd.encode("utf-8")).hexdigest() == ph)
+                    except Exception:
+                        ok_old = False
+                if not ok_old:
+                    st.error("Ancien mot de passe incorrect.")
+                elif not new_pwd:
+                    st.error("Le nouveau mot de passe ne peut pas être vide.")
+                elif new_pwd != new_pwd2:
+                    st.error("La confirmation ne correspond pas.")
+                else:
+                    if _update_apartment_password(st.session_state["apt_slug"], new_pwd):
+                        st.success("Mot de passe mis à jour ✅ — reconnecte-toi.")
+                        st.session_state.pop("apt_slug", None)
+                        st.session_state.pop("apt_name", None)
+                        st.rerun()
 
     return bool(st.session_state.get("apt_slug"))
 
@@ -463,7 +545,6 @@ def _auth_gate_in_sidebar() -> bool:
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
     st.header("🏠 Accueil")
-    _debug_sources_panel()
     print_buttons()
     today = date.today(); tomorrow = today + timedelta(days=1)
     st.write(f"**Aujourd'hui : {today.strftime('%d/%m/%Y')}**")
@@ -727,8 +808,9 @@ def vue_rapport(df, palette):
     years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
     months_avail = list(range(1,13))
     plats_avail = sorted(dfa["plateforme"].astype(str).str.strip().replace({"":np.nan}).dropna().unique().tolist())
-    pays_avail = sorted(dfa["pays"].unique().tolist()); 
-    if "France" in pays_avail: pays_avail = ["France"] + [p for p in pays_avail if p!="France"]
+    pays_avail = sorted(dfa["pays"].unique().tolist())
+    if "France" in pays_avail:
+        pays_avail = ["France"] + [p for p in pays_avail if p!="France"]
 
     c1,c2,c3,c4,c5 = st.columns([1,1,1,1.2,1.2])
     year   = c1.selectbox("Année", ["Toutes"]+years_avail, index=0)
@@ -790,9 +872,9 @@ def vue_rapport(df, palette):
     def jours_dans_annee(a): return 366 if ((a%4==0 and a%100!=0) or (a%400==0)) else 365
     occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
     occ_annee["taux_occupation"]  = (occ_annee["nuitees_occupees"]/occ_annee["jours_dans_annee"])*100
-    annees_comparaison = st.multiselect("Sélectionner les années à comparer",
-                                        options=sorted(occ_annee["annee"].unique()),
-                                        default=sorted(occ_annee["annee"].unique())[-2:] if len(occ_annee["annee"].unique())>=2 else sorted(occ_annee["annee"].unique()))
+    years_opts = sorted(occ_annee["annee"].unique())
+    default_years = years_opts[-2:] if len(years_opts)>=2 else years_opts
+    annees_comparaison = st.multiselect("Sélectionner les années à comparer", options=years_opts, default=default_years)
     if annees_comparaison:
         occ_comparaison = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
         try:
@@ -976,7 +1058,7 @@ def vue_export_ics(df, palette):
     years = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique(), reverse=True)
     year = st.selectbox("Année (arrivées)", years if years else [date.today().year], index=0)
     plats = ["Tous"] + sorted(df["plateforme"].dropna().unique()); plat = st.selectbox("Plateforme", plats, index=0)
-    data = dfa[dfa["date_arrivee_dt"].dt.year == int(year)].copy(); 
+    data = dfa[dfa["date_arrivee_dt"].dt.year == int(year)].copy()
     if plat != "Tous": data = data[data["plateforme"] == plat]
     if data.empty: st.warning("Rien à exporter."); return
 
@@ -1025,7 +1107,7 @@ def vue_export_ics(df, palette):
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     print_buttons()
-    st.caption("Le message de pré-arrivée contient désormais un lien Google Form pré-rempli (res_id, nom, tel, arrivée, départ).")
+    st.caption("Le message de pré-arrivée contient un lien Google Form **pré-rempli** (res_id, nom, tel, arrivée, départ).")
     st.markdown(f'<iframe src="{GOOGLE_FORM_BASE}" width="100%" height="900" frameborder="0"></iframe>', unsafe_allow_html=True)
 
 def vue_clients(df, palette):
@@ -1052,33 +1134,14 @@ def vue_id(df, palette):
     tbl["pays"]=tbl["telephone"].apply(_phone_country)
     st.dataframe(tbl[["res_id","nom_client","pays","telephone","email","plateforme"]], use_container_width=True)
 
-def vue_import_force(df, palette):
-    st.header("⛑️ Import manuel (force)")
-    st.caption("Charge un CSV ou XLSX et remplace immédiatement le fichier de l'appartement en cours.")
-    up = st.file_uploader("Choisir un fichier (CSV ou XLSX)", type=["csv","xlsx"])
-    if not up:
-        st.info("Sélectionne un fichier à importer."); return
-    try:
-        if up.name.lower().endswith(".xlsx"):
-            xls = pd.ExcelFile(up)
-            sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0)
-            tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-        else:
-            raw = up.read(); tmp = _detect_delimiter_and_read(raw)
-        prev = ensure_schema(tmp)
-        if sauvegarder_donnees(prev):
-            st.success("Import terminé — données enregistrées ✅"); st.rerun()
-        else:
-            st.error("Échec de sauvegarde.")
-    except Exception as e:
-        st.error(f"Erreur d'import : {e}")
+# ============ NOUVEL ONGLET PARAMÈTRES ============
+def vue_settings(df, palette):
+    st.header("⚙️ Paramètres")
+    print_buttons()
 
-# ============================== ADMIN ==============================
-def admin_sidebar(df: pd.DataFrame):
-    st.sidebar.markdown("---")
-    st.sidebar.header("⚙️ Administration")
+    st.write("Centralise la **sauvegarde**, la **restauration**, le **vidage du cache**, l’**import manuel**, le **diagnostic**, et l’outil pour **écraser `apartments.csv`**.")
 
-    # Export CSV
+    st.markdown("### 💾 Sauvegarde (exports)")
     try:
         out = ensure_schema(df).copy()
         out["pays"] = out["telephone"].apply(_phone_country)
@@ -1087,9 +1150,9 @@ def admin_sidebar(df: pd.DataFrame):
         csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
     except Exception:
         csv_bytes = b""
-    st.sidebar.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
+    c1, c2 = st.columns(2)
+    c1.download_button("⬇️ Télécharger CSV", data=csv_bytes, file_name="reservations.csv", mime="text/csv")
 
-    # Export XLSX
     try:
         out_xlsx = ensure_schema(df).copy()
         out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
@@ -1098,48 +1161,99 @@ def admin_sidebar(df: pd.DataFrame):
         xlsx_bytes, xlsx_err = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
     except Exception as e:
         xlsx_bytes, xlsx_err = None, e
-    st.sidebar.download_button("⬇️ Télécharger XLSX", data=xlsx_bytes or b"", file_name="reservations.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               disabled=(xlsx_bytes is None), help="Génère un fichier Excel (.xlsx)")
+    c2.download_button(
+        "⬇️ Télécharger XLSX",
+        data=xlsx_bytes or b"",
+        file_name="reservations.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=(xlsx_bytes is None),
+        help="Génère un fichier Excel (.xlsx)"
+    )
     if xlsx_bytes is None and xlsx_err:
-        st.sidebar.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
+        st.caption("Astuce : ajoute **openpyxl** dans requirements.txt (ex: `openpyxl==3.1.5`).")
 
-    # Restauration (aperçu)
-    up = st.sidebar.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="restore_uploader")
-    if "restore_preview" not in st.session_state:
-        st.session_state.restore_preview=None; st.session_state.restore_source=""
+    st.markdown("---")
+    st.markdown("### ♻️ Restauration (remplacer les données)")
+    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="settings_restore_uploader")
+    if "settings_restore_preview" not in st.session_state:
+        st.session_state.settings_restore_preview = None
+        st.session_state.settings_restore_source = ""
+
     if up is not None:
         try:
             if up.name.lower().endswith(".xlsx"):
                 xls = pd.ExcelFile(up)
-                sheet = st.sidebar.selectbox("Feuille Excel", xls.sheet_names, index=0, key="restore_sheet")
+                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0, key="settings_restore_sheet")
                 tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-                st.session_state.restore_source = f"XLSX — feuille « {sheet} »"
+                st.session_state.settings_restore_source = f"XLSX — feuille « {sheet} »"
             else:
-                raw = up.read(); tmp = _detect_delimiter_and_read(raw)
-                st.session_state.restore_source = "CSV"
-            prev = ensure_schema(tmp); st.session_state.restore_preview = prev
-            st.sidebar.success(f"Aperçu chargé ({st.session_state.restore_source})")
-            with st.sidebar.expander("Aperçu (10 premières lignes)", expanded=False):
+                raw = up.read()
+                tmp = _detect_delimiter_and_read(raw)
+                st.session_state.settings_restore_source = "CSV"
+
+            prev = ensure_schema(tmp)
+            st.session_state.settings_restore_preview = prev
+            st.success(f"Aperçu chargé ({st.session_state.settings_restore_source})")
+
+            with st.expander("Aperçu (10 premières lignes)", expanded=False):
                 st.dataframe(prev.head(10), use_container_width=True)
         except Exception as e:
-            st.session_state.restore_preview=None; st.sidebar.error(f"Erreur de lecture : {e}")
-    if st.session_state.restore_preview is not None:
-        if st.sidebar.button("✅ Confirmer la restauration"):
+            st.session_state.settings_restore_preview = None
+            st.error(f"Erreur de lecture : {e}")
+
+    if st.session_state.settings_restore_preview is not None:
+        if st.button("✅ Confirmer la restauration"):
             try:
-                save = st.session_state.restore_preview.copy()
+                save = st.session_state.settings_restore_preview.copy()
                 for col in ["date_arrivee","date_depart"]:
                     save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
                 save.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8")
                 st.cache_data.clear()
-                st.sidebar.success("Fichier restauré — rechargement…"); st.rerun()
+                st.success("Fichier restauré — rechargement…")
+                st.rerun()
             except Exception as e:
-                st.sidebar.error(f"Erreur écriture : {e}")
+                st.error(f"Erreur écriture : {e}")
 
-    if st.sidebar.button("🧹 Vider le cache & recharger"):
-        try: st.cache_data.clear()
-        except Exception: pass
-        st.sidebar.success("Cache vidé."); st.rerun()
+    st.markdown("---")
+    st.markdown("### 🧹 Vider le cache")
+    if st.button("Vider le cache & recharger"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.success("Cache vidé.")
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### ⛑️ Import manuel (remplacement immédiat)")
+    st.caption("Charge un CSV ou XLSX et remplace **immédiatement** le fichier de l'appartement en cours.")
+    up2 = st.file_uploader("Choisir un fichier (CSV ou XLSX)", type=["csv","xlsx"], key="settings_import_uploader")
+    if up2 is not None:
+        try:
+            if up2.name.lower().endswith(".xlsx"):
+                xls = pd.ExcelFile(up2)
+                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0, key="settings_import_sheet")
+                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
+            else:
+                raw = up2.read()
+                tmp = _detect_delimiter_and_read(raw)
+            prev = ensure_schema(tmp)
+            if sauvegarder_donnees(prev):
+                st.success("Import terminé — données enregistrées ✅")
+                st.rerun()
+            else:
+                st.error("Échec de sauvegarde.")
+        except Exception as e:
+            st.error(f"Erreur d'import : {e}")
+
+    st.markdown("---")
+    st.markdown("### 🔎 Diagnostics")
+    _debug_sources_panel()
+    _debug_apartments_panel()
+
+    st.markdown("---")
+    st.markdown("### 🧰 Écraser `apartments.csv`")
+    _force_write_apartments_csv()
 
 # ============================== MAIN ==============================
 def main():
@@ -1156,13 +1270,13 @@ def main():
     apply_style(light=bool(mode_clair))
     st.title("✨ Villa Tobias — Gestion des Réservations")
 
-    # 🔐 Auth obligatoire : sélection appartement
+    # 🔐 Auth obligatoire
     if not _auth_gate_in_sidebar():
         st.info("Connecte-toi à un appartement dans la barre latérale pour continuer.")
         st.stop()
 
-    # Une fois connecté, les chemins CSV_* pointent au bon fichier
-    df, palette_loaded = charger_donnees()
+    # Chargement dépendant du slug / fichiers (clé de cache)
+    df, palette_loaded = charger_donnees(_files_cache_key())
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
     pages = {
@@ -1178,11 +1292,10 @@ def main():
         "📝 Google Sheet": vue_google_sheet,
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
-        "⛑️ Import manuel": vue_import_force,
+        "⚙️ Paramètres": vue_settings,   # tout l'admin centralisé ici
     }
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
-    admin_sidebar(df)
 
 if __name__ == "__main__":
     main()
