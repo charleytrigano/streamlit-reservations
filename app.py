@@ -1743,6 +1743,194 @@ def admin_sidebar(df: pd.DataFrame):
     _password_hasher_widget()
 
 
+# ======== Apartments.csv loader solide + diagnostic ========
+@st.cache_data
+def _load_apartments_csv(path: str = "apartments.csv") -> pd.DataFrame:
+    """
+    Charge apartments.csv en tolérant ',' ou ';', enlève BOM/espaces,
+    et ne garde que slug,name,password_hash (trim + dédupe).
+    """
+    try:
+        if not os.path.exists(path):
+            return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+        raw = _load_file_bytes(path)  # <- déjà défini dans ton app
+        if raw is None:
+            return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+        txt = raw.decode("utf-8", errors="ignore").replace("\ufeff", "")
+        df = pd.DataFrame()
+        # Essaie ; puis , (certains éditeurs CSV FR utilisent ;)
+        for sep in [";", ","]:
+            try:
+                tmp = pd.read_csv(StringIO(txt), sep=sep, dtype=str)
+                tmp.columns = [c.strip().lower() for c in tmp.columns]
+                if {"slug", "name", "password_hash"}.issubset(tmp.columns):
+                    df = tmp
+                    break
+            except Exception:
+                pass
+        if df.empty:
+            # dernier recours: auto
+            df = pd.read_csv(StringIO(txt), dtype=str)
+            df.columns = [c.strip().lower() for c in df.columns]
+
+        for c in ["slug", "name", "password_hash"]:
+            if c not in df.columns:
+                df[c] = ""
+            df[c] = df[c].astype(str).str.replace("\ufeff", "", regex=False).str.strip()
+
+        df = df[(df["slug"] != "") & (df["name"] != "")]
+        df = df.drop_duplicates(subset=["slug"], keep="first").reset_index(drop=True)
+        return df[["slug", "name", "password_hash"]]
+    except Exception as e:
+        st.warning(f"Erreur lecture apartments.csv : {e}")
+        return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+
+def _debug_apartments_panel():
+    """Affiche ce que l'app voit dans apartments.csv (chemin, contenu, slugs)."""
+    path = "apartments.csv"
+    with st.expander("🔎 Diagnostic appartements", expanded=False):
+        abspath = os.path.abspath(path)
+        exists = os.path.exists(path)
+        st.write(f"Fichier : `{path}` — Existe : **{exists}**")
+        st.caption(f"Chemin absolu : {abspath}")
+        if exists:
+            try:
+                df_apts = _load_apartments_csv(path)
+                st.write(f"Lignes lues : {len(df_apts)}")
+                st.dataframe(df_apts, use_container_width=True)
+                st.write("Slugs détectés :", ", ".join(df_apts["slug"].tolist()) if not df_apts.empty else "—")
+            except Exception as e:
+                st.warning(f"Lecture apartments.csv KO : {e}")
+
+
+# ======== Mapping fichiers par appartement (slug) ========
+def _paths_for_slug(slug: str) -> dict:
+    base_slug = slug.strip()
+    return {
+        "CSV_RESERVATIONS": f"reservations_{base_slug}.csv",
+        "CSV_PLATEFORMES":  f"plateformes_{base_slug}.csv",
+    }
+
+def _ensure_files_for_slug(slug: str):
+    """Crée les fichiers pour ce slug s'ils n'existent pas, avec des en-têtes valides."""
+    paths = _paths_for_slug(slug)
+    # Réservations
+    if not os.path.exists(paths["CSV_RESERVATIONS"]):
+        with open(paths["CSV_RESERVATIONS"], "w", encoding="utf-8") as f:
+            f.write("nom_client,email,telephone,plateforme,date_arrivee,date_depart,nuitees,prix_brut,paye\n")
+    # Plateformes
+    if not os.path.exists(paths["CSV_PLATEFORMES"]):
+        with open(paths["CSV_PLATEFORMES"], "w", encoding="utf-8") as f:
+            f.write("plateforme,couleur\nAirbnb,#e74c3c\nBooking,#1e90ff\n")
+
+def _set_current_apartment(slug: str):
+    """
+    Fixe les variables globales CSV_RESERVATIONS / CSV_PLATEFORMES
+    en fonction du slug + crée les fichiers si besoin.
+    """
+    global CSV_RESERVATIONS, CSV_PLATEFORMES
+    _ensure_files_for_slug(slug)
+    p = _paths_for_slug(slug)
+    CSV_RESERVATIONS = p["CSV_RESERVATIONS"]
+    CSV_PLATEFORMES  = p["CSV_PLATEFORMES"]
+
+
+# ======== Panneau diagnostic fichiers (utile sur Accueil) ========
+def _debug_sources_panel():
+    """Montre quels fichiers sont réellement utilisés pour le slug courant."""
+    try:
+        slug = st.session_state.get("apt_slug", None) or "(non connecté)"
+        if slug and isinstance(slug, str) and slug != "(non connecté)":
+            p = _paths_for_slug(slug)
+            paths = {
+                "CSV_RESERVATIONS": p["CSV_RESERVATIONS"],
+                "CSV_PLATEFORMES": p["CSV_PLATEFORMES"],
+            }
+        else:
+            paths = {"CSV_RESERVATIONS": CSV_RESERVATIONS, "CSV_PLATEFORMES": CSV_PLATEFORMES}
+
+        with st.expander("🔎 Diagnostic fichiers", expanded=False):
+            st.write(f"**Appartement courant (slug)** : `{slug}`")
+            for k, v in paths.items():
+                abspath = os.path.abspath(v)
+                exists = os.path.exists(v)
+                size = os.path.getsize(v) if exists else 0
+                st.write(f"- **{k}** → `{v}`")
+                st.caption(f"Chemin absolu : {abspath}")
+                st.write(f"Existe : {exists} — Taille : {size} octets")
+                if exists:
+                    try:
+                        raw = _load_file_bytes(v)
+                        df_test = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
+                        st.write(f"Lignes lues : {len(df_test)} — Colonnes : {list(df_test.columns)}")
+                    except Exception as e:
+                        st.warning(f"Lecture impossible : {e}")
+    except Exception as e:
+        st.warning(f"Diagnostic indisponible : {e}")
+
+
+# ======== Auth en barre latérale ========
+def _auth_gate_in_sidebar() -> bool:
+    """
+    Affiche la sélection d'appartement + vérif de mot de passe.
+    Définit st.session_state['apt_slug'] et bascule les chemins CSV_*.
+    """
+    st.sidebar.subheader("🔐 Appartement")
+    _debug_apartments_panel()  # affiche ce que l'app voit (facilite le debug)
+
+    df_apts = _load_apartments_csv("apartments.csv")
+    if df_apts.empty:
+        st.sidebar.error("Aucun appartement trouvé dans apartments.csv")
+        return False
+
+    choices = [f"{row['name']} ({row['slug']})" for _, row in df_apts.iterrows()]
+
+    # Sélection par défaut: celui déjà connecté si dispo
+    default_idx = 0
+    last_slug = st.session_state.get("apt_slug")
+    if last_slug:
+        for i, (_, r) in enumerate(df_apts.iterrows()):
+            if r["slug"] == last_slug:
+                default_idx = i
+                break
+
+    pick = st.sidebar.selectbox("Appartement", options=choices, index=default_idx, key="apt_pick")
+    slug = pick.split("(")[-1].rstrip(")").strip()
+    row = df_apts[df_apts["slug"] == slug].iloc[0]
+
+    pwd = st.sidebar.text_input("Mot de passe", type="password", value="")
+    if st.sidebar.button("Se connecter", use_container_width=True):
+        ok = True
+        ph = str(row.get("password_hash", "") or "").strip()
+        if ph:
+            try:
+                test = hashlib.sha256(pwd.encode("utf-8")).hexdigest()
+                ok = (test == ph)
+            except Exception:
+                ok = False
+        if ok:
+            st.session_state["apt_slug"] = slug
+            st.session_state["apt_name"] = row["name"]
+            _set_current_apartment(slug)
+            st.sidebar.success(f"Connecté à {row['name']} ({slug}) ✅")
+            st.rerun()
+        else:
+            st.sidebar.error("Mot de passe incorrect.")
+            return False
+
+    if st.session_state.get("apt_slug"):
+        if st.sidebar.button("Changer d'appartement"):
+            st.session_state.pop("apt_slug", None)
+            st.session_state.pop("apt_name", None)
+            st.rerun()
+
+    return bool(st.session_state.get("apt_slug"))
+
+
+
 # ============================== MAIN ==============================
 def main():
     params = st.query_params
