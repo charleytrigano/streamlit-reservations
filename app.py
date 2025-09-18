@@ -418,6 +418,73 @@ def _password_hasher_widget():
             st.code(_sha256(raw), language="text")
             st.caption("Colle cette valeur dans la colonne password_hash d'apartments.csv")
 
+
+@st.cache_data
+def _load_apartments_csv(path: str = "apartments.csv") -> pd.DataFrame:
+    """
+    Charge apartments.csv en étant tolérant au séparateur (',' ou ';') et en nettoyant les espaces.
+    Colonnes attendues : slug,name,password_hash
+    """
+    try:
+        if not os.path.exists(path):
+            return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+        raw = _load_file_bytes(path)
+        if raw is None:
+            return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+        txt = raw.decode("utf-8", errors="ignore").replace("\ufeff", "")
+        # Essaye ; puis , puis auto
+        for sep in [";", ","]:
+            try:
+                df = pd.read_csv(StringIO(txt), sep=sep, dtype=str)
+                if set(["slug", "name", "password_hash"]).issubset(set(df.columns)):
+                    break
+            except Exception:
+                df = pd.DataFrame()
+        if df is None or df.empty:
+            # dernier recours
+            df = pd.read_csv(StringIO(txt), dtype=str)
+
+        # Normalisation colonnes
+        df.columns = [c.strip().lower() for c in df.columns]
+        for c in ["slug", "name", "password_hash"]:
+            if c not in df.columns:
+                df[c] = ""
+
+        # Trim valeurs
+        for c in ["slug", "name", "password_hash"]:
+            df[c] = df[c].astype(str).str.replace("\ufeff", "", regex=False).str.strip()
+
+        # Filtre lignes valides
+        df = df[(df["slug"] != "") & (df["name"] != "")]
+        # Déduplique par slug (au cas où)
+        df = df.drop_duplicates(subset=["slug"], keep="first").reset_index(drop=True)
+        return df[["slug", "name", "password_hash"]]
+    except Exception as e:
+        st.warning(f"Impossible de lire apartments.csv : {e}")
+        return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+
+def _debug_apartments_panel():
+    """Affiche ce que l'app voit dans apartments.csv (chemin, contenu, slugs)."""
+    path = "apartments.csv"
+    with st.expander("🔎 Diagnostic appartements", expanded=False):
+        abspath = os.path.abspath(path)
+        exists = os.path.exists(path)
+        st.write(f"Fichier : `{path}`")
+        st.caption(f"Chemin absolu : {abspath}")
+        st.write(f"Existe : {exists}")
+        if exists:
+            try:
+                df_apts = _load_apartments_csv(path)
+                st.write(f"Lignes lues : {len(df_apts)}")
+                st.dataframe(df_apts, use_container_width=True)
+                st.write("Slugs détectés :", ", ".join(df_apts["slug"].tolist()) if not df_apts.empty else "—")
+            except Exception as e:
+                st.warning(f"Lecture apartments.csv KO : {e}")
+
+
 # ============================== CHARGEMENT / SAUVEGARDE ==============================
 @st.cache_data
 def charger_donnees():
