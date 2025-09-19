@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import altair as alt
+import streamlit.components.v1 as components
 
 # ============================== CONFIG ==============================
 st.set_page_config(page_title="✨ Villa Tobias — Réservations", page_icon="✨", layout="wide")
@@ -27,15 +28,20 @@ DEFAULT_PALETTE = {
     "Autre": "#f59e0b",
 }
 
-# Google Form — préremplissage (entries exactes)
+# Google Form
 GOOGLE_FORM_BASE = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
+# Champs (si besoin de pré-remplir dynamiquement)
 GF_RES_ID = "entry.1972868847"
 GF_NAME   = "entry.937556468"
 GF_PHONE  = "entry.702324920"
 GF_ARR    = "entry.1099006415"  # yyyy-mm-dd
 GF_DEP    = "entry.2013910918"  # yyyy-mm-dd
 
+# Lien court fourni
+FORM_SHORT_URL = "https://urlr.me/kZuH94"
+
 def build_form_url(res_id: str, nom: str, tel: str, d_arr: date, d_dep: date) -> str:
+    """Génère un lien Google Form pré-rempli (utilisé si coché dans SMS)."""
     def _fmt(d):
         try:
             return pd.to_datetime(d).strftime("%Y-%m-%d")
@@ -82,23 +88,22 @@ def apply_style(light: bool):
         """,
         unsafe_allow_html=True
     )
-import streamlit as st
-import streamlit.components.v1 as components
 
 def print_buttons():
+    """Bandeau avec nom de l'appartement + bouton Imprimer (JS via component HTML)."""
     apt_name = st.session_state.get("apt_name") or st.session_state.get("apt_slug") or ""
     components.html(
         f"""
         <div style="
-            background: rgba(255,255,255,0.65);
-            border: 1px solid rgba(17,24,39,.12);
-            border-radius: 12px;
-            padding: 12px;
-            margin: -6px 0 8px 0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
+          background: rgba(255,255,255,0.65);
+          border: 1px solid rgba(17,24,39,.12);
+          border-radius: 12px;
+          padding: 12px;
+          margin: -6px 0 8px 0;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
           <div style="font-size: 1.75rem; font-weight: 800; letter-spacing: .5px;">
             {apt_name}
           </div>
@@ -111,7 +116,6 @@ def print_buttons():
         """,
         height=70,
     )
-
 
 # ============================== DATA HELPERS ==============================
 BASE_COLS = [
@@ -342,7 +346,6 @@ def _debug_apartments_panel():
             except Exception as e:
                 st.warning(f"Lecture apartments.csv KO : {e}")
 
-# >>>>>>>> CORRIGÉ : key_prefix pour éviter les clés dupliquées <<<<<<<<
 def _force_write_apartments_csv(key_prefix: str = "main"):
     with st.expander("🧰 Écraser apartments.csv (outil secours)", expanded=False):
         st.caption("Colle ci-dessous le contenu EXACT de apartments.csv (UTF-8, séparateur virgule).")
@@ -477,7 +480,6 @@ def charger_donnees(_cache_key: tuple):
 def _auth_gate_in_sidebar() -> bool:
     st.sidebar.subheader("🔐 Appartement")
     _debug_apartments_panel()
-    # >>>>>>>> Appel corrigé avec key_prefix=sidebar
     _force_write_apartments_csv(key_prefix="sidebar")
 
     df_apts = _load_apartments_csv("apartments.csv")
@@ -525,7 +527,6 @@ def _auth_gate_in_sidebar() -> bool:
             st.cache_data.clear()
             st.rerun()
 
-        # --- panneau "Changer le mot de passe"
         with st.sidebar.expander("🔑 Changer le mot de passe", expanded=False):
             st.caption("Change le mot de passe de l'appartement courant.")
             old_pwd = st.text_input("Ancien mot de passe", type="password")
@@ -577,13 +578,13 @@ def vue_accueil(df, palette):
     c1,c2,c3 = st.columns(3)
     with c1:
         st.subheader("🟢 Arrivées du jour")
-        st.dataframe(arr if not arr.empty else pd.DataFrame(columns=arr.columns), use_container_width=True)
+        st.dataframe(arr if not arr.empty else pd.DataFrame(columns=["nom_client","telephone","plateforme"]), use_container_width=True)
     with c2:
         st.subheader("🔴 Départs du jour")
-        st.dataframe(dep if not dep.empty else pd.DataFrame(columns=dep.columns), use_container_width=True)
+        st.dataframe(dep if not dep.empty else pd.DataFrame(columns=["nom_client","telephone","plateforme"]), use_container_width=True)
     with c3:
         st.subheader("🟠 Arrivées J+1 (demain)")
-        st.dataframe(arr_plus1 if not arr_plus1.empty else pd.DataFrame(columns=arr_plus1.columns), use_container_width=True)
+        st.dataframe(arr_plus1 if not arr_plus1.empty else pd.DataFrame(columns=["nom_client","telephone","plateforme"]), use_container_width=True)
 
 def vue_reservations(df, palette):
     st.header("📋 Réservations")
@@ -811,6 +812,77 @@ def vue_calendrier(df, palette):
 
 
 
+# ---------- Helpers messages SMS (NOUVELLES VERSIONS) ----------
+def _build_pre_arrival_message(r: pd.Series, apt_name: str, link: str) -> str:
+    arr = r["date_arrivee"]
+    dep = r["date_depart"]
+    nuits = int(pd.to_numeric(r.get("nuitees"), errors="coerce") or 0)
+    plat = r.get("plateforme", "Booking")
+    name = str(r.get("nom_client") or "").strip()
+
+    lines = [
+        f"APPARTEMENT ({apt_name})",
+        f"Plateforme : {plat}",
+        f"Arrivée : {arr.strftime('%d/%m/%Y')}  Départ : {(dep.strftime('%d/%m/%Y') if pd.notna(dep) else '')}  Nuitées : {nuits}",
+        "",
+        f"Bonjour {name} ",
+        "Bienvenue chez nous ! ",
+        "",
+        " Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant : ",
+        f"{link}",
+        "",
+        "Un parking est à votre disposition sur place.",
+        "",
+        "Le check-in se fait à partir de 14:00 h et le check-out avant 11:00 h. ",
+        "",
+        "Vous trouverez des consignes à bagages dans chaque quartier, à Nice. ",
+        "",
+        "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt. ",
+        "",
+        "Annick & Charley ",
+        "",
+        "****** ",
+        "",
+        "Welcome to our establishment! ",
+        "",
+        "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible,we kindly ask you to fill out the form that you will find by clicking on the following link:",
+        f"{link} ",
+        "",
+        "Parking is available on site.",
+        "",
+        "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. ",
+        "",
+        "You will find luggage storage facilities in every district of Nice. ",
+        "",
+        "We wish you a pleasant journey and look forward to meeting you very soon.",
+        "",
+        "Annick & Charley",
+    ]
+    return "\n".join(lines)
+
+def _build_depart_message(r: pd.Series) -> str:
+    name = str(r.get("nom_client") or "").strip()
+    lines = [
+        f"Bonjour {name},",
+        "",
+        "Un grand merci d'avoir choisi notre appartement pour votre séjour.",
+        "Nous espérons que vous avez passé un moment agréable.",
+        "Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.",
+        "",
+        "Au plaisir de vous accueillir à nouveau.",
+        "",
+        "Annick & Charley",
+        "",
+        f"Hello {name},",
+        "",
+        "Thank you very much for choosing our apartment for your stay.",
+        "We hope you had a great time — our door is always open if you want to come back.",
+        "",
+        "Annick & Charley",
+    ]
+    return "\n".join(lines)
+
+# ---------- Rapport ----------
 def vue_rapport(df, palette):
     st.header("📊 Rapport")
     print_buttons()
@@ -927,7 +999,7 @@ def vue_rapport(df, palette):
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # Analyse par pays
+    # Analyse par pays (résumé)
     st.markdown("---"); st.subheader("🌍 Analyse par pays")
     data_p = data.copy()
     agg_pays = data_p.groupby("pays", as_index=False).agg(
@@ -953,47 +1025,11 @@ def vue_rapport(df, palette):
         <span class='chip'><small>Total réservations</small><br><strong>{total_res}</strong></span>
         <span class='chip'><small>Top pays (CA net)</small><br><strong>{top_pays}</strong></span>
         </div>""", unsafe_allow_html=True)
-    cexp1, cexp2 = st.columns(2)
-    cexp1.download_button("⬇️ Export analyse pays (CSV)", data=agg_pays.to_csv(index=False).encode("utf-8"),
-                          file_name="analyse_pays.csv", mime="text/csv")
-    xlsx_pays,_ = _df_to_xlsx_bytes(agg_pays, "Analyse pays")
-    if xlsx_pays:
-        cexp2.download_button("⬇️ Export analyse pays (Excel)", data=xlsx_pays,
-                              file_name="analyse_pays.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    disp = agg_pays.copy()
-    for c in ["reservations","nuitees"]: disp[c] = pd.to_numeric(disp[c], errors="coerce").fillna(0).astype("int64")
-    for c in ["prix_brut","prix_net","ADR_net","part_revenu_%","menage","taxes_sejour","charges","base"]:
-        disp[c] = pd.to_numeric(disp[c], errors="coerce").fillna(0.0)
-    disp["ADR_net"] = disp["ADR_net"].round(2); disp["part_revenu_%"] = disp["part_revenu_%"].round(1)
-    st.dataframe(disp[["pays","reservations","nuitees","prix_brut","prix_net","charges","menage","taxes_sejour","base","ADR_net","part_revenu_%"]],
+    st.dataframe(agg_pays.assign(ADR_net=lambda x: x["ADR_net"].round(2), part_revenu_=lambda x: x["part_revenu_%"].round(1))
+                 [[c for c in ["pays","reservations","nuitees","prix_brut","prix_net","charges","menage","taxes_sejour","base","ADR_net","part_revenu_%"] if c in agg_pays.columns]],
                  use_container_width=True)
-    try:
-        topN = st.slider("Afficher les N premiers pays (par CA net)", min_value=3, max_value=20, value=12, step=1)
-        st.altair_chart(
-            alt.Chart(agg_pays.head(topN)).mark_bar().encode(
-                x=alt.X("pays:N", sort="-y", title="Pays"),
-                y=alt.Y("prix_net:Q", title="CA net (€)"),
-                tooltip=["pays","reservations","nuitees", alt.Tooltip("ADR_net:Q", format=",.2f"),
-                         alt.Tooltip("part_revenu_%:Q", format=".1f")]),
-            use_container_width=True
-        )
-    except Exception as e:
-        st.warning(f"Graphique 'Analyse par pays' indisponible : {e}")
 
-    # Evolution du taux d'occupation (courbe)
-    st.markdown("---"); st.subheader("📈 Évolution du taux d'occupation")
-    try:
-        st.altair_chart(
-            alt.Chart(occ_filtered).mark_line(point=True).encode(
-                x=alt.X("mois:N", sort=None, title="Mois"),
-                y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0,100])),
-                color=alt.Color("plateforme:N", title="Plateforme"),
-                tooltip=["mois","plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
-            ).properties(height=420), use_container_width=True
-        )
-    except Exception as e:
-        st.warning(f"Courbe indisponible : {e}")
-
+# ---------- SMS ----------
 def _copy_button(label: str, payload: str, key: str):
     st.text_area("Aperçu", payload, height=200, key=f"ta_{key}")
     st.caption("Sélectionnez puis copiez (Ctrl/Cmd+C).")
@@ -1017,18 +1053,24 @@ def vue_sms(df, palette):
         pick = st.selectbox("Client (pré-arrivée)", options=opts, index=None)
         if pick:
             i = int(pick.split(":")[0]); r = pre.loc[i]
-            arr=r["date_arrivee"]; dep=r["date_depart"]; nuits=int(pd.to_numeric(r.get("nuitees"), errors="coerce") or 0)
-            form_url = build_form_url(r.get("res_id",""), r.get("nom_client",""), r.get("telephone",""), arr, dep)
-            msg = (
-                f"VILLA TOBIAS\nPlateforme : {r.get('plateforme','N/A')}\n"
-                f"Arrivée : {arr.strftime('%d/%m/%Y')}  Départ : {(dep.strftime('%d/%m/%Y') if pd.notna(dep) else '')}  Nuitées : {nuits}\n\n"
-                f"Bonjour {r.get('nom_client')}\nBienvenue ! Merci de remplir cette fiche d'arrivée : {form_url}\n\n"
-                "Parking sur place. Check-in 14:00, check-out 11:00.\n\n"
-                "Annick & Charley\n\n"
-                "******\n\n"
-                "Welcome! Please complete the pre-arrival form: "
-                f"{form_url}\nParking on site. Check-in 2pm, check-out 11am.\nAnnick & Charley"
-            )
+            apt_name = st.session_state.get("apt_name") or st.session_state.get("apt_slug") or "APPARTEMENT"
+
+            # ⚙️ Choix du lien à insérer
+            use_prefill = st.checkbox("Utiliser le lien Google Form pré-rempli", value=False, help="Sinon, le lien court sera utilisé.")
+            if use_prefill:
+                form_link = build_form_url(
+                    r.get("res_id", ""),
+                    r.get("nom_client", ""),
+                    r.get("telephone", ""),
+                    r.get("date_arrivee", ""),
+                    r.get("date_depart", "")
+                )
+            else:
+                form_link = FORM_SHORT_URL  # lien court
+
+            # Message EXACT avec le lien choisi
+            msg = _build_pre_arrival_message(r, apt_name, form_link)
+
             enc = quote(msg); e164=_format_phone_e164(r["telephone"]); wa=re.sub(r"\D","", e164)
             _copy_button("📋 Copier le message", msg, key=f"pre_{i}")
             c1,c2,c3 = st.columns(3)
@@ -1052,11 +1094,8 @@ def vue_sms(df, palette):
         opts2=[f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i,r in post.iterrows()]
         pick2 = st.selectbox("Client (post-départ)", options=opts2, index=None)
         if pick2:
-            j=int(pick2.split(":")[0]); r2=post.loc[j]; name=str(r2.get("nom_client") or "").strip()
-            msg2=(f"Bonjour {name},\n\nMerci d'avoir choisi notre appartement.\n"
-                  "Nous espérons que vous avez passé un agréable séjour. À bientôt !\n\n"
-                  "Annick & Charley\n\n"
-                  f"Hello {name}, thanks for staying with us. Hope to see you again!\nAnnick & Charley")
+            j=int(pick2.split(":")[0]); r2=post.loc[j]
+            msg2=_build_depart_message(r2)
             enc2=quote(msg2); e164b=_format_phone_e164(r2["telephone"]); wab=re.sub(r"\D","", e164b)
             _copy_button("📋 Copier le message", msg2, key=f"post_{j}")
             c1,c2,c3=st.columns(3)
@@ -1067,6 +1106,7 @@ def vue_sms(df, palette):
                 df.loc[r2["_rowid"],"post_depart_envoye"]=True
                 if sauvegarder_donnees(df): st.success("Marqué ✅"); st.rerun()
 
+# ---------- Export ICS ----------
 def vue_export_ics(df, palette):
     st.header("📆 Export ICS (Google Calendar)")
     print_buttons()
@@ -1121,12 +1161,14 @@ def vue_export_ics(df, palette):
     st.download_button("📥 Télécharger .ics", data=ics.encode("utf-8"),
                        file_name=f"reservations_{year}.ics", mime="text/calendar")
 
+# ---------- Google Sheet ----------
 def vue_google_sheet(df, palette):
     st.header("📝 Fiche d'arrivée / Google Sheet")
     print_buttons()
-    st.caption("Le message de pré-arrivée contient un lien Google Form **pré-rempli** (res_id, nom, tel, arrivée, départ).")
+    st.caption("Le message de pré-arrivée contient le **lien court** ou le **lien pré-rempli** (selon le choix dans SMS).")
     st.markdown(f'<iframe src="{GOOGLE_FORM_BASE}" width="100%" height="900" frameborder="0"></iframe>', unsafe_allow_html=True)
 
+# ---------- Clients / ID ----------
 def vue_clients(df, palette):
     st.header("👥 Liste des clients")
     print_buttons()
@@ -1151,7 +1193,7 @@ def vue_id(df, palette):
     tbl["pays"]=tbl["telephone"].apply(_phone_country)
     st.dataframe(tbl[["res_id","nom_client","pays","telephone","email","plateforme"]], use_container_width=True)
 
-# ============ ONGLEt PARAMÈTRES ============
+# ---------- Paramètres ----------
 def vue_settings(df, palette):
     st.header("⚙️ Paramètres")
     print_buttons()
@@ -1270,7 +1312,6 @@ def vue_settings(df, palette):
 
     st.markdown("---")
     st.markdown("### 🧰 Écraser `apartments.csv`")
-    # >>>>>>>> Appel corrigé avec key_prefix=settings
     _force_write_apartments_csv(key_prefix="settings")
 
 # ============================== MAIN ==============================
@@ -1288,16 +1329,16 @@ def main():
     apply_style(light=bool(mode_clair))
     st.title("✨ Villa Tobias — Gestion des Réservations")
 
-    # 🔧 >>> PATCH IMPORTANT : remet les chemins propres à l'appartement choisi à chaque run
+    # Réapplique les chemins de l'appartement courant à chaque run
     if st.session_state.get("apt_slug"):
         _set_current_apartment(st.session_state["apt_slug"])
 
-    # 🔐 Auth obligatoire
+    # Auth
     if not _auth_gate_in_sidebar():
         st.info("Connecte-toi à un appartement dans la barre latérale pour continuer.")
         st.stop()
 
-    # Chargement dépendant du slug / fichiers (clé de cache)
+    # Chargement (cache dépendant du slug + mtime fichiers)
     df, palette_loaded = charger_donnees(_files_cache_key())
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
