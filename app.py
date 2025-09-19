@@ -82,28 +82,36 @@ def apply_style(light: bool):
         """,
         unsafe_allow_html=True
     )
+import streamlit as st
+import streamlit.components.v1 as components
 
 def print_buttons():
-    # Bandeau avec nom de l'appartement + bouton Imprimer
     apt_name = st.session_state.get("apt_name") or st.session_state.get("apt_slug") or ""
-    if apt_name:
-        st.markdown(
-            f"""
-            <div class='glass' style='display:flex;align-items:center;justify-content:space-between;margin-top:-6px;margin-bottom:8px'>
-              <div style="font-size:1.75rem;font-weight:800;letter-spacing:.5px">{apt_name}</div>
-              <button onclick="window.print()" class="no-print" style="border:1px solid rgba(17,24,39,.12);padding:8px 12px;border-radius:10px;background:transparent;cursor:pointer">
-                🖨️ Imprimer
-              </button>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.button(
-            "🖨️ Imprimer",
-            on_click=lambda: st.markdown("<script>window.print()</script>", unsafe_allow_html=True),
-            type="secondary"
-        )
+    components.html(
+        f"""
+        <div style="
+            background: rgba(255,255,255,0.65);
+            border: 1px solid rgba(17,24,39,.12);
+            border-radius: 12px;
+            padding: 12px;
+            margin: -6px 0 8px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;">
+          <div style="font-size: 1.75rem; font-weight: 800; letter-spacing: .5px;">
+            {apt_name}
+          </div>
+          <button
+            style="border:1px solid rgba(17,24,39,.18); padding:8px 12px; border-radius:10px; background:transparent; cursor:pointer;"
+            onclick="parent.window.print()">
+            🖨️ Imprimer
+          </button>
+        </div>
+        """,
+        height=70,
+    )
+
 
 # ============================== DATA HELPERS ==============================
 BASE_COLS = [
