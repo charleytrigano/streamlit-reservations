@@ -27,7 +27,7 @@ DEFAULT_PALETTE = {
     "Autre": "#f59e0b",
 }
 
-# Google Form — préremplissage
+# Google Form — préremplissage (entries exactes)
 GOOGLE_FORM_BASE = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform"
 GF_RES_ID = "entry.1972868847"
 GF_NAME   = "entry.937556468"
@@ -35,13 +35,18 @@ GF_PHONE  = "entry.702324920"
 GF_ARR    = "entry.1099006415"  # yyyy-mm-dd
 GF_DEP    = "entry.2013910918"  # yyyy-mm-dd
 
-def build_form_url(res_id:str, nom:str, tel:str, d_arr:date, d_dep:date) -> str:
+def build_form_url(res_id: str, nom: str, tel: str, d_arr: date, d_dep: date) -> str:
+    def _fmt(d):
+        try:
+            return pd.to_datetime(d).strftime("%Y-%m-%d")
+        except Exception:
+            return ""
     params = {
         GF_RES_ID: str(res_id or ""),
         GF_NAME:   str(nom or ""),
         GF_PHONE:  str(tel or ""),
-        GF_ARR:    (pd.to_datetime(d_arr).strftime("%Y-%m-%d") if pd.notna(pd.to_datetime(d_arr, errors="coerce")) else ""),
-        GF_DEP:    (pd.to_datetime(d_dep).strftime("%Y-%m-%d") if pd.notna(pd.to_datetime(d_dep, errors="coerce")) else ""),
+        GF_ARR:    _fmt(d_arr),
+        GF_DEP:    _fmt(d_dep),
         "usp": "pp_url",
     }
     return f"{GOOGLE_FORM_BASE}?{urlencode(params)}"
@@ -94,13 +99,11 @@ def print_buttons():
             unsafe_allow_html=True
         )
     else:
-        col = st.columns([1,1,6])[0]
-        with col:
-            st.button(
-                "🖨️ Imprimer",
-                on_click=lambda: st.markdown("<script>window.print()</script>", unsafe_allow_html=True),
-                type="secondary"
-            )
+        st.button(
+            "🖨️ Imprimer",
+            on_click=lambda: st.markdown("<script>window.print()</script>", unsafe_allow_html=True),
+            type="secondary"
+        )
 
 # ============================== DATA HELPERS ==============================
 BASE_COLS = [
@@ -1277,6 +1280,10 @@ def main():
     apply_style(light=bool(mode_clair))
     st.title("✨ Villa Tobias — Gestion des Réservations")
 
+    # 🔧 >>> PATCH IMPORTANT : remet les chemins propres à l'appartement choisi à chaque run
+    if st.session_state.get("apt_slug"):
+        _set_current_apartment(st.session_state["apt_slug"])
+
     # 🔐 Auth obligatoire
     if not _auth_gate_in_sidebar():
         st.info("Connecte-toi à un appartement dans la barre latérale pour continuer.")
@@ -1299,7 +1306,7 @@ def main():
         "📝 Google Sheet": vue_google_sheet,
         "👥 Clients": vue_clients,
         "🆔 ID": vue_id,
-        "⚙️ Paramètres": vue_settings,   # tout l'admin centralisé ici
+        "⚙️ Paramètres": vue_settings,
     }
     choice = st.sidebar.radio("Aller à", list(pages.keys()))
     pages[choice](df, palette)
