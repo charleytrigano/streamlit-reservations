@@ -1495,6 +1495,12 @@ def main():
     if st.session_state.get("apt_slug"):
         _set_current_apartment(st.session_state["apt_slug"])
 
+
+apartment_selector_sidebar()
+apt = get_current_apartment()
+current_title = f"{apt['name']}" if apt else "—"
+st.sidebar.caption(f"Connecté : {current_title}")
+
     # Auth
     if not _auth_gate_in_sidebar():
         st.info("Connecte-toi à un appartement dans la barre latérale pour continuer.")
