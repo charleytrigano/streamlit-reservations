@@ -327,6 +327,82 @@ def charger_donnees(csv_reservations: str, csv_plateformes: str):
             st.warning(f"Erreur de chargement de la palette : {e}")
 
     return df, palette
+# ============================== APARTMENTS (sans mot de passe) ==============================
+APARTMENTS_CSV = "apartments.csv"
+
+def _read_apartments_csv() -> pd.DataFrame:
+    """Charge apartments.csv (séparateur , ou ;) et normalise."""
+    try:
+        if not os.path.exists(APARTMENTS_CSV):
+            return pd.DataFrame(columns=["slug", "name"])
+        raw = _load_file_bytes(APARTMENTS_CSV)
+        df = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["slug", "name"])
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        if "slug" not in df.columns: df["slug"] = ""
+        if "name" not in df.columns: df["name"] = ""
+        df["slug"] = (df["slug"].astype(str).str.replace("\ufeff","",regex=False)
+                      .str.strip().str.replace(" ","-",regex=False)
+                      .str.replace("_","-",regex=False).str.lower())
+        df["name"] = df["name"].astype(str).str.replace("\ufeff","",regex=False).str.strip()
+        df = df[(df["slug"]!="") & (df["name"]!="")].drop_duplicates(subset=["slug"], keep="first")
+        return df[["slug","name"]]
+    except Exception:
+        return pd.DataFrame(columns=["slug","name"])
+
+def _current_apartment() -> dict | None:
+    slug = st.session_state.get("apt_slug","")
+    name = st.session_state.get("apt_name","")
+    if slug and name:
+        return {"slug": slug, "name": name}
+    return None
+
+def _select_apartment_sidebar() -> bool:
+    """Affiche le sélecteur d'appartement et met à jour les fichiers actifs.
+    Retourne True si la sélection a changé (pour que main() fasse st.rerun())."""
+    st.sidebar.markdown("### Appartement")
+    df_apts = _read_apartments_csv()
+    if df_apts.empty:
+        st.sidebar.warning("Aucun appartement trouvé dans apartments.csv")
+        return False
+
+    options = df_apts["slug"].tolist()
+    labels = {r["slug"]: r["name"] for _, r in df_apts.iterrows()}
+    default_idx = 0
+    if "apt_slug" in st.session_state and st.session_state["apt_slug"] in options:
+        default_idx = options.index(st.session_state["apt_slug"])
+
+    slug = st.sidebar.selectbox(
+        "Choisir un appartement",
+        options=options,
+        index=default_idx,
+        format_func=lambda s: labels.get(s, s),
+        key="apt_slug_selectbox",
+    )
+    name = labels.get(slug, slug)
+
+    changed = (slug != st.session_state.get("apt_slug","") or
+               name != st.session_state.get("apt_name",""))
+
+    # mémorise
+    st.session_state["apt_slug"] = slug
+    st.session_state["apt_name"] = name
+    st.session_state["CSV_RESERVATIONS"] = f"reservations_{slug}.csv"
+    st.session_state["CSV_PLATEFORMES"]  = f"plateformes_{slug}.csv"
+
+    # synchronise les variables globales
+    global CSV_RESERVATIONS, CSV_PLATEFORMES
+    CSV_RESERVATIONS = st.session_state["CSV_RESERVATIONS"]
+    CSV_PLATEFORMES  = st.session_state["CSV_PLATEFORMES"]
+
+    st.sidebar.success(f"Connecté : {name}")
+    try:
+        print_buttons(location="sidebar")
+    except Exception:
+        pass
+
+    return changed
 # ============================== VUES ==============================
 def vue_accueil(df, palette):
     apt = _current_apartment()
@@ -1439,26 +1515,17 @@ def vue_settings(df: pd.DataFrame, palette: dict):
         except Exception as e:
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 # ============================== MAIN ==============================
-def _load_data_for_active_apartment():
-    try:
-        return charger_donnees(CSV_RESERVATIONS, CSV_PLATEFORMES)
-    except Exception:
-        return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
-
 def main():
     params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
+    if params.get("clear", ["0"])[0] in ("1","true","True","yes"):
+        try: st.cache_data.clear()
+        except Exception: pass
 
+    # --- sélection d'appartement : on détecte le changement ici ---
     changed = _select_apartment_sidebar()
     if changed:
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
+        try: st.cache_data.clear()
+        except Exception: pass
         st.rerun()
 
     apt = _current_apartment()
@@ -1468,11 +1535,9 @@ def main():
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
         mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
-
     apply_style(light=bool(mode_clair))
 
-    st.title("✨ Villa Tobias — Gestion des Réservations")
-    st.markdown(f"### 🏷️ {apt_name}")
+    st.title(f"✨ {apt_name} — Gestion des Réservations")
 
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
