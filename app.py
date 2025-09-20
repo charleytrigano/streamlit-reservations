@@ -1536,32 +1536,40 @@ def _load_data_for_active_apartment():
         return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 # ============================== MAIN ==============================
 def main():
+    # -- reset du cache via URL ?clear=1 --
     params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1","true","True","yes"):
-        try: st.cache_data.clear()
-        except Exception: pass
+    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
 
-    # --- sélection d'appartement : on détecte le changement ici ---
+    # -- Sélecteur d'appartement dans la sidebar --
     changed = _select_apartment_sidebar()
     if changed:
-        try: st.cache_data.clear()
-        except Exception: pass
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
         st.rerun()
 
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-
+    # -- Thème clair/obscur --
     try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
         mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
     apply_style(light=bool(mode_clair))
 
+    # -- Nom d'appartement courant pour l'entête --
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
     st.title(f"✨ {apt_name} — Gestion des Réservations")
 
+    # -- Chargement des données de l'appartement actif --
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
+    # -- Navigation --
     pages = {
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
@@ -1580,6 +1588,7 @@ def main():
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
     pages[choice](df, palette)
+
 
 if __name__ == "__main__":
     main()
