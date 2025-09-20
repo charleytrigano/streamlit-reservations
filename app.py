@@ -1364,6 +1364,7 @@ def _select_apartment_sidebar() -> bool:
         pass
 
     return changed
+
 # ============================== PARAMÈTRES ==============================
 def vue_settings(df: pd.DataFrame, palette: dict):
     apt = _current_apartment()
