@@ -394,7 +394,202 @@ def _select_apartment_sidebar() -> bool:
 
     return changed
 
-# ============================== VUES ==============================
+# ============================== PARAMÈTRES (avec restauration OK) ==============================
+def vue_settings(df: pd.DataFrame, palette: dict):
+    from pathlib import Path
+
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"## ⚙️ Paramètres — {apt_name}")
+    print_buttons()
+
+    st.markdown(
+        "Centralise la **sauvegarde**, la **restauration**, le **vidage du cache**, "
+        "l’**import manuel**, le **diagnostic**, et l’outil pour **écraser apartments.csv**."
+    )
+
+    # ====== 1) SAUVEGARDE (exports) ======
+    st.subheader("💾 Sauvegarde (exports)")
+    try:
+        out = ensure_schema(df).copy()
+        out["pays"] = out["telephone"].apply(_phone_country)
+        for col in ["date_arrivee", "date_depart"]:
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
+        csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Exporter réservations (CSV)",
+            data=csv_bytes,
+            file_name=os.path.basename(st.session_state.get("CSV_RESERVATIONS", "reservations.csv")),
+            mime="text/csv",
+            key="dl_res_csv_settings",
+        )
+    except Exception as e:
+        st.warning(f"Impossible de générer l’export CSV : {e}")
+
+    try:
+        xlsx_bytes, _ = _df_to_xlsx_bytes(out, sheet_name="Reservations")
+        st.download_button(
+            "⬇️ Exporter réservations (XLSX)",
+            data=xlsx_bytes or b"",
+            file_name=os.path.splitext(os.path.basename(st.session_state.get("CSV_RESERVATIONS", "reservations.csv")))[0] + ".xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=(xlsx_bytes is None),
+            key="dl_res_xlsx_settings",
+        )
+    except Exception:
+        pass
+
+    # Export plateformes
+    try:
+        pal_df = pd.DataFrame(list(palette.items()), columns=["plateforme", "couleur"])
+        pal_csv = pal_df.to_csv(sep=";", index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Exporter plateformes (CSV)",
+            data=pal_csv,
+            file_name=os.path.basename(st.session_state.get("CSV_PLATEFORMES", "plateformes.csv")),
+            mime="text/csv",
+            key="dl_pal_csv_settings",
+        )
+    except Exception:
+        pass
+
+    st.markdown("---")
+
+    # ====== 2) RESTAURATION (remplacer les données) ======
+    st.subheader("♻️ Restauration (remplacer les données)")
+
+    st.caption("**Réservations** — charge un CSV/XLSX et remplace le fichier de l’appartement courant.")
+    up_res = st.file_uploader(
+        "Choisir un fichier de réservations (CSV ou XLSX)",
+        type=["csv", "xlsx"],
+        key="restore_reservations_uploader_settings"
+    )
+    if up_res is not None:
+        try:
+            if up_res.name.lower().endswith(".xlsx"):
+                tmp_res = pd.read_excel(up_res, dtype=str)
+            else:
+                raw = up_res.read()
+                tmp_res = _detect_delimiter_and_read(raw)
+
+            prev_res = ensure_schema(tmp_res)
+            st.dataframe(prev_res.head(10), use_container_width=True)
+            if st.button("✅ Confirmer la restauration des réservations", key="confirm_restore_res_settings"):
+                # Écrit vers le CSV actif (lié à l’appartement)
+                csv_res_path = st.session_state.get("CSV_RESERVATIONS", "reservations.csv")
+                for col in ["date_arrivee", "date_depart"]:
+                    prev_res[col] = pd.to_datetime(prev_res[col], errors="coerce").dt.strftime("%d/%m/%Y")
+                prev_res.to_csv(csv_res_path, sep=";", index=False, encoding="utf-8", lineterminator="\n")
+                st.cache_data.clear()
+                st.success(f"Réservations restaurées dans {csv_res_path} — rechargement…")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Erreur restauration réservations : {e}")
+
+    st.caption("**Plateformes** — charge un CSV/XLSX et remplace les couleurs/plateformes de l’appartement.")
+    up_pal = st.file_uploader(
+        "Choisir un fichier plateformes (CSV ou XLSX, colonnes: plateforme;couleur)",
+        type=["csv", "xlsx"],
+        key="restore_plateformes_uploader_settings"
+    )
+    if up_pal is not None:
+        try:
+            if up_pal.name.lower().endswith(".xlsx"):
+                tmp_pal = pd.read_excel(up_pal, dtype=str)
+            else:
+                rawp = up_pal.read()
+                tmp_pal = _detect_delimiter_and_read(rawp)
+
+            tmp_pal.columns = tmp_pal.columns.astype(str).str.strip().str.lower()
+            if not {"plateforme", "couleur"}.issubset(set(tmp_pal.columns)):
+                st.error("Le fichier plateformes doit contenir les colonnes 'plateforme' et 'couleur'.")
+            else:
+                st.dataframe(tmp_pal.head(10), use_container_width=True)
+                if st.button("✅ Confirmer la restauration des plateformes", key="confirm_restore_pal_settings"):
+                    csv_pal_path = st.session_state.get("CSV_PLATEFORMES", "plateformes.csv")
+                    tmp_pal[["plateforme", "couleur"]].to_csv(
+                        csv_pal_path, sep=";", index=False, encoding="utf-8", lineterminator="\n"
+                    )
+                    st.cache_data.clear()
+                    st.success(f"Plateformes restaurées dans {csv_pal_path} — rechargement…")
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Erreur restauration plateformes : {e}")
+
+    st.markdown("---")
+
+    # ====== 3) VIDAGE DU CACHE ======
+    st.subheader("🧹 Vider le cache")
+    if st.button("🧹 Vider le cache & recharger", key="clear_cache_btn_settings"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.success("Cache vidé.")
+        st.rerun()
+
+    st.markdown("---")
+
+    # ====== 4) IMPORT MANUEL (remplacement immédiat de réservations) ======
+    st.subheader("⛑️ Import manuel (remplacement immédiat des réservations)")
+    up2 = st.file_uploader(
+        "Choisir un fichier (CSV ou XLSX) pour remplacer immédiatement les réservations",
+        type=["csv", "xlsx"],
+        key="manual_import_settings"
+    )
+    if up2 is not None:
+        try:
+            if up2.name.lower().endswith(".xlsx"):
+                tmp2 = pd.read_excel(up2, dtype=str)
+            else:
+                raw2 = up2.read()
+                tmp2 = _detect_delimiter_and_read(raw2)
+
+            save = ensure_schema(tmp2)
+            for col in ["date_arrivee", "date_depart"]:
+                save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
+            csv_res_path = st.session_state.get("CSV_RESERVATIONS", "reservations.csv")
+            save.to_csv(csv_res_path, sep=";", index=False, encoding="utf-8", lineterminator="\n")
+            st.success(f"Import manuel appliqué sur {csv_res_path} — rechargement…")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erreur import manuel : {e}")
+
+    st.markdown("---")
+
+    # ====== 5) DIAGNOSTICS ======
+    st.subheader("🔎 Diagnostics")
+    st.write("🔎 **Fichiers actifs**")
+    st.text(f"CSV_RESERVATIONS = {st.session_state.get('CSV_RESERVATIONS', 'reservations.csv')}")
+    st.text(f"CSV_PLATEFORMES  = {st.session_state.get('CSV_PLATEFORMES', 'plateformes.csv')}")
+
+    st.write("🔎 **Appartements disponibles (apartments.csv)**")
+    try:
+        df_apts = _read_apartments_csv()
+        if df_apts.empty:
+            st.warning("Aucun appartement trouvé (apartments.csv manquant ou vide).")
+        else:
+            st.dataframe(df_apts, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erreur lecture apartments.csv : {e}")
+
+    st.markdown("---")
+
+    # ====== 6) OUTIL SECOURS apartments.csv ======
+    st.subheader("🧰 Écraser apartments.csv (outil secours)")
+    default_csv = "slug,name\nvilla-tobias,Villa Tobias\nle-turenne,Le Turenne\n"
+    txt = st.text_area(
+        "Contenu apartments.csv",
+        value=default_csv,
+        height=140,
+        key="force_apts_txt_settings_unique"  # clé unique pour éviter les doublons
+    )
+    if st.button("💾 Écraser apartments.csv", key="force_apts_btn_settings_unique"):
+        try:
+            Path("apartments.csv").write_text(txt.strip() + "\n", encoding="utf-8")
+            st.success("apartments.csv écrasé. Videz le cache et rechargez (bouton ci-dessus).")
+        except Exception as e:
+            st.error(f"Erreur écriture apartments.csv : {e}") {e}")=============================
 def vue_accueil(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
