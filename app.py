@@ -395,41 +395,7 @@ def _load_data_for_active_apartment():
 from calendar import monthrange
 
 # ---------- Accueil ----------
-def vue_accueil(df: pd.DataFrame, palette: dict):
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-    st.header(f"🏠 Accueil — {apt_name}")
-    try:
-        print_buttons()
-    except Exception:
-        pass
-
-    if df is None or df.empty:
-        st.info("Aucune réservation.")
-        return
-
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
-
-    dfa = df.copy()
-    dfa["date_arrivee"] = _safe_date_series(dfa["date_arrivee"])
-    dfa["date_depart"]  = _safe_date_series(dfa["date_depart"])
-
-    arr = dfa[dfa["date_arrivee"] == today][["nom_client", "telephone", "plateforme", "pays"]].copy()
-    dep = dfa[dfa["date_depart"] == today][["nom_client", "telephone", "plateforme", "pays"]].copy()
-    arr_plus1 = dfa[dfa["date_arrivee"] == tomorrow][["nom_client", "telephone", "plateforme", "pays"]].copy()
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.subheader("🟢 Arrivées du jour")
-        st.dataframe(arr if not arr.empty else pd.DataFrame({"info": ["Aucune arrivée."]}), use_container_width=True)
-    with c2:
-        st.subheader("🔴 Départs du jour")
-        st.dataframe(dep if not dep.empty else pd.DataFrame({"info": ["Aucun départ."]}), use_container_width=True)
-    with c3:
-        st.subheader("🟠 Arrivées J+1 (demain)")
-        st.dataframe(arr_plus1 if not arr_plus1.empty else pd.DataFrame({"info": ["Aucune arrivée demain."]}),
-                     use_container_width=True)
+    apt = _current_apartment)
 
 
 # ---------- Réservations (liste + filtres) ----------
