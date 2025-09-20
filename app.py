@@ -1289,13 +1289,11 @@ def _read_apartments_csv() -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame(columns=["slug", "name"])
 
-        # colonnes attendues
         df.columns = [str(c).strip().lower() for c in df.columns]
         for c in ("slug", "name"):
             if c not in df.columns:
                 df[c] = ""
 
-        # nettoyage
         df["slug"] = (
             df["slug"].astype(str)
             .str.replace("\ufeff", "", regex=False)
@@ -1313,24 +1311,21 @@ def _read_apartments_csv() -> pd.DataFrame:
 
 
 def _current_apartment() -> dict | None:
-    """Retourne {'slug','name'} si sélection faite, sinon None."""
     slug = st.session_state.get("apt_slug", "")
     name = st.session_state.get("apt_name", "")
     if slug and name:
         return {"slug": slug, "name": name}
     return None
-
-
-def _select_apartment_sidebar():
-    """Sélecteur d'appartement (sans mot de passe) dans la sidebar.
-    Met à jour CSV_RESERVATIONS / CSV_PLATEFORMES selon le slug.
+def _select_apartment_sidebar() -> bool:
+    """Sélecteur d'appartement dans la sidebar.
+    Retourne True si la sélection a changé (→ st.rerun() dans main()).
     """
     df_apts = _read_apartments_csv()
     st.sidebar.markdown("### Appartement")
 
     if df_apts.empty:
         st.sidebar.warning("Aucun appartement trouvé dans apartments.csv")
-        return
+        return False
 
     options = df_apts["slug"].tolist()
     labels = {r["slug"]: r["name"] for _, r in df_apts.iterrows()}
@@ -1352,25 +1347,15 @@ def _select_apartment_sidebar():
         slug != st.session_state.get("apt_slug", "") or
         name != st.session_state.get("apt_name", "")
     )
+
     st.session_state["apt_slug"] = slug
     st.session_state["apt_name"] = name
-
-    # chemins de travail par appartement
     st.session_state["CSV_RESERVATIONS"] = f"reservations_{slug}.csv"
     st.session_state["CSV_PLATEFORMES"] = f"plateformes_{slug}.csv"
 
-    # synchronise les constantes globales
     global CSV_RESERVATIONS, CSV_PLATEFORMES
     CSV_RESERVATIONS = st.session_state["CSV_RESERVATIONS"]
     CSV_PLATEFORMES  = st.session_state["CSV_PLATEFORMES"]
-
-    if changed:
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.sidebar.info(f"Chargement des données pour {name}…")
-        st.experimental_rerun()
 
     st.sidebar.success(f"Connecté : {name}")
     try:
@@ -1378,7 +1363,7 @@ def _select_apartment_sidebar():
     except Exception:
         pass
 
-
+    return changed
 # ============================== PARAMÈTRES ==============================
 def vue_settings(df: pd.DataFrame, palette: dict):
     apt = _current_apartment()
@@ -1390,10 +1375,7 @@ def vue_settings(df: pd.DataFrame, palette: dict):
     except Exception:
         pass
 
-    st.caption(
-        "Centralise la sauvegarde, la restauration, le vidage du cache, "
-        "l’import manuel, le diagnostic, et l’outil pour écraser apartments.csv."
-    )
+    st.caption("Sauvegarde, restauration, cache, import manuel, diagnostic, écrasement apartments.csv.")
 
     # --- Sauvegarde ---
     st.markdown("### 💾 Sauvegarde (exports)")
@@ -1414,14 +1396,15 @@ def vue_settings(df: pd.DataFrame, palette: dict):
         mime="text/csv",
         key="dl_res_csv",
     )
+
     try:
         out_xlsx = ensure_schema(df).copy()
         out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
         for col in ["date_arrivee", "date_depart"]:
             out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        xlsx_bytes, xlsx_err = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
-    except Exception as e:
-        xlsx_bytes, xlsx_err = None, e
+        xlsx_bytes, _ = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
+    except Exception:
+        xlsx_bytes = None
 
     c2.download_button(
         "⬇️ Exporter réservations (XLSX)",
@@ -1432,50 +1415,7 @@ def vue_settings(df: pd.DataFrame, palette: dict):
         key="dl_res_xlsx",
     )
 
-    # --- Restauration ---
-    st.markdown("### ♻️ Restauration (remplacer les données)")
-    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader_settings")
-
-    if "restore_preview" not in st.session_state:
-        st.session_state.restore_preview = None
-        st.session_state.restore_source = ""
-
-    if up is not None:
-        try:
-            if up.name.lower().endswith(".xlsx"):
-                xls = pd.ExcelFile(up)
-                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0, key="restore_sheet_settings")
-                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-                st.session_state.restore_source = f"XLSX — feuille « {sheet} »"
-            else:
-                raw = up.read()
-                tmp = _detect_delimiter_and_read(raw)
-                st.session_state.restore_source = "CSV"
-
-            prev = ensure_schema(tmp)
-            st.session_state.restore_preview = prev
-            st.success(f"Aperçu chargé ({st.session_state.restore_source})")
-
-            with st.expander("Aperçu (10 premières lignes)", expanded=False):
-                st.dataframe(prev.head(10), use_container_width=True)
-        except Exception as e:
-            st.session_state.restore_preview = None
-            st.error(f"Erreur de lecture : {e}")
-
-    if st.session_state.restore_preview is not None:
-        if st.button("✅ Confirmer la restauration", key="confirm_restore_settings"):
-            try:
-                save = st.session_state.restore_preview.copy()
-                for col in ["date_arrivee", "date_depart"]:
-                    save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                save.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8", lineterminator="\n")
-                st.cache_data.clear()
-                st.success("Fichier restauré — rechargement…")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erreur écriture : {e}")
-
-    # --- Vider le cache ---
+    # --- Vider cache ---
     st.markdown("### 🧹 Vider le cache")
     if st.button("Vider le cache & recharger", key="clear_cache_btn_settings"):
         try:
@@ -1484,91 +1424,10 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             pass
         st.rerun()
 
-    # --- Import manuel ---
-    st.markdown("### ⛑️ Import manuel (remplacement immédiat)")
-    st.caption("Charge un CSV ou XLSX et remplace immédiatement le fichier de l'appartement en cours.")
-    up2 = st.file_uploader("Choisir un fichier (CSV ou XLSX)", type=["csv", "xlsx"], key="manual_import_settings")
-    if up2 is not None:
-        try:
-            if up2.name.lower().endswith(".xlsx"):
-                tmp = pd.read_excel(up2, dtype=str)
-            else:
-                tmp = _detect_delimiter_and_read(up2.read())
-            tmp = ensure_schema(tmp)
-            for col in ["date_arrivee", "date_depart"]:
-                tmp[col] = pd.to_datetime(tmp[col], errors="coerce").dt.strftime("%d/%m/%Y")
-            tmp.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8", lineterminator="\n")
-            st.cache_data.clear()
-            st.success("Import terminé ✅ — rechargement…")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Import impossible : {e}")
-
-    # --- Diagnostics ---
-    st.markdown("### 🔎 Diagnostics")
-    with st.expander("🔎 Diagnostic fichiers", expanded=False):
-        diag = {
-            "CSV_RESERVATIONS": CSV_RESERVATIONS,
-            "CSV_PLATEFORMES": CSV_PLATEFORMES,
-            "apartments.csv": APARTMENTS_CSV,
-        }
-        st.write(diag)
-        for p in diag.values():
-            exists = os.path.exists(p)
-            size = os.path.getsize(p) if exists else 0
-            st.write(f"- {p} — existe: {exists} — taille: {size} octets")
-
-    with st.expander("🔎 Diagnostic appartements", expanded=False):
-        st.dataframe(_read_apartments_csv(), use_container_width=True)
-
-    # --- Palette ---
-    st.markdown("### 🎨 Palette des plateformes (export / import)")
-    try:
-        rawp = _load_file_bytes(CSV_PLATEFORMES)
-        pal_df = _detect_delimiter_and_read(rawp) if rawp else pd.DataFrame(list(DEFAULT_PALETTE.items()), columns=["plateforme", "couleur"])
-    except Exception:
-        pal_df = pd.DataFrame(list(DEFAULT_PALETTE.items()), columns=["plateforme", "couleur"])
-
-    pal_csv = pal_df.to_csv(index=False, sep=";").encode("utf-8")
-    cpa1, cpa2 = st.columns(2)
-    cpa1.download_button(
-        "⬇️ Exporter la palette (CSV)",
-        data=pal_csv,
-        file_name=os.path.basename(CSV_PLATEFORMES),
-        mime="text/csv",
-        key="dl_palette_csv_settings"
-    )
-
-    up_pal = cpa2.file_uploader("Importer une palette (CSV)", type=["csv"], key="upload_palette_csv_settings")
-    if up_pal is not None:
-        try:
-            raw = up_pal.read()
-            new_pal = _detect_delimiter_and_read(raw)
-            new_pal.columns = new_pal.columns.astype(str).str.strip().str.lower()
-            if "plateforme" not in new_pal.columns or "couleur" not in new_pal.columns:
-                st.error("Le CSV doit contenir les colonnes 'plateforme' et 'couleur'.")
-            else:
-                out = new_pal[["plateforme", "couleur"]].copy()
-                out["plateforme"] = out["plateforme"].astype(str).str.strip()
-                out["couleur"] = out["couleur"].astype(str).str.strip()
-                out = out[out["plateforme"] != ""].drop_duplicates(subset=["plateforme"])
-
-                out.loc[~out["couleur"].str.startswith("#"), "couleur"] = \
-                    "#" + out["couleur"].str.replace(r"[^0-9A-Fa-f]", "", regex=True).str[-6:].str.zfill(6)
-                ok_hex = out["couleur"].str.match(r"^#([0-9A-Fa-f]{6})$")
-                out.loc[~ok_hex, "couleur"] = "#666666"
-
-                out.to_csv(CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8", lineterminator="\n")
-                st.cache_data.clear()
-                st.success("Palette importée et enregistrée ✅")
-                st.rerun()
-        except Exception as e:
-            st.error(f"Erreur d'import de la palette : {e}")
-
     # --- Outil secours ---
     st.markdown("### 🧰 Écraser apartments.csv")
     default_csv = "slug,name\nvilla-tobias,Villa Tobias\nle-turenne,Le Turenne\n"
-    txt = st.text_area("Contenu de apartments.csv", value=default_csv, height=140, key="force_apts_txt_settings")
+    txt = st.text_area("Contenu apartments.csv", value=default_csv, height=140, key="force_apts_txt_settings")
     if st.button("🧰 Écraser apartments.csv (outil secours)", key="force_apts_btn_settings"):
         try:
             with open(APARTMENTS_CSV, "w", encoding="utf-8", newline="") as f:
@@ -1578,21 +1437,13 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.rerun()
         except Exception as e:
             st.error(f"Impossible d'écrire apartments.csv : {e}")
-
-
-# ============================== LOAD DATA WRAPPER ==============================
+# ============================== MAIN ==============================
 def _load_data_for_active_apartment():
-    """Charge (df, palette) pour l'appartement actif."""
     try:
         return charger_donnees(CSV_RESERVATIONS, CSV_PLATEFORMES)
     except Exception:
-        try:
-            return charger_donnees()
-        except Exception:
-            return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
+        return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 
-
-# ============================== MAIN ==============================
 def main():
     params = st.query_params
     if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
@@ -1601,7 +1452,14 @@ def main():
         except Exception:
             pass
 
-    _select_apartment_sidebar()
+    changed = _select_apartment_sidebar()
+    if changed:
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.rerun()
+
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
 
@@ -1636,7 +1494,6 @@ def main():
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
     pages[choice](df, palette)
-
 
 if __name__ == "__main__":
     main()
