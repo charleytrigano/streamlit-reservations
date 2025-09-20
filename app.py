@@ -1008,6 +1008,144 @@ def _load_data_for_active_apartment():
         # Dernier filet de sécurité : dataframe vide + palette par défaut
         return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 
+def vue_sms(df, palette):
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"✉️ SMS & WhatsApp — {apt_name}")
+    print_buttons()
+
+    # ====== Pré-arrivée ======
+    st.subheader("🛬 Pré-arrivée (arrivées J+1)")
+    target_arrivee = st.date_input("Arrivées du", date.today() + timedelta(days=1), key="pre_date")
+    pre = df.dropna(subset=["telephone", "nom_client", "date_arrivee"]).copy()
+    pre["date_arrivee"] = _to_date(pre["date_arrivee"])
+    pre["date_depart"] = _to_date(pre["date_depart"])
+    sms_sent = _to_bool_series(pre.get("sms_envoye", False))
+    pre = pre[(pre["date_arrivee"] == target_arrivee) & (~sms_sent)]
+
+    if pre.empty:
+        st.info("Aucun client à contacter.")
+    else:
+        pre["_rowid"] = pre.index
+        pre = pre.sort_values("date_arrivee").reset_index(drop=True)
+        opts = [f"{i}: {r['nom_client']} ({r['telephone']})" for i, r in pre.iterrows()]
+        pick = st.selectbox("Client (pré-arrivée)", options=opts, index=None)
+
+        if pick:
+            i = int(pick.split(":")[0])
+            r = pre.loc[i]
+
+            # Lien de fiche (court) — si tu veux préremplir via l’URL longue, adapte _google_form_prefill
+            link_form = _google_form_prefill(
+                r.get("res_id"),
+                r.get("nom_client"),
+                _format_phone_e164(r.get("telephone")),
+                r.get("date_arrivee"),
+                r.get("date_depart"),
+            )
+
+            # Message FR + EN (version fournie)
+            msg = (
+                f"{apt_name.upper()}\n"
+                f"Plateforme : {r.get('plateforme', 'N/A')}\n"
+                f"Arrivée : {r['date_arrivee'].strftime('%d/%m/%Y')}  "
+                f"Départ : {(r['date_depart'].strftime('%d/%m/%Y') if pd.notna(r['date_depart']) else '')}  "
+                f"Nuitées : {int(pd.to_numeric(r.get('nuitees'), errors='coerce') or 0)}\n\n"
+                f"Bonjour {r.get('nom_client')}\n"
+                "Bienvenue chez nous ! \n\n"
+                "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, "
+                "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant : \n"
+                f"{link_form}\n\n"
+                "Un parking est à votre disposition sur place.\n\n"
+                "Le check-in se fait à partir de 14:00 h et le check-out avant 11:00 h. \n\n"
+                "Vous trouverez des consignes à bagages dans chaque quartier, à Nice. \n\n"
+                "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt. \n\n"
+                "Annick & Charley \n\n"
+                "****** \n\n"
+                "Welcome to our establishment! \n\n"
+                "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible, "
+                "we kindly ask you to fill out the form that you will find by clicking on the following link: \n"
+                f"{link_form}\n\n"
+                "Parking is available on site.\n\n"
+                "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. \n\n"
+                "You will find luggage storage facilities in every district of Nice. \n\n"
+                "We wish you a pleasant journey and look forward to meeting you very soon.\n\n"
+                "Annick & Charley"
+            )
+
+            enc = quote(msg)
+            e164 = _format_phone_e164(r.get("telephone"))
+            wa = re.sub(r"\D", "", e164)
+
+            _copy_button("📋 Copier le message", msg, key=f"pre_{i}")
+
+            c1, c2, c3 = st.columns(3)
+            c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
+            c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
+            c3.link_button("🟢 WhatsApp", f"https://wa.me/{wa}?text={enc}")
+
+            if st.button("✅ Marquer 'SMS envoyé'", key=f"pre_mark_{r['_rowid']}"):
+                # Assure l’existence de la colonne sms_envoye
+                if "sms_envoye" not in df.columns:
+                    df["sms_envoye"] = False
+                df.loc[r["_rowid"], "sms_envoye"] = True
+                if sauvegarder_donnees(df):
+                    st.success("Marqué ✅")
+                    st.rerun()
+
+    # ====== Post-départ ======
+    st.markdown("---")
+    st.subheader("📤 Post-départ (départs du jour)")
+    target_depart = st.date_input("Départs du", date.today(), key="post_date")
+    post = df.dropna(subset=["telephone", "nom_client", "date_depart"]).copy()
+    post["date_depart"] = _to_date(post["date_depart"])
+    post_sent = _to_bool_series(post.get("post_depart_envoye", False))
+    post = post[(post["date_depart"] == target_depart) & (~post_sent)]
+
+    if post.empty:
+        st.info("Aucun message à envoyer.")
+    else:
+        post["_rowid"] = post.index
+        post = post.sort_values("date_depart").reset_index(drop=True)
+        opts2 = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i, r in post.iterrows()]
+        pick2 = st.selectbox("Client (post-départ)", options=opts2, index=None)
+
+        if pick2:
+            j = int(pick2.split(":")[0])
+            r2 = post.loc[j]
+            name = str(r2.get("nom_client") or "").strip()
+            msg2 = (
+                f"Bonjour {name},\n\n"
+                "Un grand merci d'avoir choisi notre appartement pour votre séjour.\n"
+                "Nous espérons que vous avez passé un moment agréable.\n"
+                "Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.\n\n"
+                "Au plaisir de vous accueillir à nouveau.\n\n"
+                "Annick & Charley\n"
+                f"\nHello {name},\n\n"
+                "Thank you very much for choosing our apartment for your stay.\n"
+                "We hope you had a great time — our door is always open if you want to come back.\n\n"
+                "Annick & Charley"
+            )
+
+            enc2 = quote(msg2)
+            e164b = _format_phone_e164(r2.get("telephone"))
+            wab = re.sub(r"\D", "", e164b)
+
+            _copy_button("📋 Copier le message", msg2, key=f"post_{j}")
+
+            c1, c2, c3 = st.columns(3)
+            c1.link_button("🟢 WhatsApp", f"https://wa.me/{wab}?text={enc2}")
+            c2.link_button("📲 iPhone SMS", f"sms:&body={enc2}")
+            c3.link_button("🤖 Android SMS", f"sms:{e164b}?body={enc2}")
+
+            if st.button("✅ Marquer 'post-départ envoyé'", key=f"post_mark_{r2['_rowid']}"):
+                if "post_depart_envoye" not in df.columns:
+                    df["post_depart_envoye"] = False
+                df.loc[r2["_rowid"], "post_depart_envoye"] = True
+                if sauvegarder_donnees(df):
+                    st.success("Marqué ✅")
+                    st.rerun()
+
 
 # ============================== MAIN ==============================
 def main():
