@@ -1514,6 +1514,26 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.rerun()
         except Exception as e:
             st.error(f"Impossible d'écrire apartments.csv : {e}")
+# ============================== LOAD DATA WRAPPER ==============================
+def _load_data_for_active_apartment():
+    """
+    Charge (df, palette) pour l'appartement actif en utilisant les chemins
+    Stockés dans la session. Gère aussi le cas où la signature de charger_donnees
+    ne prend pas d'arguments (fallback).
+    """
+    # Fallback si rien n’est encore sélectionné : fichiers “globaux”
+    csv_res = st.session_state.get("CSV_RESERVATIONS", "reservations.csv")
+    csv_pal = st.session_state.get("CSV_PLATEFORMES", "plateformes.csv")
+
+    try:
+        # Nouvelle signature (préférée) : charger_donnees(csv_res, csv_pal)
+        return charger_donnees(csv_res, csv_pal)
+    except TypeError:
+        # Ancienne signature sans arguments → on charge par défaut
+        return charger_donnees()
+    except Exception:
+        # Dernier filet de sécurité : dataframe vide + palette par défaut
+        return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 # ============================== MAIN ==============================
 def main():
     params = st.query_params
