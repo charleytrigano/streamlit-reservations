@@ -214,6 +214,168 @@ def _phone_country(tel: str) -> str:
             return PHONE_CC[k]
     return "Inconnu"
 
+
+
+# =============== Apartments: loader & auth durcis ===============
+APARTMENTS_CSV = "apartments.csv"
+
+def _sha256_hex(s: str) -> str:
+    try:
+        return hashlib.sha256((s or "").encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+def _normalize_apartments_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+    # uniformiser colonnes
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    rename = {"appartement": "name"}
+    df.rename(columns=rename, inplace=True)
+
+    for c in ["slug", "name", "password_hash"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    # nettoyer contenu
+    for c in ["slug", "name", "password_hash"]:
+        df[c] = df[c].astype(str).str.replace("\ufeff", "", regex=False).str.strip()
+
+    # normaliser slug (évite mismatch bouton/CSV)
+    df["slug"] = (
+        df["slug"]
+        .str.strip()
+        .str.replace(" ", "-", regex=False)
+        .str.replace("_", "-", regex=False)
+        .str.lower()
+    )
+
+    # valeurs vides cohérentes
+    df.replace({"nan": "", "None": ""}, inplace=True)
+
+    # dupliqués -> garder le 1er
+    df = df.drop_duplicates(subset=["slug"], keep="first")
+
+    # garder seulement colonnes utiles
+    return df[["slug", "name", "password_hash"]]
+
+@st.cache_data
+def load_apartments() -> pd.DataFrame:
+    """Charge apartments.csv, tolère ; ou , et BOM, normalise tout."""
+    try:
+        if not os.path.exists(APARTMENTS_CSV):
+            # fallback vide
+            return pd.DataFrame(columns=["slug", "name", "password_hash"])
+        raw = _load_file_bytes(APARTMENTS_CSV)  # tu l'as déjà pour d'autres CSV
+        df = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
+        return _normalize_apartments_df(df)
+    except Exception:
+        return pd.DataFrame(columns=["slug", "name", "password_hash"])
+
+def write_apartments(df: pd.DataFrame):
+    """Écrit apartments.csv proprement + clear cache."""
+    safe = _normalize_apartments_df(df)
+    safe.to_csv(APARTMENTS_CSV, index=False, encoding="utf-8", lineterminator="\n")
+    st.cache_data.clear()
+
+def disable_all_passwords():
+    """Met tous les password_hash à vide et réécrit le CSV."""
+    df = load_apartments().copy()
+    if df.empty:
+        return
+    df["password_hash"] = ""
+    write_apartments(df)
+
+def get_current_apartment():
+    """Retourne dict avec slug/name/hash pour l’app sélectionné, sinon None."""
+    slug = st.session_state.get("apt_slug", "")
+    if not slug:
+        return None
+    df = load_apartments()
+    row = df[df["slug"] == slug]
+    if row.empty:
+        return None
+    r = row.iloc[0].to_dict()
+    return {"slug": r["slug"], "name": r["name"], "password_hash": r["password_hash"]}
+
+def _auth_ok_for(slug: str) -> bool:
+    """Vrai si l’utilisateur est authentifié pour ce slug (ou pas de mot de passe)."""
+    df = load_apartments()
+    row = df[df["slug"] == slug]
+    if row.empty:
+        return False
+    stored = str(row.iloc[0]["password_hash"]).strip()
+    if stored == "":  # pas de mot de passe => auto-login
+        return True
+    return st.session_state.get("apt_auth_ok") == slug
+
+def _try_login(slug: str, password_plain: str) -> bool:
+    df = load_apartments()
+    row = df[df["slug"] == slug]
+    if row.empty:
+        return False
+    stored = str(row.iloc[0]["password_hash"]).strip()
+    if stored == "":  # aucun mot de passe attendu
+        st.session_state["apt_auth_ok"] = slug
+        return True
+    # comparer hash SHA-256
+    return _sha256_hex(password_plain) == stored
+
+def apartment_selector_sidebar():
+    """Sélecteur + login (auto si hash vide). À appeler TÔT dans ta sidebar."""
+    df = load_apartments()
+    st.sidebar.markdown("### Appartement")
+
+    if df.empty:
+        st.sidebar.warning("Aucun appartement trouvé dans apartments.csv")
+        return
+
+    # listes stables
+    options = df["slug"].tolist()
+    labels = {r["slug"]: r["name"] or r["slug"] for _, r in df.iterrows()}
+
+    default_idx = 0
+    if "apt_slug" in st.session_state and st.session_state["apt_slug"] in options:
+        default_idx = options.index(st.session_state["apt_slug"])
+
+    slug = st.sidebar.selectbox(
+        "Choisir un appartement",
+        options=options,
+        index=default_idx,
+        format_func=lambda s: labels.get(s, s),
+        key="apt_slug_select",
+    )
+    # synchroniser slug choisi dans session_state
+    st.session_state["apt_slug"] = slug
+
+    # état auth
+    df_row = df[df["slug"] == slug].iloc[0]
+    has_hash = str(df_row["password_hash"]).strip() != ""
+
+    if not has_hash:
+        # auto-login si pas de mot de passe
+        st.session_state["apt_auth_ok"] = slug
+        st.sidebar.success(f"Connecté à {labels.get(slug, slug)} (sans mot de passe)")
+        return
+
+    if _auth_ok_for(slug):
+        st.sidebar.success(f"Connecté à {labels.get(slug, slug)}")
+        if st.sidebar.button("Se déconnecter", key="apt_logout_btn"):
+            st.session_state.pop("apt_auth_ok", None)
+            st.experimental_rerun()
+        return
+
+    # formulaire mot de passe UNIQUEMENT si hash non vide
+    pwd = st.sidebar.text_input("Mot de passe", type="password", key=f"apt_pwd_{slug}")
+    if st.sidebar.button("Se connecter", key=f"apt_login_{slug}"):
+        if _try_login(slug, pwd):
+            st.session_state["apt_auth_ok"] = slug
+            st.experimental_rerun()
+        else:
+            st.sidebar.error("Mot de passe incorrect")
+
 # ============================== SCHEMA & PERSISTANCE ==============================
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     if df_in is None or len(df_in) == 0:
