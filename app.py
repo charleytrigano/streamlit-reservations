@@ -1174,6 +1174,11 @@ def vue_settings(df: pd.DataFrame, palette: dict):
 
     st.caption("Sauvegarde, restauration (réservations & plateformes), cache, import manuel, diagnostic, écrasement `apartments.csv`.")
 
+with st.expander("🔎 Diagnostic appartement / chemins", expanded=False):
+    st.write("apt_slug:", st.session_state.get("apt_slug"))
+    st.write("apt_name:", st.session_state.get("apt_name"))
+    st.write("CSV_RESERVATIONS:", st.session_state.get("CSV_RESERVATIONS"))
+    st.write("CSV_PLATEFORMES:", st.session_state.get("CSV_PLATEFORMES"))
     # ========== Sauvegarde (exports) ==========
     st.markdown("### 💾 Sauvegarde (exports)")
     try:
