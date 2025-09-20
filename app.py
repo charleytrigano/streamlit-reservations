@@ -1297,22 +1297,97 @@ def vue_settings(df: pd.DataFrame, palette: dict):
         except Exception as e:
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 
+# ============================== APARTMENTS (sélecteur sans mot de passe) ==============================
+APARTMENTS_CSV = "apartments.csv"
 
-# ============================== CHARGEMENT PAR APPARTEMENT ACTIF ==============================
-def _load_data_for_active_apartment():
-    """
-    Charge (df, palette) pour l'appartement actif via les chemins
-    présents en session (CSV_RESERVATIONS / CSV_PLATEFORMES).
-    """
-    csv_res = st.session_state.get("CSV_RESERVATIONS", "reservations.csv")
-    csv_pal = st.session_state.get("CSV_PLATEFORMES", "plateformes.csv")
+def _read_apartments_csv() -> pd.DataFrame:
+    """Charge apartments.csv (séparateur auto) et normalise {slug, name}."""
     try:
-        return charger_donnees(csv_res, csv_pal)
-    except TypeError:
-        return charger_donnees()
-    except Exception:
-        return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
+        if not os.path.exists(APARTMENTS_CSV):
+            return pd.DataFrame(columns=["slug", "name"])
+        raw = _load_file_bytes(APARTMENTS_CSV)
+        df = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["slug", "name"])
 
+        # colonnes et nettoyage
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        if "slug" not in df.columns: df["slug"] = ""
+        if "name" not in df.columns: df["name"] = ""
+        df["slug"] = (
+            df["slug"].astype(str)
+            .str.replace("\ufeff", "", regex=False)
+            .str.strip()
+            .str.replace(" ", "-", regex=False)
+            .str.replace("_", "-", regex=False)
+            .str.lower()
+        )
+        df["name"] = df["name"].astype(str).str.replace("\ufeff", "", regex=False).str.strip()
+
+        df = df[(df["slug"] != "") & (df["name"] != "")]
+        df = df.drop_duplicates(subset=["slug"], keep="first")
+        return df[["slug", "name"]]
+    except Exception:
+        return pd.DataFrame(columns=["slug", "name"])
+
+
+def _current_apartment() -> dict | None:
+    slug = st.session_state.get("apt_slug", "")
+    name = st.session_state.get("apt_name", "")
+    if slug and name:
+        return {"slug": slug, "name": name}
+    return None
+
+
+def _select_apartment_sidebar() -> bool:
+    """
+    Affiche le sélecteur d'appartement dans la sidebar et met à jour les chemins
+    CSV_RESERVATIONS / CSV_PLATEFORMES en session. Retourne True si la sélection a changé.
+    """
+    st.sidebar.markdown("### Appartement")
+    apts = _read_apartments_csv()
+    if apts.empty:
+        st.sidebar.warning("Aucun appartement trouvé dans apartments.csv")
+        return False
+
+    options = apts["slug"].tolist()
+    labels = {r["slug"]: r["name"] for _, r in apts.iterrows()}
+
+    # index par défaut robuste
+    cur_slug = st.session_state.get("apt_slug", options[0])
+    if cur_slug not in options:
+        cur_slug = options[0]
+    default_idx = options.index(cur_slug)
+
+    slug = st.sidebar.selectbox(
+        "Choisir un appartement",
+        options=options,
+        index=default_idx,
+        format_func=lambda s: labels.get(s, s),
+        key="apt_slug_selectbox",
+    )
+    name = labels.get(slug, slug)
+
+    changed = (slug != st.session_state.get("apt_slug", "") or name != st.session_state.get("apt_name", ""))
+
+    # mémorise et synchronise les chemins actifs
+    st.session_state["apt_slug"] = slug
+    st.session_state["apt_name"] = name
+    st.session_state["CSV_RESERVATIONS"] = f"reservations_{slug}.csv"
+    st.session_state["CSV_PLATEFORMES"]  = f"plateformes_{slug}.csv"
+
+    # met à jour les globales utilisées par les fonctions d’export/restauration
+    global CSV_RESERVATIONS, CSV_PLATEFORMES
+    CSV_RESERVATIONS = st.session_state["CSV_RESERVATIONS"]
+    CSV_PLATEFORMES  = st.session_state["CSV_PLATEFORMES"]
+
+    st.sidebar.success(f"Connecté : {name}")
+    try:
+        print_buttons(location="sidebar")
+    except Exception:
+        pass
+
+    return changed
 
 # ============================== MAIN ==============================
 def main():
