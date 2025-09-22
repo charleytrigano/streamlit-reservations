@@ -1305,18 +1305,30 @@ def vue_export_ics(df, palette):
     def _esc(s):
         if s is None:
             return ""
-        return str(s).replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+        return (
+            str(s)
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace(",", "\\,")
+            .replace(";", "\\;")
+        )
 
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Villa Tobias//Reservations//FR", "CALSCALE:GREGORIAN"]
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Villa Tobias//Reservations//FR",
+        "CALSCALE:GREGORIAN",
+    ]
+
     for _, r in data.iterrows():
         dt_a = pd.to_datetime(r["date_arrivee"], errors="coerce")
         dt_d = pd.to_datetime(r["date_depart"], errors="coerce")
         if pd.isna(dt_a) or pd.isna(dt_d):
             continue
 
-        summary = f"{apt_name} — {r.get('nom_client', 'Sans nom')}"
+        summary_txt = f"{apt_name} — {r.get('nom_client', 'Sans nom')}"
         if r.get("plateforme"):
-            summary += f" ({r['plateforme']})"
+            summary_txt += f" ({r['plateforme']})"
 
         desc = "\n".join(
             [
@@ -1330,12 +1342,12 @@ def vue_export_ics(df, palette):
 
         lines += [
             "BEGIN:VEVENT",
-            f"UID:{r['ical_uid']}",
-            f"DTSTAMP:{nowstamp}",
-            f"DTSTART;VALUE=DATE:{_fmt(dt_a)}",
-            f"DTEND;VALUE=DATE:{_fmt(dt_d)}",
-            f"SUMMARY:{_esc(summary)}",
-            f"DESCRIPTION:{_esc(desc)}",
+            "UID:" + str(r["ical_uid"]),
+            "DTSTAMP:" + nowstamp,
+            "DTSTART;VALUE=DATE:" + _fmt(dt_a),
+            "DTEND;VALUE=DATE:" + _fmt(dt_d),
+            "SUMMARY:" + _esc(summary_txt),       # <-- plus de f-string ici
+            "DESCRIPTION:" + _esc(desc),          # <-- plus de f-string ici
             "TRANSP:OPAQUE",
             "END:VEVENT",
         ]
