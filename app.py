@@ -628,6 +628,199 @@ def vue_modifier(df: pd.DataFrame, palette: dict):
                 st.warning("Supprimé.")
                 st.rerun()
 
+
+
+def vue_plateformes(df, palette):
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🎨 Plateformes & couleurs — {apt_name}")
+    print_buttons()
+
+    # Détection de la ColorColumn (selon ta version de Streamlit)
+    HAS_COLORCOL = hasattr(getattr(st, "column_config", object), "ColorColumn")
+
+    # Plateformes détectées dans les données + celles déjà en palette
+    plats_df = sorted(
+        df.get("plateforme", pd.Series([], dtype=str))
+          .astype(str).str.strip()
+          .replace({"nan": ""})
+          .dropna().unique().tolist()
+    )
+    all_plats = sorted(set(list(palette.keys()) + plats_df))
+
+    base = pd.DataFrame({
+        "plateforme": all_plats,
+        "couleur": [palette.get(p, "#666666") for p in all_plats],
+    })
+
+    # Config colonnes selon support ColorColumn
+    if HAS_COLORCOL:
+        col_cfg = {
+            "plateforme": st.column_config.TextColumn("Plateforme"),
+            "couleur": st.column_config.ColorColumn("Couleur (hex)"),
+        }
+    else:
+        col_cfg = {
+            "plateforme": st.column_config.TextColumn("Plateforme"),
+            "couleur": st.column_config.TextColumn(
+                "Couleur (hex)",
+                help="Ex: #1b9e77 (sélecteur non dispo sur cette version).",
+                validate=r"^#([0-9A-Fa-f]{6})$",
+                width="small",
+            ),
+        }
+
+    edited = st.data_editor(
+        base,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=col_cfg,
+        key="palette_editor",
+    )
+
+    # Aperçu chips si pas de ColorColumn
+    if not HAS_COLORCOL and not edited.empty:
+        chips = []
+        for _, r in edited.iterrows():
+            plat = str(r["plateforme"]).strip()
+            col = str(r["couleur"]).strip()
+            if not plat:
+                continue
+            ok = bool(re.match(r"^#([0-9A-Fa-f]{6})$", col or ""))
+            chips.append(
+                "<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
+                f"border-radius:12px;background:{col if ok else '#666'};color:#fff;'>{plat} {col}</span>"
+            )
+        if chips:
+            st.markdown("".join(chips), unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([0.5, 0.3, 0.2])
+
+    # Enregistrer
+    if c1.button("💾 Enregistrer la palette", key="save_palette_btn"):
+        try:
+            to_save = edited.copy()
+            to_save["plateforme"] = to_save["plateforme"].astype(str).str.strip()
+            to_save["couleur"] = to_save["couleur"].astype(str).str.strip()
+            to_save = to_save[to_save["plateforme"] != ""].drop_duplicates(subset=["plateforme"])
+
+            if not HAS_COLORCOL:
+                ok = to_save["couleur"].str.match(r"^#([0-9A-Fa-f]{6})$")
+                to_save.loc[~ok, "couleur"] = "#666666"
+
+            to_save.to_csv(CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8", lineterminator="\n")
+            st.success("Palette enregistrée ✅")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erreur : {e}")
+
+    # Restaurer défaut
+    if c2.button("↩️ Palette par défaut", key="restore_palette_btn"):
+        try:
+            pd.DataFrame(list(DEFAULT_PALETTE.items()), columns=["plateforme", "couleur"]).to_csv(
+                CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8", lineterminator="\n"
+            )
+            st.success("Palette restaurée.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erreur : {e}")
+
+    # Recharger
+    if c3.button("🔄 Recharger", key="reload_palette_btn"):
+        st.cache_data.clear()
+        st.rerun()
+
+
+def vue_calendrier(df, palette):
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📅 Calendrier (grille mensuelle) — {apt_name}")
+    print_buttons()
+
+    dfv = df.dropna(subset=["date_arrivee", "date_depart"]).copy()
+    if dfv.empty:
+        st.info("Aucune réservation à afficher.")
+        return
+
+    today = date.today()
+    years = sorted(
+        pd.to_datetime(dfv["date_arrivee"], errors="coerce").dt.year.dropna().astype(int).unique(),
+        reverse=True
+    )
+    annee = st.selectbox("Année", options=years if years else [today.year], index=0)
+    mois = st.selectbox("Mois", options=list(range(1, 13)), index=today.month - 1)
+
+    # En-têtes de jours (Lun->Dim)
+    st.markdown(
+        "<div class='cal-header'><div>Lun</div><div>Mar</div><div>Mer</div>"
+        "<div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div></div>",
+        unsafe_allow_html=True
+    )
+
+    def day_resas(d):
+        mask = (dfv["date_arrivee"] <= d) & (dfv["date_depart"] > d)
+        return dfv[mask]
+
+    cal = Calendar(firstweekday=0)  # 0 = lundi
+    html = ["<div class='cal-grid'>"]
+    for week in cal.monthdatescalendar(annee, mois):
+        for d in week:
+            outside = (d.month != mois)
+            classes = "cal-cell outside" if outside else "cal-cell"
+            cell = f"<div class='{classes}'>"
+            cell += f"<div class='cal-date'>{d.day}</div>"
+            if not outside:
+                rs = day_resas(d)
+                if not rs.empty:
+                    for _, r in rs.iterrows():
+                        color = palette.get(r.get("plateforme"), "#888")
+                        name = str(r.get("nom_client") or "")[:22]
+                        cell += (
+                            f"<div class='resa-pill' style='background:{color}' "
+                            f"title='{r.get('nom_client','')}'>{name}</div>"
+                        )
+            cell += "</div>"
+            html.append(cell)
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Détail du mois sélectionné
+    st.subheader("Détail du mois sélectionné")
+    debut_mois = date(annee, mois, 1)
+    fin_mois = date(annee, mois, monthrange(annee, mois)[1])
+    rows = dfv[(dfv["date_arrivee"] <= fin_mois) & (dfv["date_depart"] > debut_mois)].copy()
+
+    if rows.empty:
+        st.info("Aucune réservation sur ce mois.")
+        return
+
+    plats = ["Toutes"] + sorted(rows["plateforme"].dropna().unique().tolist())
+    plat = st.selectbox("Filtrer par plateforme", plats, index=0, key="cal_plat")
+    if plat != "Toutes":
+        rows = rows[rows["plateforme"] == plat]
+
+    brut = float(pd.to_numeric(rows["prix_brut"], errors="coerce").fillna(0).sum())
+    net = float(pd.to_numeric(rows["prix_net"], errors="coerce").fillna(0).sum())
+    nuits = int(pd.to_numeric(rows["nuitees"], errors="coerce").fillna(0).sum())
+
+    st.markdown(
+        f"""
+        <div class='glass'>
+          <span class='chip'><small>Total brut</small><br><strong>{brut:,.2f} €</strong></span>
+          <span class='chip'><small>Total net</small><br><strong>{net:,.2f} €</strong></span>
+          <span class='chip'><small>Nuitées</small><br><strong>{nuits}</strong></span>
+        </div>
+        """.replace(",", " "),
+        unsafe_allow_html=True
+    )
+    st.dataframe(
+        rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye", "pays"]],
+        use_container_width=True
+    )
 # ============================== PARTIE 4/5 — RAPPORTS, SMS, EXPORTS ==============================
 
 def vue_rapport(df: pd.DataFrame, palette: dict):
