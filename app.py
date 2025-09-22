@@ -401,6 +401,27 @@ def _select_apartment_sidebar() -> bool:
 
     return changed
 
+# ============================== LOAD DATA WRAPPER (robuste) ==============================
+def _load_data_for_active_apartment():
+    """
+    Charge (df, palette) pour l'appartement actif en utilisant les chemins
+    stockés dans la session. Garde une compatibilité si charger_donnees
+    ne prend pas d'arguments.
+    """
+    # Fichiers actifs (définis par _select_apartment_sidebar)
+    csv_res = st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)
+    csv_pal = st.session_state.get("CSV_PLATEFORMES",  CSV_PLATEFORMES)
+
+    try:
+        # Nouvelle signature préférée
+        return charger_donnees(csv_reservations=csv_res, csv_plateformes=csv_pal)
+    except TypeError:
+        # Ancienne signature (sans args) — fallback
+        return charger_donnees(CSV_RESERVATIONS, CSV_PLATEFORMES)
+    except Exception:
+        # Sécurité ultime : dataframe vide + palette par défaut
+        return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
+
 # ============================== EXPORT / IMPORT ==============================
 def export_csv(df: pd.DataFrame) -> bytes:
     return ensure_schema(df).to_csv(index=False, sep=";", encoding="utf-8", lineterminator="\n").encode("utf-8")
