@@ -1362,7 +1362,7 @@ if "_load_data_for_active_apartment" not in globals():
             return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 
 
-============================== MAIN ==============================
+# ============================= MAIN ==============================
 def main():
     # Reset cache via URL ?clear=1
     params = st.query_params
