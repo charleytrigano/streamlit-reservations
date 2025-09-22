@@ -387,6 +387,65 @@ def charger_donnees(csv_reservations: str, csv_plateformes: str):
             st.warning(f"Erreur de palette : {e}")
     return df, palette
 
+# ---------- Helpers impression & CSS global (à coller une seule fois) ----------
+
+def _apply_custom_css():
+    """CSS global : mise en page impression A4 paysage, masquage de la sidebar, etc."""
+    st.markdown(
+        """
+        <style>
+        /* ---- Écran ---- */
+        .print-only { display: none !important; }
+
+        /* ---- Impression ---- */
+        @page { size: A4 landscape; margin: 10mm; }
+
+        @media print {
+          /* Plein écran pour le contenu */
+          [data-testid="stSidebar"], header, footer { display: none !important; }
+          [data-testid="stAppViewContainer"] { padding: 0 !important; }
+          .main .block-container { padding: 0 !important; }
+
+          /* Masquer boutons, inputs, radios, etc. */
+          button, [role="radiogroup"], [data-baseweb="select"], input, textarea, label { 
+            visibility: hidden !important; height: 0 !important; overflow: hidden !important;
+          }
+
+          /* Montrer l’en-tête d’impression si présent */
+          .print-only { display: block !important; }
+
+          /* Resserre les tableaux pour tenir en largeur */
+          [data-testid="stDataFrame"] table { font-size: 11px !important; }
+          [data-testid="stDataFrame"] th, 
+          [data-testid="stDataFrame"] td { padding: 4px 6px !important; }
+
+          /* Option: masquer quelques colonnes techniques par nom courant (si visibles)
+             -> selon tes besoins, dé-commente et adapte.
+          */
+          /* th:contains("res_id"), td:contains("@villa-tobias") { display:none !important; } */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+def render_print_header(title: str | None = None):
+    """Petit en-tête qui n’apparaît qu’à l’impression (A4 paysage)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    titre = title or f"Résumé — {apt_name}"
+    today = date.today().strftime("%d/%m/%Y")
+    st.markdown(
+        f"""
+        <div class="print-only" style="margin-bottom:10px;">
+          <h2 style="margin:0;padding:0;">{titre}</h2>
+          <div style="opacity:.75;">Imprimé le {today}</div>
+          <hr style="margin:8px 0 12px 0;">
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 # ============================== PARTIE 2/5 — APARTMENTS, CHARGEMENT ACTIF, VUES ACCUEIL & RÉSERVATIONS ==============================
 
 # --------- APARTMENTS (sélecteur sans mot de passe) ---------
