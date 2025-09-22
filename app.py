@@ -1397,22 +1397,41 @@ def main():
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    # Navigation
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-        "🆔 ID": vue_id,
-        "⚙️ Paramètres": vue_settings,
-    }
+    # Navigation (robuste : n’ajoute que les vues réellement définies)
+    possible_pages = [
+        ("🏠 Accueil", "vue_accueil"),
+        ("📋 Réservations", "vue_reservations"),
+        ("➕ Ajouter", "vue_ajouter"),
+        ("✏️ Modifier / Supprimer", "vue_modifier"),
+        ("🎨 Plateformes", "vue_plateformes"),
+        ("📅 Calendrier", "vue_calendrier"),
+        ("📊 Rapport", "vue_rapport"),
+        ("✉️ SMS", "vue_sms"),
+        ("📆 Export ICS", "vue_export_ics"),
+        ("📝 Google Sheet", "vue_google_sheet"),
+        ("👥 Clients", "vue_clients"),
+        ("🆔 ID", "vue_id"),
+        ("⚙️ Paramètres", "vue_settings"),
+    ]
+
+    pages = {}
+    missing = []
+    for label, fn_name in possible_pages:
+        fn = globals().get(fn_name)
+        if callable(fn):
+            pages[label] = fn
+        else:
+            missing.append(label)
+
+    if missing:
+        with st.sidebar.expander("ℹ️ Onglets indisponibles (définitions manquantes)"):
+            for m in missing:
+                st.write(f"• {m}")
+
+    if not pages:
+        st.error("Aucune page disponible : les fonctions de vues ne sont pas chargées. "
+                 "Vérifie que toutes les parties de app.py ont bien été collées avant main().")
+        return
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
     pages[choice](df, palette)
