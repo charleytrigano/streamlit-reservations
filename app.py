@@ -1,5 +1,4 @@
-# ============================== PARTIE 1/5 — IMPORTS, CONFIG, STYLES, HELPERS, SCHEMA ==============================
-# Imports
+# ============================== PARTIE 1/5 — IMPORTS, CONFIG, STYLES, HELPERS ==============================
 import os, io, re, uuid, hashlib
 from datetime import date, datetime, timedelta
 from calendar import Calendar, monthrange
@@ -10,7 +9,7 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
-# ============================== CONFIG APP ==============================
+# ------------------------------ CONFIG APP ------------------------------
 st.set_page_config(
     page_title="✨ Villa Tobias — Gestion des Réservations",
     page_icon="✨",
@@ -18,8 +17,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ============================== CONSTANTES ==============================
-# Chemins par défaut (seront remplacés par l'appartement actif dans la sidebar)
+# ------------------------------ CONSTANTES ------------------------------
+# Chemins par défaut (remplacés ensuite par l’appartement actif)
 CSV_RESERVATIONS = "reservations.csv"
 CSV_PLATEFORMES  = "plateformes.csv"
 APARTMENTS_CSV   = "apartments.csv"
@@ -31,13 +30,13 @@ DEFAULT_PALETTE = {
     "Direct":  "#e7298a",
 }
 
-# Google Form & Sheet (adapter au besoin)
+# Google Form & Sheet (adapter si tu changes)
 FORM_SHORT_URL = "https://urlr.me/kZuH94"  # lien court public
 GOOGLE_FORM_VIEW = "https://docs.google.com/forms/d/e/1FAIpQLScLiaqSAY3JYriYZIk9qP75YGUyP0sxF8pzmhbIQqsSEY0jpQ/viewform?embedded=true"
 GOOGLE_SHEET_EMBED_URL = "https://docs.google.com/spreadsheets/d/1ci-4i8dZWzixt0p5WPdB2D8ePCpNQDD0jjZf41KtYns/edit?usp=sharing"
 GOOGLE_SHEET_PUBLISHED_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMie1mawlXGJtqC7KL_gSgeC9e8jwOxcqMzC1HmxxU8FCrOxD0HXl5APTO939__tu7EPh6aiXHnSnF/pub?output=csv"
 
-# ============================== STYLE ==============================
+# ------------------------------ STYLES ÉCRAN ------------------------------
 def apply_style(light: bool):
     bg = "#fafafa" if light else "#0f1115"
     fg = "#0f172a" if light else "#eaeef6"
@@ -48,36 +47,135 @@ def apply_style(light: bool):
         <style>
           html, body, [data-testid="stAppViewContainer"] {{ background:{bg}; color:{fg}; }}
           [data-testid="stSidebar"] {{ background:{side}; border-right:1px solid {border}; }}
-          .glass {{ background:{"rgba(255,255,255,.65)" if light else "rgba(255,255,255,.06)"}; 
-                   border:1px solid {border}; border-radius:12px; padding:12px; margin:10px 0; }}
-          .chip {{ display:inline-block; padding:6px 10px; border-radius:12px; margin:4px 6px; 
-                   font-size:.86rem; background:{"#eee" if light else "#2a2f3a"}; color:{"#222" if light else "#eee"} }}
+          .glass {{
+            background:{"rgba(255,255,255,.65)" if light else "rgba(255,255,255,.06)"};
+            border:1px solid {border}; border-radius:12px; padding:12px; margin:10px 0;
+          }}
+          .chip {{
+            display:inline-block; padding:6px 10px; border-radius:12px; margin:4px 6px;
+            font-size:.86rem; background:{"#eee" if light else "#2a2f3a"}; color:{"#222" if light else "#eee"};
+          }}
           .cal-grid {{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; }}
-          .cal-cell {{ border:1px solid {border}; border-radius:10px; min-height:110px; padding:8px; position:relative; overflow:hidden; background:{"#fff" if light else "#0b0d12"}; }}
+          .cal-cell {{ border:1px solid {border}; border-radius:10px; min-height:110px; padding:8px;
+                      position:relative; overflow:hidden; background:{"#fff" if light else "#0b0d12"}; }}
           .cal-cell.outside {{ opacity:.45; }}
           .cal-date {{ position:absolute; top:6px; right:8px; font-weight:700; font-size:.9rem; opacity:.7; }}
-          .resa-pill {{ padding:4px 6px; border-radius:6px; font-size:.84rem; margin-top:22px; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-          .cal-header {{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px; font-weight:700; opacity:.8; margin:6px 0 8px; }}
+          .resa-pill {{ padding:4px 6px; border-radius:6px; font-size:.84rem; margin-top:22px;
+                        color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+          .cal-header {{ display:grid; grid-template-columns: repeat(7, 1fr); gap:8px;
+                         font-weight:700; opacity:.8; margin:6px 0 8px; }}
         </style>
         """,
         unsafe_allow_html=True
     )
 
 def print_buttons(location: str = "main"):
+    """Bouton Imprimer (écran) — déclenche window.print()."""
     target = st.sidebar if location == "sidebar" else st
     target.button("🖨️ Imprimer", key=f"print_btn_{location}")
     st.markdown(
         """
         <script>
-        const labels = Array.from(parent.document.querySelectorAll('button span, button p'));
-        const btn = labels.find(n => n.textContent && n.textContent.trim() === "🖨️ Imprimer");
-        if (btn) { btn.parentElement.onclick = () => window.print(); }
+        (function(){
+          try{
+            const labels = Array.from(parent.document.querySelectorAll('button span, button p'));
+            const btn = labels.find(n => n.textContent && n.textContent.trim() === "🖨️ Imprimer");
+            if (btn) { btn.parentElement.onclick = () => window.print(); }
+          }catch(e){}
+        })();
         </script>
         """,
         unsafe_allow_html=True
     )
 
-# ============================== HELPERS DATA ==============================
+# ------------------------------ STYLES IMPRESSION ------------------------------
+def add_print_styles():
+    """Feuilles de style pour l'impression (A4 portrait par défaut)."""
+    st.markdown(
+        r"""
+        <style>
+        /* Écran vs Impression */
+        @media screen { .print-only { display: none !important; } }
+        @media print  { .print-only { display: block !important; }
+                        .screen-only { display: none !important; } }
+
+        /* Règles globales d'impression */
+        @media print {
+          [data-testid="stSidebar"], header, footer, [data-testid="stToolbar"] { display: none !important; }
+          [data-testid="stAppViewContainer"] { margin: 0 !important; padding: 0 !important; }
+          .main .block-container { max-width: 100% !important; padding: 0 12mm !important; }
+
+          @page { size: A4 portrait; margin: 12mm; }
+
+          /* Cacher widgets interactifs */
+          button, [role="button"], .stSelectbox, .stRadio, .stCheckbox, .stFileUploader,
+          .stDownloadButton, .stSlider, .stDateInput { display: none !important; }
+
+          /* En-tête imprimable */
+          .print-header {
+            display: block !important; font-size: 14px; margin: 0 0 8mm 0; padding: 0 0 6px 0;
+            border-bottom: 2px solid #222;
+          }
+          .print-header .right { float: right; font-weight: 600; opacity: .75; }
+
+          /* Tables HTML propres pour impression */
+          table.print-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+          table.print-table th, table.print-table td { border: 1px solid #ccc; padding: 4px 6px; }
+          table.print-table thead { display: table-header-group; }
+
+          /* Grille calendrier : traits visibles */
+          .cal-grid { gap: 6px !important; }
+          .cal-cell { border: 1px solid #aaa !important; background: #fff !important; }
+          .resa-pill { color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+          .pagebreak { page-break-before: always; }
+          .nobreak  { page-break-inside: avoid; }
+        }
+
+        /* Paysage — activé dynamiquement sur la page calendrier seulement */
+        @media print {
+          body.landscape-print .main .block-container { padding: 0 10mm !important; }
+          body.landscape-print .cal-grid { gap: 6px !important; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+def render_print_header():
+    """Bandeau qui n'apparaît qu'à l'impression avec le nom de l'appartement et la date."""
+    from datetime import datetime as _dt
+    st.markdown(
+        f"""
+        <div class="print-only print-header">
+          <div><strong>Gestion des Réservations</strong></div>
+          <div class="right">{_dt.now().strftime('%d/%m/%Y %H:%M')}</div>
+          <div style="clear:both"></div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def enable_landscape_print():
+    """Active A4 paysage uniquement pour la vue calendrier (injection @page)."""
+    st.markdown(
+        """
+        <script>
+        try {
+          const b = parent.document.querySelector('body') || document.querySelector('body');
+          if (b && !b.classList.contains('landscape-print')) {
+            b.classList.add('landscape-print');
+          }
+          const css = document.createElement('style');
+          css.innerHTML = '@page { size: A4 landscape; margin: 10mm; }';
+          parent.document.head.appendChild(css);
+        } catch(e) {}
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ------------------------------ HELPERS DATA ------------------------------
 BASE_COLS = [
     "paye","nom_client","email","sms_envoye","post_depart_envoye",
     "plateforme","telephone","pays",
@@ -96,7 +194,7 @@ def _load_file_bytes(path: str):
 def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
     if not raw:
         return pd.DataFrame()
-    txt = raw.decode("utf-8", errors="ignore").replace("\ufeff", "")
+    txt = raw.decode("utf-8", errors="ignore").replace("\ufeff","")
     for sep in [";", ",", "\t", "|"]:
         try:
             df = pd.read_csv(io.StringIO(txt), sep=sep, dtype=str)
@@ -123,18 +221,14 @@ def _as_series(x, index=None):
 
 def _to_bool_series(s: pd.Series) -> pd.Series:
     s = _as_series(s)
-    out = s.astype(str).str.strip().str.lower().isin(["true", "1", "oui", "vrai", "yes", "y", "t"])
+    out = s.astype(str).str.strip().str.lower().isin(["true","1","oui","vrai","yes","y","t"])
     return out.fillna(False).astype(bool)
 
 def _to_num(s: pd.Series) -> pd.Series:
     s = _as_series(s)
-    sc = (
-        s.astype(str)
-        .str.replace("€", "", regex=False)
-        .str.replace(" ", "", regex=False)
-        .str.replace(",", ".", regex=False)
-        .str.strip()
-    )
+    sc = (s.astype(str).str.replace("€","",regex=False)
+                    .str.replace(" ","",regex=False)
+                    .str.replace(",",".",regex=False).str.strip())
     return pd.to_numeric(sc, errors="coerce")
 
 def _to_date(s: pd.Series) -> pd.Series:
@@ -161,14 +255,11 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
         return None, e
 
 def _format_phone_e164(phone: str) -> str:
-    s = re.sub(r"\D", "", str(phone or ""))
-    if not s:
-        return ""
-    if s.startswith("33"):
-        return "+" + s
-    if s.startswith("0"):
-        return "+33" + s[1:]
-    return "+" + s
+    s = re.sub(r"\D","", str(phone or ""))
+    if not s: return ""
+    if s.startswith("33"): return "+"+s
+    if s.startswith("0"):  return "+33"+s[1:]
+    return "+"+s
 
 PHONE_PREFIX_COUNTRY = {
     "33":"France","34":"Espagne","49":"Allemagne","44":"Royaume-Uni","39":"Italie",
@@ -181,22 +272,16 @@ PHONE_PREFIX_COUNTRY = {
 }
 def _phone_country(phone: str) -> str:
     p = str(phone or "").strip()
-    if not p:
-        return ""
-    if p.startswith("+"):
-        p1 = p[1:]
-    elif p.startswith("00"):
-        p1 = p[2:]
-    elif p.startswith("0"):
-        return "France"
-    else:
-        p1 = p
+    if not p: return ""
+    if p.startswith("+"): p1 = p[1:]
+    elif p.startswith("00"): p1 = p[2:]
+    elif p.startswith("0"): return "France"
+    else: p1 = p
     for k in sorted(PHONE_PREFIX_COUNTRY.keys(), key=lambda x: -len(x)):
-        if p1.startswith(k):
-            return PHONE_PREFIX_COUNTRY[k]
+        if p1.startswith(k): return PHONE_PREFIX_COUNTRY[k]
     return "Inconnu"
 
-# ============================== NORMALISATION & SAUVEGARDE ==============================
+# ------------------------------ NORMALISATION & SAUVEGARDE ------------------------------
 def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     if df_in is None or len(df_in) == 0:
         return pd.DataFrame(columns=BASE_COLS)
@@ -204,29 +289,24 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df = df_in.copy()
     df.columns = df.columns.astype(str).str.strip()
 
-    # Renommages fréquents
     rename_map = {
-        "Payé": "paye",
-        "Client": "nom_client",
-        "Plateforme": "plateforme",
-        "Arrivée": "date_arrivee",
-        "Départ": "date_depart",
-        "Nuits": "nuitees",
-        "Brut (€)": "prix_brut",
+        "Payé":"paye","Client":"nom_client","Plateforme":"plateforme",
+        "Arrivée":"date_arrivee","Départ":"date_depart","Nuits":"nuitees",
+        "Brut (€)":"prix_brut"
     }
     df.rename(columns=rename_map, inplace=True)
 
     for c in BASE_COLS:
         if c not in df.columns:
-            df[c] = pd.Series([None] * len(df), index=df.index)
+            df[c] = pd.Series([None]*len(df), index=df.index)
 
     for c in df.columns:
         df[c] = _as_series(df[c], index=df.index)
 
-    for b in ["paye", "sms_envoye", "post_depart_envoye"]:
+    for b in ["paye","sms_envoye","post_depart_envoye"]:
         df[b] = _to_bool_series(df[b])
 
-    for n in ["prix_brut", "commissions", "frais_cb", "menage", "taxes_sejour", "nuitees", "charges", "%", "base"]:
+    for n in ["prix_brut","commissions","frais_cb","menage","taxes_sejour","nuitees","charges","%","base"]:
         df[n] = _to_num(df[n]).fillna(0.0)
 
     df["date_arrivee"] = _to_date(df["date_arrivee"])
@@ -234,9 +314,9 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
 
     mask_ok = pd.notna(df["date_arrivee"]) & pd.notna(df["date_depart"])
     if mask_ok.any():
-        da = pd.to_datetime(df.loc[mask_ok, "date_arrivee"])
-        dd = pd.to_datetime(df.loc[mask_ok, "date_depart"])
-        df.loc[mask_ok, "nuitees"] = (dd - da).dt.days.clip(lower=0).astype(float)
+        da = pd.to_datetime(df.loc[mask_ok,"date_arrivee"])
+        dd = pd.to_datetime(df.loc[mask_ok,"date_depart"])
+        df.loc[mask_ok,"nuitees"] = (dd - da).dt.days.clip(lower=0).astype(float)
 
     prix_brut = _to_num(df["prix_brut"])
     commissions = _to_num(df["commissions"])
@@ -249,29 +329,29 @@ def ensure_schema(df_in: pd.DataFrame) -> pd.DataFrame:
     df["base"]     = (df["prix_net"] - menage - taxes).fillna(0.0)
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        df["%"] = np.where(prix_brut > 0, (df["charges"] / prix_brut * 100), 0.0).astype(float)
+        df["%"] = np.where(prix_brut > 0, (df["charges"]/prix_brut*100), 0.0).astype(float)
 
-    miss_res = df["res_id"].isna() | (df["res_id"].astype(str).str.strip() == "")
+    miss_res = df["res_id"].isna() | (df["res_id"].astype(str).str.strip()=="")
     if miss_res.any():
-        df.loc[miss_res, "res_id"] = [str(uuid.uuid4()) for _ in range(int(miss_res.sum()))]
+        df.loc[miss_res,"res_id"] = [str(uuid.uuid4()) for _ in range(int(miss_res.sum()))]
 
-    miss_uid = df["ical_uid"].isna() | (df["ical_uid"].astype(str).str.strip() == "")
+    miss_uid = df["ical_uid"].isna() | (df["ical_uid"].astype(str).str.strip()=="")
     if miss_uid.any():
-        df.loc[miss_uid, "ical_uid"] = df.loc[miss_uid].apply(build_stable_uid, axis=1)
+        df.loc[miss_uid,"ical_uid"] = df.loc[miss_uid].apply(build_stable_uid, axis=1)
 
-    for c in ["nom_client", "plateforme", "telephone", "email", "pays"]:
-        df[c] = df[c].astype(str).replace({"nan": "", "None": ""}).str.strip()
+    for c in ["nom_client","plateforme","telephone","email","pays"]:
+        df[c] = df[c].astype(str).replace({"nan":"","None":""}).str.strip()
 
     need = df["pays"].eq("") | df["pays"].isna()
     if need.any():
-        df.loc[need, "pays"] = df.loc[need, "telephone"].apply(_phone_country)
+        df.loc[need,"pays"] = df.loc[need,"telephone"].apply(_phone_country)
 
     return df[BASE_COLS]
 
 def sauvegarder_donnees(df: pd.DataFrame) -> bool:
     try:
         out = ensure_schema(df).copy()
-        for col in ["date_arrivee", "date_depart"]:
+        for col in ["date_arrivee","date_depart"]:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
         out.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8", lineterminator="\n")
         st.cache_data.clear()
@@ -301,79 +381,55 @@ def charger_donnees(csv_reservations: str, csv_plateformes: str):
         try:
             pal_df = _detect_delimiter_and_read(rawp)
             pal_df.columns = pal_df.columns.astype(str).str.strip()
-            if {"plateforme", "couleur"}.issubset(pal_df.columns):
+            if {"plateforme","couleur"}.issubset(pal_df.columns):
                 palette = dict(zip(pal_df["plateforme"], pal_df["couleur"]))
         except Exception as e:
             st.warning(f"Erreur de palette : {e}")
     return df, palette
 
-# ============================== PARTIE 2/5 — APARTMENTS (sélecteur) & CHARGEUR ==============================
-# Fichier apartments.csv attendu avec au moins deux colonnes : slug,name
-# Example :
-# slug,name
-# villa-tobias,Villa Tobias
-# le-turenne,Le Turenne
+# ============================== PARTIE 2/5 — APARTMENTS, CHARGEMENT ACTIF, VUES ACCUEIL & RÉSERVATIONS ==============================
 
+# --------- APARTMENTS (sélecteur sans mot de passe) ---------
 def _read_apartments_csv() -> pd.DataFrame:
-    """Lit apartments.csv (séparateur auto) et normalise {slug, name}."""
     try:
         if not os.path.exists(APARTMENTS_CSV):
-            return pd.DataFrame(columns=["slug", "name"])
+            return pd.DataFrame(columns=["slug","name"])
         raw = _load_file_bytes(APARTMENTS_CSV)
         df = _detect_delimiter_and_read(raw) if raw else pd.DataFrame()
         if df is None or df.empty:
-            return pd.DataFrame(columns=["slug", "name"])
-
-        # Colonnes & nettoyage
+            return pd.DataFrame(columns=["slug","name"])
         df.columns = [str(c).strip().lower() for c in df.columns]
-        if "slug" not in df.columns:
-            df["slug"] = ""
-        if "name" not in df.columns:
-            df["name"] = ""
-
-        df["slug"] = (
-            df["slug"].astype(str)
-            .str.replace("\ufeff", "", regex=False)
-            .str.strip()
-            .str.replace(" ", "-", regex=False)
-            .str.replace("_", "-", regex=False)
-            .str.lower()
-        )
-        df["name"] = df["name"].astype(str).str.replace("\ufeff", "", regex=False).str.strip()
-
-        df = df[(df["slug"] != "") & (df["name"] != "")]
-        df = df.drop_duplicates(subset=["slug"], keep="first")
-        return df[["slug", "name"]]
+        if "slug" not in df.columns: df["slug"] = ""
+        if "name" not in df.columns: df["name"] = ""
+        df["slug"] = (df["slug"].astype(str).str.replace("\ufeff","",regex=False)
+                      .str.strip().str.replace(" ","-",regex=False).str.replace("_","-",regex=False).str.lower())
+        df["name"] = df["name"].astype(str).str.replace("\ufeff","",regex=False).str.strip()
+        df = df[(df["slug"]!="") & (df["name"]!="")].drop_duplicates(subset=["slug"], keep="first")
+        return df[["slug","name"]]
     except Exception:
-        return pd.DataFrame(columns=["slug", "name"])
-
+        return pd.DataFrame(columns=["slug","name"])
 
 def _current_apartment() -> dict | None:
-    """Retourne l'appartement courant depuis la session, sinon None."""
-    slug = st.session_state.get("apt_slug", "")
-    name = st.session_state.get("apt_name", "")
+    slug = st.session_state.get("apt_slug","")
+    name = st.session_state.get("apt_name","")
     if slug and name:
         return {"slug": slug, "name": name}
     return None
 
-
 def _select_apartment_sidebar() -> bool:
-    """
-    Affiche le sélecteur d'appartement dans la sidebar et met à jour les chemins
-    CSV_RESERVATIONS / CSV_PLATEFORMES en session. Retourne True si la sélection a changé.
-    """
+    """Affiche le sélecteur dans la sidebar et met à jour les chemins CSV pour l'appartement actif.
+    Retourne True si la sélection a changé (pour éventuellement recharger)."""
     st.sidebar.markdown("### Appartement")
-    apts = _read_apartments_csv()
-    if apts.empty:
+    df_apts = _read_apartments_csv()
+    if df_apts.empty:
         st.sidebar.warning("Aucun appartement trouvé dans apartments.csv")
         return False
 
-    options = apts["slug"].tolist()
-    labels = {r["slug"]: r["name"] for _, r in apts.iterrows()}
+    options = df_apts["slug"].tolist()
+    labels = {r["slug"]: r["name"] for _, r in df_apts.iterrows()}
 
-    # index par défaut robuste
-    cur_slug = st.session_state.get("apt_slug", options[0])
-    if cur_slug not in options:
+    cur_slug = st.session_state.get("apt_slug", options[0] if options else "")
+    if cur_slug not in options and options:
         cur_slug = options[0]
     default_idx = options.index(cur_slug)
 
@@ -386,15 +442,14 @@ def _select_apartment_sidebar() -> bool:
     )
     name = labels.get(slug, slug)
 
-    changed = (slug != st.session_state.get("apt_slug", "") or name != st.session_state.get("apt_name", ""))
+    changed = (slug != st.session_state.get("apt_slug","") or name != st.session_state.get("apt_name",""))
 
-    # mémorise et synchronise les chemins actifs
+    # synchronise session et variables globales de chemins
     st.session_state["apt_slug"] = slug
     st.session_state["apt_name"] = name
     st.session_state["CSV_RESERVATIONS"] = f"reservations_{slug}.csv"
     st.session_state["CSV_PLATEFORMES"]  = f"plateformes_{slug}.csv"
 
-    # met à jour les globales utilisées par les fonctions d’export/restauration
     global CSV_RESERVATIONS, CSV_PLATEFORMES
     CSV_RESERVATIONS = st.session_state["CSV_RESERVATIONS"]
     CSV_PLATEFORMES  = st.session_state["CSV_PLATEFORMES"]
@@ -407,30 +462,25 @@ def _select_apartment_sidebar() -> bool:
 
     return changed
 
-
 def _load_data_for_active_apartment():
-    """
-    Wrapper qui charge (df, palette) pour l'appartement actif
-    en utilisant les chemins dans la session.
-    """
+    """Retourne (df, palette) pour l'appartement actif."""
     csv_res = st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)
     csv_pal = st.session_state.get("CSV_PLATEFORMES",  CSV_PLATEFORMES)
     try:
         return charger_donnees(csv_res, csv_pal)
     except TypeError:
-        # Compat éventuelle si la signature de charger_donnees change
+        # compat ancienne signature
         return charger_donnees(CSV_RESERVATIONS, CSV_PLATEFORMES)
     except Exception:
         return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
 
-# ============================== PARTIE 3/5 — VUES DE BASE ==============================
-
-def vue_accueil(df: pd.DataFrame, palette: dict):
-    """Dashboard d’accueil : arrivées / départs du jour et J+1."""
+# --------- VUE : ACCUEIL ---------
+def vue_accueil(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"🏠 Accueil — {apt_name}")
     print_buttons()
+    render_print_header()  # bandeau impression
 
     today = date.today()
     tomorrow = today + timedelta(days=1)
@@ -440,28 +490,33 @@ def vue_accueil(df: pd.DataFrame, palette: dict):
     dfv["date_arrivee"] = _to_date(dfv["date_arrivee"])
     dfv["date_depart"]  = _to_date(dfv["date_depart"])
 
-    arr       = dfv[dfv["date_arrivee"] == today][["nom_client", "telephone", "plateforme", "pays"]]
-    dep       = dfv[dfv["date_depart"]  == today][["nom_client", "telephone", "plateforme", "pays"]]
-    arr_plus1 = dfv[dfv["date_arrivee"] == tomorrow][["nom_client", "telephone", "plateforme", "pays"]]
+    arr = dfv[dfv["date_arrivee"] == today][["nom_client","telephone","plateforme","pays"]]
+    dep = dfv[dfv["date_depart"]  == today][["nom_client","telephone","plateforme","pays"]]
+    arr_plus1 = dfv[dfv["date_arrivee"] == tomorrow][["nom_client","telephone","plateforme","pays"]]
 
     c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("🟢 Arrivées du jour")
-        st.dataframe(arr if not arr.empty else pd.DataFrame({"info": ["Aucune arrivée."]}), use_container_width=True)
+        st.dataframe(arr if not arr.empty else pd.DataFrame({"info":["Aucune arrivée."]}), use_container_width=True)
     with c2:
         st.subheader("🔴 Départs du jour")
-        st.dataframe(dep if not dep.empty else pd.DataFrame({"info": ["Aucun départ."]}), use_container_width=True)
+        st.dataframe(dep if not dep.empty else pd.DataFrame({"info":["Aucun départ."]}), use_container_width=True)
     with c3:
         st.subheader("🟠 Arrivées J+1 (demain)")
-        st.dataframe(arr_plus1 if not arr_plus1.empty else pd.DataFrame({"info": ["Aucune arrivée demain."]}), use_container_width=True)
+        st.dataframe(arr_plus1 if not arr_plus1.empty else pd.DataFrame({"info":["Aucune arrivée demain."]}), use_container_width=True)
 
+# --------- VUE : RÉSERVATIONS (colonnes techniques masquées) ---------
+_TECH_COLS_TO_HIDE = {
+    "email","sms_envoye","post_depart_envoye","%","charges","base",
+    "commissions","frais_cb","menage","taxes_sejour","ical_uid","res_id"
+}
 
-def vue_reservations(df: pd.DataFrame, palette: dict):
-    """Liste + filtres (année, mois, plateforme, payé/non payé) et KPIs."""
+def vue_reservations(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"📋 Réservations — {apt_name}")
     print_buttons()
+    render_print_header()
 
     if df is None or df.empty:
         st.info("Aucune réservation.")
@@ -470,17 +525,15 @@ def vue_reservations(df: pd.DataFrame, palette: dict):
     dfa = df.copy()
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
 
-    years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
-    months_avail = list(range(1, 13))
-    plats_avail = sorted(
-        dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist()
-    )
+    years_avail  = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    months_avail = list(range(1,13))
+    plats_avail  = sorted(dfa["plateforme"].astype(str).str.strip().replace({"":np.nan}).dropna().unique().tolist())
 
-    c1, c2, c3, c4 = st.columns(4)
-    year = c1.selectbox("Année", ["Toutes"] + years_avail, index=0)
-    month = c2.selectbox("Mois", ["Tous"] + months_avail, index=0)
-    plat = c3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0)
-    pay_filter = c4.selectbox("Paiement", ["Tous", "Payé uniquement", "Non payé uniquement"], index=0)
+    c1,c2,c3,c4 = st.columns(4)
+    year  = c1.selectbox("Année", ["Toutes"]+years_avail, index=0)
+    month = c2.selectbox("Mois",  ["Tous"]+months_avail, index=0)
+    plat  = c3.selectbox("Plateforme", ["Toutes"]+plats_avail, index=0)
+    payf  = c4.selectbox("Paiement", ["Tous","Payé uniquement","Non payé uniquement"], index=0)
 
     data = dfa.copy()
     if year != "Toutes":
@@ -489,18 +542,17 @@ def vue_reservations(df: pd.DataFrame, palette: dict):
         data = data[data["date_arrivee_dt"].dt.month == int(month)]
     if plat != "Toutes":
         data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
-    if pay_filter == "Payé uniquement":
+    if payf == "Payé uniquement":
         data = data[_to_bool_series(data["paye"]) == True]
-    elif pay_filter == "Non payé uniquement":
+    elif payf == "Non payé uniquement":
         data = data[_to_bool_series(data["paye"]) == False]
 
-    # KPIs
-    brut    = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
-    net     = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
-    base    = float(pd.to_numeric(data["base"],     errors="coerce").fillna(0).sum())
-    nuits   = int(pd.to_numeric(data["nuitees"],   errors="coerce").fillna(0).sum())
+    brut = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+    net  = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+    base = float(pd.to_numeric(data["base"],     errors="coerce").fillna(0).sum())
+    nuits= int(pd.to_numeric(data["nuitees"],   errors="coerce").fillna(0).sum())
+    adr  = (net/nuits) if nuits>0 else 0.0
     charges = float(pd.to_numeric(data["charges"], errors="coerce").fillna(0).sum())
-    adr     = (net / nuits) if nuits > 0 else 0.0
 
     st.markdown(
         f"""
@@ -517,34 +569,37 @@ def vue_reservations(df: pd.DataFrame, palette: dict):
     )
     st.markdown("---")
 
+    # Masquer colonnes techniques à l’affichage
+    display_cols = [c for c in data.columns if c not in _TECH_COLS_TO_HIDE and not c.endswith("_dt")]
     order_idx = pd.to_datetime(data["date_arrivee"], errors="coerce").sort_values(ascending=False).index
-    data = data.loc[order_idx]
-    st.dataframe(data.drop(columns=["date_arrivee_dt"]), use_container_width=True)
+    data = data.loc[order_idx, display_cols]
+    st.dataframe(data, use_container_width=True)
 
+# ============================== PARTIE 3/5 — VUES AJOUTER / MODIFIER / PLATEFORMES ==============================
 
-def vue_ajouter(df: pd.DataFrame, palette: dict):
-    """Formulaire d’ajout d’une réservation."""
+def vue_ajouter(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"➕ Ajouter une réservation — {apt_name}")
     print_buttons()
+    render_print_header()
 
     with st.form("form_add", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
-            nom = st.text_input("Nom du client")
+            nom  = st.text_input("Nom du client")
             email = st.text_input("Email", value="")
-            tel = st.text_input("Téléphone")
-            arr = st.date_input("Arrivée", date.today())
-            dep = st.date_input("Départ", date.today() + timedelta(days=1))
+            tel  = st.text_input("Téléphone")
+            arr  = st.date_input("Arrivée", date.today())
+            dep  = st.date_input("Départ",  date.today() + timedelta(days=1))
         with c2:
-            plat = st.selectbox("Plateforme", list(palette.keys()))
+            plat = st.selectbox("Plateforme", list(palette.keys()) or list(DEFAULT_PALETTE.keys()))
             brut = st.number_input("Prix brut (€)", min_value=0.0, step=0.01)
             commissions = st.number_input("Commissions (€)", min_value=0.0, step=0.01)
             frais_cb = st.number_input("Frais CB (€)", min_value=0.0, step=0.01)
-            menage = st.number_input("Ménage (€)", min_value=0.0, step=0.01)
-            taxes = st.number_input("Taxes séjour (€)", min_value=0.0, step=0.01)
-            paye = st.checkbox("Payé", value=False)
+            menage  = st.number_input("Ménage (€)", min_value=0.0, step=0.01)
+            taxes   = st.number_input("Taxes séjour (€)", min_value=0.0, step=0.01)
+            paye    = st.checkbox("Payé", value=False)
 
         if st.form_submit_button("✅ Ajouter"):
             if not nom or dep <= arr:
@@ -563,19 +618,19 @@ def vue_ajouter(df: pd.DataFrame, palette: dict):
                     st.rerun()
 
 
-def vue_modifier(df: pd.DataFrame, palette: dict):
-    """Edition / suppression d’une réservation existante."""
+def vue_modifier(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"✏️ Modifier / Supprimer — {apt_name}")
     print_buttons()
+    render_print_header()
 
     if df.empty:
         st.info("Aucune réservation.")
         return
 
     df_sorted = df.sort_values(by="date_arrivee", ascending=False).reset_index()
-    options = [f"{i}: {r.get('nom_client', '')} ({r.get('date_arrivee', '')})" for i, r in df_sorted.iterrows()]
+    options = [f"{i}: {r.get('nom_client','')} ({r.get('date_arrivee','')})" for i, r in df_sorted.iterrows()]
     sel = st.selectbox("Sélectionnez une réservation", options=options, index=None)
 
     if not sel:
@@ -588,26 +643,30 @@ def vue_modifier(df: pd.DataFrame, palette: dict):
     with st.form(f"form_mod_{original_idx}"):
         c1, c2 = st.columns(2)
         with c1:
-            nom = st.text_input("Nom", value=row.get("nom_client", "") or "")
+            nom  = st.text_input("Nom", value=row.get("nom_client", "") or "")
             email = st.text_input("Email", value=row.get("email", "") or "")
-            tel = st.text_input("Téléphone", value=row.get("telephone", "") or "")
+            tel  = st.text_input("Téléphone", value=row.get("telephone", "") or "")
             arrivee = st.date_input("Arrivée", value=row.get("date_arrivee"))
-            depart = st.date_input("Départ", value=row.get("date_depart"))
+            depart  = st.date_input("Départ",  value=row.get("date_depart"))
         with c2:
-            palette_keys = list(palette.keys())
-            plat_idx = palette_keys.index(row.get("plateforme")) if row.get("plateforme") in palette_keys else 0
+            palette_keys = list(palette.keys()) or list(DEFAULT_PALETTE.keys())
+            try:
+                plat_idx = palette_keys.index(row.get("plateforme"))
+            except Exception:
+                plat_idx = 0
             plat = st.selectbox("Plateforme", options=palette_keys, index=plat_idx)
             paye = st.checkbox("Payé", value=bool(row.get("paye", False)))
             brut = float(pd.to_numeric(row.get("prix_brut"), errors="coerce") or 0)
             commissions = float(pd.to_numeric(row.get("commissions"), errors="coerce") or 0)
             frais_cb = float(pd.to_numeric(row.get("frais_cb"), errors="coerce") or 0)
-            menage = float(pd.to_numeric(row.get("menage"), errors="coerce") or 0)
-            taxes = float(pd.to_numeric(row.get("taxes_sejour"), errors="coerce") or 0)
+            menage  = float(pd.to_numeric(row.get("menage"), errors="coerce") or 0)
+            taxes   = float(pd.to_numeric(row.get("taxes_sejour"), errors="coerce") or 0)
+
             brut = st.number_input("Prix brut", min_value=0.0, step=0.01, value=brut)
             commissions = st.number_input("Commissions", min_value=0.0, step=0.01, value=commissions)
             frais_cb = st.number_input("Frais CB", min_value=0.0, step=0.01, value=frais_cb)
-            menage = st.number_input("Ménage", min_value=0.0, step=0.01, value=menage)
-            taxes = st.number_input("Taxes séjour", min_value=0.0, step=0.01, value=taxes)
+            menage  = st.number_input("Ménage", min_value=0.0, step=0.01, value=menage)
+            taxes   = st.number_input("Taxes séjour", min_value=0.0, step=0.01, value=taxes)
 
         b1, b2 = st.columns([0.7, 0.3])
         if b1.form_submit_button("💾 Enregistrer"):
@@ -629,31 +688,27 @@ def vue_modifier(df: pd.DataFrame, palette: dict):
                 st.rerun()
 
 
-
 def vue_plateformes(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"🎨 Plateformes & couleurs — {apt_name}")
     print_buttons()
+    render_print_header()
 
-    # Détection de la ColorColumn (selon ta version de Streamlit)
     HAS_COLORCOL = hasattr(getattr(st, "column_config", object), "ColorColumn")
 
-    # Plateformes détectées dans les données + celles déjà en palette
     plats_df = sorted(
         df.get("plateforme", pd.Series([], dtype=str))
-          .astype(str).str.strip()
-          .replace({"nan": ""})
-          .dropna().unique().tolist()
+        .astype(str).str.strip()
+        .replace({"nan": ""})
+        .dropna().unique().tolist()
     )
     all_plats = sorted(set(list(palette.keys()) + plats_df))
-
     base = pd.DataFrame({
         "plateforme": all_plats,
         "couleur": [palette.get(p, "#666666") for p in all_plats],
     })
 
-    # Config colonnes selon support ColorColumn
     if HAS_COLORCOL:
         col_cfg = {
             "plateforme": st.column_config.TextColumn("Plateforme"),
@@ -664,7 +719,7 @@ def vue_plateformes(df, palette):
             "plateforme": st.column_config.TextColumn("Plateforme"),
             "couleur": st.column_config.TextColumn(
                 "Couleur (hex)",
-                help="Ex: #1b9e77 (sélecteur non dispo sur cette version).",
+                help="Ex: #1b9e77",
                 validate=r"^#([0-9A-Fa-f]{6})$",
                 width="small",
             ),
@@ -679,7 +734,7 @@ def vue_plateformes(df, palette):
         key="palette_editor",
     )
 
-    # Aperçu chips si pas de ColorColumn
+    # Aperçu couleurs si pas de ColorColumn
     if not HAS_COLORCOL and not edited.empty:
         chips = []
         for _, r in edited.iterrows():
@@ -696,19 +751,15 @@ def vue_plateformes(df, palette):
             st.markdown("".join(chips), unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns([0.5, 0.3, 0.2])
-
-    # Enregistrer
     if c1.button("💾 Enregistrer la palette", key="save_palette_btn"):
         try:
             to_save = edited.copy()
             to_save["plateforme"] = to_save["plateforme"].astype(str).str.strip()
-            to_save["couleur"] = to_save["couleur"].astype(str).str.strip()
+            to_save["couleur"]    = to_save["couleur"].astype(str).str.strip()
             to_save = to_save[to_save["plateforme"] != ""].drop_duplicates(subset=["plateforme"])
-
             if not HAS_COLORCOL:
                 ok = to_save["couleur"].str.match(r"^#([0-9A-Fa-f]{6})$")
                 to_save.loc[~ok, "couleur"] = "#666666"
-
             to_save.to_csv(CSV_PLATEFORMES, sep=";", index=False, encoding="utf-8", lineterminator="\n")
             st.success("Palette enregistrée ✅")
             st.cache_data.clear()
@@ -716,7 +767,6 @@ def vue_plateformes(df, palette):
         except Exception as e:
             st.error(f"Erreur : {e}")
 
-    # Restaurer défaut
     if c2.button("↩️ Palette par défaut", key="restore_palette_btn"):
         try:
             pd.DataFrame(list(DEFAULT_PALETTE.items()), columns=["plateforme", "couleur"]).to_csv(
@@ -728,17 +778,18 @@ def vue_plateformes(df, palette):
         except Exception as e:
             st.error(f"Erreur : {e}")
 
-    # Recharger
     if c3.button("🔄 Recharger", key="reload_palette_btn"):
         st.cache_data.clear()
         st.rerun()
 
+# ============================== PARTIE 4/5 — VUES CALENDRIER & RAPPORT ==============================
 
 def vue_calendrier(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"📅 Calendrier (grille mensuelle) — {apt_name}")
     print_buttons()
+    render_print_header()
 
     dfv = df.dropna(subset=["date_arrivee", "date_depart"]).copy()
     if dfv.empty:
@@ -746,14 +797,11 @@ def vue_calendrier(df, palette):
         return
 
     today = date.today()
-    years = sorted(
-        pd.to_datetime(dfv["date_arrivee"], errors="coerce").dt.year.dropna().astype(int).unique(),
-        reverse=True
-    )
+    years = sorted(pd.to_datetime(dfv["date_arrivee"], errors="coerce").dt.year.dropna().astype(int).unique(), reverse=True)
     annee = st.selectbox("Année", options=years if years else [today.year], index=0)
-    mois = st.selectbox("Mois", options=list(range(1, 13)), index=today.month - 1)
+    mois  = st.selectbox("Mois",  options=list(range(1, 13)), index=today.month - 1)
 
-    # En-têtes de jours (Lun->Dim)
+    # En-têtes de jours
     st.markdown(
         "<div class='cal-header'><div>Lun</div><div>Mar</div><div>Mer</div>"
         "<div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div></div>",
@@ -764,7 +812,7 @@ def vue_calendrier(df, palette):
         mask = (dfv["date_arrivee"] <= d) & (dfv["date_depart"] > d)
         return dfv[mask]
 
-    cal = Calendar(firstweekday=0)  # 0 = lundi
+    cal = Calendar(firstweekday=0)  # Lundi
     html = ["<div class='cal-grid'>"]
     for week in cal.monthdatescalendar(annee, mois):
         for d in week:
@@ -777,7 +825,7 @@ def vue_calendrier(df, palette):
                 if not rs.empty:
                     for _, r in rs.iterrows():
                         color = palette.get(r.get("plateforme"), "#888")
-                        name = str(r.get("nom_client") or "")[:22]
+                        name  = str(r.get("nom_client") or "")[:22]
                         cell += (
                             f"<div class='resa-pill' style='background:{color}' "
                             f"title='{r.get('nom_client','')}'>{name}</div>"
@@ -788,10 +836,11 @@ def vue_calendrier(df, palette):
     st.markdown("".join(html), unsafe_allow_html=True)
     st.markdown("---")
 
-    # Détail du mois sélectionné
+    # Détail du mois
     st.subheader("Détail du mois sélectionné")
     debut_mois = date(annee, mois, 1)
-    fin_mois = date(annee, mois, monthrange(annee, mois)[1])
+    from calendar import monthrange as _mr
+    fin_mois   = date(annee, mois, _mr(annee, mois)[1])
     rows = dfv[(dfv["date_arrivee"] <= fin_mois) & (dfv["date_depart"] > debut_mois)].copy()
 
     if rows.empty:
@@ -803,9 +852,9 @@ def vue_calendrier(df, palette):
     if plat != "Toutes":
         rows = rows[rows["plateforme"] == plat]
 
-    brut = float(pd.to_numeric(rows["prix_brut"], errors="coerce").fillna(0).sum())
-    net = float(pd.to_numeric(rows["prix_net"], errors="coerce").fillna(0).sum())
-    nuits = int(pd.to_numeric(rows["nuitees"], errors="coerce").fillna(0).sum())
+    brut  = float(pd.to_numeric(rows["prix_brut"], errors="coerce").fillna(0).sum())
+    net   = float(pd.to_numeric(rows["prix_net"],  errors="coerce").fillna(0).sum())
+    nuits = int(pd.to_numeric(rows["nuitees"],    errors="coerce").fillna(0).sum())
 
     st.markdown(
         f"""
@@ -821,14 +870,14 @@ def vue_calendrier(df, palette):
         rows[["nom_client", "plateforme", "date_arrivee", "date_depart", "nuitees", "paye", "pays"]],
         use_container_width=True
     )
-# ============================== PARTIE 4/5 — RAPPORTS, SMS, EXPORTS ==============================
 
-def vue_rapport(df: pd.DataFrame, palette: dict):
-    """Rapports : occupation, comparaison d’années, métriques financières, analyse par pays."""
+
+def vue_rapport(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"📊 Rapport — {apt_name}")
     print_buttons()
+    render_print_header()
 
     if df is None or df.empty:
         st.info("Aucune donnée.")
@@ -838,71 +887,59 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
     dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
     dfa["date_depart_dt"]  = pd.to_datetime(dfa["date_depart"],  errors="coerce")
 
-    years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    years_avail  = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
     months_avail = list(range(1, 13))
     plats_avail  = sorted(dfa["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist())
 
-    # Pays (complète via numéro si manquant)
+    # Pays normalisé (sur base du téléphone si vide)
     dfa["_pays"] = dfa["pays"].replace("", np.nan)
     dfa["_pays"] = dfa["_pays"].fillna(dfa["telephone"].apply(_phone_country)).replace("", "Inconnu")
     pays_avail   = sorted(dfa["_pays"].unique().tolist())
     if "France" in pays_avail:
-        pays_avail.remove("France")
-        pays_avail = ["France"] + pays_avail
+        pays_avail.remove("France"); pays_avail = ["France"] + pays_avail
 
     c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1.2, 1.2])
     year   = c1.selectbox("Année",      ["Toutes"] + years_avail, index=0)
     month  = c2.selectbox("Mois",       ["Tous"] + months_avail,  index=0)
     plat   = c3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0)
     payf   = c4.selectbox("Pays",       ["Tous"] + pays_avail,    index=0)
-    metric = c5.selectbox(
-        "Métrique",
-        ["prix_brut", "prix_net", "base", "charges", "menage", "taxes_sejour", "nuitees"],
-        index=1
-    )
+    metric = c5.selectbox("Métrique",   ["prix_brut", "prix_net", "base", "charges", "menage", "taxes_sejour", "nuitees"], index=1)
 
     data = dfa.copy()
     data["pays"] = data["_pays"]
-    if year != "Toutes":
-        data = data[data["date_arrivee_dt"].dt.year == int(year)]
-    if month != "Tous":
-        data = data[data["date_arrivee_dt"].dt.month == int(month)]
-    if plat != "Toutes":
-        data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
-    if payf != "Tous":
-        data = data[data["pays"] == payf]
+    if year  != "Toutes": data = data[data["date_arrivee_dt"].dt.year  == int(year)]
+    if month != "Tous":   data = data[data["date_arrivee_dt"].dt.month == int(month)]
+    if plat  != "Toutes": data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+    if payf  != "Tous":   data = data[data["pays"] == payf]
 
     if data.empty:
         st.warning("Aucune donnée après filtres.")
         return
 
-    # ===== Occupation par mois =====
+    # ===== Taux d'occupation par mois =====
     st.markdown("---")
     st.subheader("📅 Taux d'occupation")
 
-    data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
+    data["mois"]    = data["date_arrivee_dt"].dt.to_period("M").astype(str)
     data["nuitees"] = (data["date_depart_dt"] - data["date_arrivee_dt"]).dt.days
 
-    occ_mois = data.groupby(["mois", "plateforme"], as_index=False)["nuitees"].sum()
-    occ_mois.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
+    occ_mois = data.groupby(["mois", "plateforme"], as_index=False)["nuitees"] \
+                   .sum().rename(columns={"nuitees": "nuitees_occupees"})
 
-    def jours_dans_mois(periode_str: str) -> int:
-        an, mo = map(int, periode_str.split("-"))
+    def _jours_mois(p):
+        an, mo = map(int, p.split("-"))
         return monthrange(an, mo)[1]
 
-    occ_mois["jours_dans_mois"] = occ_mois["mois"].apply(jours_dans_mois)
+    occ_mois["jours_dans_mois"] = occ_mois["mois"].apply(_jours_mois)
     occ_mois["taux_occupation"] = (occ_mois["nuitees_occupees"] / occ_mois["jours_dans_mois"]) * 100
 
     col_plat, col_export = st.columns([1, 1])
     plat_occ = col_plat.selectbox("Filtrer par plateforme (occupation)", ["Toutes"] + plats_avail, index=0)
-
-    occ_filtered = occ_mois.copy()
-    if plat_occ != "Toutes":
-        occ_filtered = occ_filtered[occ_filtered["plateforme"] == plat_occ]
+    occ_filtered = occ_mois if plat_occ == "Toutes" else occ_mois[occ_mois["plateforme"] == plat_occ]
 
     filtered_nuitees = pd.to_numeric(occ_filtered["nuitees_occupees"], errors="coerce").fillna(0).sum()
     filtered_jours   = pd.to_numeric(occ_filtered["jours_dans_mois"],   errors="coerce").fillna(0).sum()
-    taux_global_filtered = (filtered_nuitees / filtered_jours) * 100 if filtered_jours > 0 else 0.0
+    taux_global_filtered = (filtered_nuitees / filtered_jours) * 100 if filtered_jours > 0 else 0
 
     st.markdown(
         f"""
@@ -910,23 +947,19 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
           <span class='chip'><small>Taux global</small><br><strong>{taux_global_filtered:.1f}%</strong></span>
           <span class='chip'><small>Nuitées occupées</small><br><strong>{int(filtered_nuitees)}</strong></span>
           <span class='chip'><small>Jours dispos</small><br><strong>{int(filtered_jours)}</strong></span>
-          <span class='chip'><small>Pays filtré</small><br><strong>{payf if payf != 'Tous' else 'Tous'}</strong></span>
+          <span class='chip'><small>Pays filtré</small><br><strong>{payf if payf!='Tous' else 'Tous'}</strong></span>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    occ_export = (
-        occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]]
-        .sort_values(["mois", "plateforme"], ascending=[False, True])
-        .copy()
-    )
-
+    occ_export = occ_filtered[["mois", "plateforme", "nuitees_occupees", "jours_dans_mois", "taux_occupation"]] \
+                           .copy().sort_values(["mois", "plateforme"], ascending=[False, True])
     col_export.download_button(
         "⬇️ Exporter occupation (CSV)",
         data=occ_export.to_csv(index=False).encode("utf-8"),
         file_name="taux_occupation.csv",
-        mime="text/csv"
+        mime="text/csv",
     )
     xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
     if xlsx_occ:
@@ -934,47 +967,33 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
             "⬇️ Exporter occupation (Excel)",
             data=xlsx_occ,
             file_name="taux_occupation.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-    st.dataframe(occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)), use_container_width=True)
-
-    # Courbe d’évolution
-    st.markdown("---")
-    st.subheader("📈 Évolution du taux d'occupation")
-    try:
-        chart_occ = alt.Chart(occ_filtered).mark_line(point=True).encode(
-            x=alt.X("mois:N", sort=None, title="Mois"),
-            y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
-            color=alt.Color("plateforme:N", title="Plateforme"),
-            tooltip=["mois", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
-        )
-        st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
-    except Exception as e:
-        st.warning(f"Graphique d’évolution indisponible : {e}")
+    st.dataframe(
+        occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+        use_container_width=True
+    )
 
     # ===== Comparaison entre années =====
     st.markdown("---")
     st.subheader("📊 Comparaison des taux d'occupation par année")
 
     data["annee"] = data["date_arrivee_dt"].dt.year
-    occ_annee = data.groupby(["annee", "plateforme"])["nuitees"].sum().reset_index()
-    occ_annee.rename(columns={"nuitees": "nuitees_occupees"}, inplace=True)
+    occ_annee = data.groupby(["annee", "plateforme"])["nuitees"] \
+                    .sum().reset_index().rename(columns={"nuitees": "nuitees_occupees"})
 
-    def jours_dans_annee(annee: int) -> int:
-        return 366 if (annee % 4 == 0 and annee % 100 != 0) or (annee % 400 == 0) else 365
+    def _jours_annee(an):
+        return 366 if (an % 4 == 0 and an % 100 != 0) or (an % 400 == 0) else 365
 
-    occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
+    occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(_jours_annee)
     occ_annee["taux_occupation"]  = (occ_annee["nuitees_occupees"] / occ_annee["jours_dans_annee"]) * 100
 
-    default_years = (
-        sorted(occ_annee["annee"].unique())[-2:]
-        if occ_annee["annee"].nunique() >= 2
-        else sorted(occ_annee["annee"].unique())
-    )
+    uniques = sorted(occ_annee["annee"].unique())
+    default_years = uniques[-2:] if len(uniques) >= 2 else uniques
     years_pick = st.multiselect(
         "Sélectionner les années à comparer",
-        options=sorted(occ_annee["annee"].unique()),
+        options=uniques,
         default=default_years
     )
 
@@ -985,7 +1004,7 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
                 x=alt.X("annee:N", title="Année"),
                 y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
                 color=alt.Color("plateforme:N", title="Plateforme"),
-                tooltip=["annee", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
+                tooltip=["annee", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")],
             ).properties(height=400)
             st.altair_chart(chart_comparaison, use_container_width=True)
         except Exception as e:
@@ -1020,13 +1039,13 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
             x=alt.X("mois:N", sort=None, title="Mois"),
             y=alt.Y(f"{metric}:Q", title=metric.replace("_", " ").title()),
             color=alt.Color("plateforme:N", title="Plateforme"),
-            tooltip=["mois", "plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+            tooltip=["mois", "plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")],
         )
         st.altair_chart(chart.properties(height=420), use_container_width=True)
     except Exception as e:
         st.warning(f"Graphique indisponible : {e}")
 
-    # ===== Analyse par pays =====
+    # ===== Analyse par pays (avec filtre Année dédié) =====
     st.markdown("---")
     st.subheader("🌍 Analyse par pays")
 
@@ -1064,7 +1083,8 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
     )
 
     agg_pays = agg_pays.sort_values(["prix_net", "reservations"], ascending=[False, False])
-    nb_pays = int(agg_pays["pays"].nunique())
+
+    nb_pays  = int(agg_pays["pays"].nunique())
     top_pays = agg_pays.iloc[0]["pays"] if not agg_pays.empty else "—"
 
     st.markdown(
@@ -1080,14 +1100,15 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
     )
 
     disp = agg_pays.copy()
-    for c in ["reservations", "nuitees", "prix_brut", "prix_net", "menage", "taxes_sejour", "charges", "base", "ADR_net", "part_revenu_%"]:
+    num_cols = ["reservations", "nuitees", "prix_brut", "prix_net", "menage", "taxes_sejour", "charges", "base", "ADR_net", "part_revenu_%"]
+    for c in num_cols:
         disp[c] = pd.to_numeric(disp[c], errors="coerce")
-    disp["reservations"] = disp["reservations"].fillna(0).astype("int64")
-    disp["pays"] = disp["pays"].astype(str).replace({"nan": "Inconnu", "": "Inconnu"})
-    disp["prix_brut"] = disp["prix_brut"].round(2)
-    disp["prix_net"]  = disp["prix_net"].round(2)
-    disp["ADR_net"]   = disp["ADR_net"].round(2)
-    disp["part_revenu_%"] = disp["part_revenu_%"].round(1)
+    disp["reservations"]   = disp["reservations"].fillna(0).astype("int64")
+    disp["pays"]           = disp["pays"].astype(str).replace({"nan": "Inconnu", "": "Inconnu"})
+    disp["prix_brut"]      = disp["prix_brut"].round(2)
+    disp["prix_net"]       = disp["prix_net"].round(2)
+    disp["ADR_net"]        = disp["ADR_net"].round(2)
+    disp["part_revenu_%"]  = disp["part_revenu_%"].round(1)
 
     order_cols = ["pays", "reservations", "nuitees", "prix_brut", "prix_net", "charges", "menage", "taxes_sejour", "base", "ADR_net", "part_revenu_%"]
     disp = disp[[c for c in order_cols if c in disp.columns]]
@@ -1105,268 +1126,39 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
                 alt.Tooltip("ADR_net:Q", title="ADR net", format=",.2f"),
                 alt.Tooltip("part_revenu_%:Q", title="Part (%)", format=".1f"),
             ],
+            color=alt.Color("pays:N", legend=None)
         ).properties(height=420)
         st.altair_chart(chart_pays, use_container_width=True)
     except Exception as e:
         st.warning(f"Graphique 'Analyse pays' indisponible : {e}")
 
-
-# ----------- Bouton copie helper ----------
-def _copy_button(label: str, payload: str, key: str):
-    st.text_area(label, payload, height=260, key=f"ta_{key}")
-    st.caption("Sélectionnez puis copiez (Ctrl/Cmd+C).")
-
-
-def _google_form_prefill(res_id, nom, phone, arr, dep):
-    # On garde le lien court (fiable) — remplace par lien long pré-rempli si tu veux changer
-    return FORM_SHORT_URL
-
-
-def vue_sms(df: pd.DataFrame, palette: dict):
-    """Génération de messages SMS/WhatsApp pré-arrivée + post-départ."""
-    import re as _re
-
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-    st.header(f"✉️ SMS & WhatsApp — {apt_name}")
-    print_buttons()
-
-    # ===== Pré-arrivée =====
-    st.subheader("🛬 Pré-arrivée (arrivées J+1)")
-    target_arrivee = st.date_input("Arrivées du", date.today() + timedelta(days=1), key="pre_date")
-
-    pre = df.dropna(subset=["telephone", "nom_client", "date_arrivee"]).copy()
-    pre["date_arrivee"] = _to_date(pre["date_arrivee"])
-    pre["date_depart"]  = _to_date(pre["date_depart"])
-    sms_sent = _to_bool_series(pre["sms_envoye"])
-    pre = pre[(pre["date_arrivee"] == target_arrivee) & (~sms_sent)]
-
-    if pre.empty:
-        st.info("Aucun client à contacter.")
-    else:
-        pre["_rowid"] = pre.index
-        pre = pre.sort_values("date_arrivee").reset_index(drop=True)
-        opts = [f"{i}: {r['nom_client']} ({r['telephone']})" for i, r in pre.iterrows()]
-        pick = st.selectbox("Client (pré-arrivée)", options=opts, index=None)
-
-        if pick:
-            i = int(pick.split(":")[0])
-            r = pre.loc[i]
-
-            link_form = _google_form_prefill(
-                r.get("res_id"),
-                r.get("nom_client"),
-                _format_phone_e164(r.get("telephone")),
-                r.get("date_arrivee"),
-                r.get("date_depart"),
-            )
-
-            nights = int(pd.to_numeric(r.get("nuitees"), errors="coerce") or 0)
-            arr_txt = r["date_arrivee"].strftime("%d/%m/%Y")
-            dep_txt = r["date_depart"].strftime("%d/%m/%Y") if pd.notna(r["date_depart"]) else ""
-
-            msg = (
-                f"{apt_name.upper()}\n"
-                f"Plateforme : {r.get('plateforme', 'N/A')}\n"
-                f"Arrivée : {arr_txt}  Départ : {dep_txt}  Nuitées : {nights}\n\n"
-                f"Bonjour {r.get('nom_client')}\n"
-                "Bienvenue chez nous !\n\n"
-                "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant :\n"
-                f"{link_form}\n\n"
-                "Un parking est à votre disposition sur place.\n\n"
-                "Le check-in se fait à partir de 14:00 et le check-out avant 11:00. Nous serons sur place lors de votre arrivée pour vous remettre les clés.\n\n"
-                "Vous trouverez des consignes à bagages dans chaque quartier, à Nice.\n\n"
-                "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt.\n\n"
-                "Annick & Charley\n\n"
-                "******\n\n"
-                "Welcome to our establishment!\n\n"
-                "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible, we kindly ask you to fill out the form at the link below:\n"
-                f"{link_form}\n\n"
-                "Parking is available on site.\n\n"
-                "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. We will be there when you arrive to give you the keys.\n\n"
-                "You will find luggage storage facilities in every district of Nice.\n\n"
-                "We wish you a pleasant journey and look forward to meeting you very soon.\n\n"
-                "Annick & Charley"
-            )
-
-            enc = quote(msg)
-            e164 = _format_phone_e164(r["telephone"])
-            wa = _re.sub(r"\D", "", e164)
-
-            _copy_button("📋 Copier le message", msg, key=f"pre_{i}")
-
-            c1, c2, c3 = st.columns(3)
-            c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
-            c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
-            c3.link_button("🟢 WhatsApp", f"https://wa.me/{wa}?text={enc}")
-
-            if st.button("✅ Marquer 'SMS envoyé'", key=f"pre_mark_{r['_rowid']}"):
-                df.loc[r["_rowid"], "sms_envoye"] = True
-                if sauvegarder_donnees(df):
-                    st.success("Marqué ✅")
-                    st.rerun()
-
-    # ===== Post-départ =====
+    # ===== Évolution du taux d'occupation (ligne) =====
     st.markdown("---")
-    st.subheader("📤 Post-départ (départs du jour)")
-    target_depart = st.date_input("Départs du", date.today(), key="post_date")
+    st.subheader("📈 Évolution du taux d'occupation")
+    try:
+        chart_occ = alt.Chart(occ_mois).mark_line(point=True).encode(
+            x=alt.X("mois:N", sort=None, title="Mois"),
+            y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0, 100])),
+            color=alt.Color("plateforme:N", title="Plateforme"),
+            tooltip=["mois", "plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")],
+        )
+        st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique du taux d'occupation indisponible : {e}")
 
-    post = df.dropna(subset=["telephone", "nom_client", "date_depart"]).copy()
-    post["date_depart"] = _to_date(post["date_depart"])
-    post_sent = _to_bool_series(post["post_depart_envoye"])
-    post = post[(post["date_depart"] == target_depart) & (~post_sent)]
+# ============================== PARTIE 5/5 — GOOGLE SHEET / CLIENTS / ID / PARAMÈTRES ==============================
 
-    if post.empty:
-        st.info("Aucun message à envoyer.")
-    else:
-        post["_rowid"] = post.index
-        post = post.sort_values("date_depart").reset_index(drop=True)
-        opts2 = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i, r in post.iterrows()]
-        pick2 = st.selectbox("Client (post-départ)", options=opts2, index=None)
-
-        if pick2:
-            j = int(pick2.split(":")[0])
-            r2 = post.loc[j]
-            name = str(r2.get("nom_client") or "").strip()
-
-            msg2 = (
-                f"Bonjour {name},\n\n"
-                "Un grand merci d'avoir choisi notre appartement pour votre séjour.\n"
-                "Nous espérons que vous avez passé un moment agréable.\n"
-                "Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.\n\n"
-                "Au plaisir de vous accueillir à nouveau.\n\n"
-                "Annick & Charley\n"
-                f"\nHello {name},\n\n"
-                "Thank you very much for choosing our apartment for your stay.\n"
-                "We hope you had a great time — our door is always open if you want to come back.\n\n"
-                "Annick & Charley"
-            )
-
-            enc2 = quote(msg2)
-            e164b = _format_phone_e164(r2["telephone"])
-            wab = _re.sub(r"\D", "", e164b)
-
-            _copy_button("📋 Copier le message", msg2, key=f"post_{j}")
-
-            c1, c2, c3 = st.columns(3)
-            c1.link_button("🟢 WhatsApp", f"https://wa.me/{wab}?text={enc2}")
-            c2.link_button("📲 iPhone SMS", f"sms:&body={enc2}")
-            c3.link_button("🤖 Android SMS", f"sms:{e164b}?body={enc2}")
-
-            if st.button("✅ Marquer 'post-départ envoyé'", key=f"post_mark_{r2['_rowid']}"):
-                df.loc[r2["_rowid"], "post_depart_envoye"] = True
-                if sauvegarder_donnees(df):
-                    st.success("Marqué ✅")
-                    st.rerun()
-
-
-def vue_export_ics(df: pd.DataFrame, palette: dict):
-    """Export iCalendar (.ics) des réservations par année et plateforme."""
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-    st.header(f"📆 Export ICS — {apt_name}")
-    print_buttons()
-
-    if df.empty:
-        st.info("Aucune réservation.")
-        return
-
-    dfa = df.copy()
-    dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
-    years = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique(), reverse=True)
-    year = st.selectbox("Année (arrivées)", years if years else [date.today().year], index=0)
-
-    plats = ["Tous"] + sorted(df["plateforme"].dropna().unique())
-    plat = st.selectbox("Plateforme", plats, index=0)
-
-    data = dfa[dfa["date_arrivee_dt"].dt.year == int(year)].copy()
-    if plat != "Tous":
-        data = data[data["plateforme"] == plat]
-
-    if data.empty:
-        st.warning("Rien à exporter.")
-        return
-
-    miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip() == "")
-    if miss.any():
-        data.loc[miss, "ical_uid"] = data.loc[miss].apply(build_stable_uid, axis=1)
-
-    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-
-    def _fmt(d):
-        if isinstance(d, datetime):
-            d = d.date()
-        if isinstance(d, date):
-            return f"{d.year:04d}{d.month:02d}{d.day:02d}"
-        try:
-            return pd.to_datetime(d, errors="coerce").strftime("%Y%m%d")
-        except Exception:
-            return ""
-
-    def _esc(s):
-        if s is None:
-            return ""
-        return str(s).replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
-
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Villa Tobias//Reservations//FR", "CALSCALE:GREGORIAN"]
-    for _, r in data.iterrows():
-        dt_a = pd.to_datetime(r["date_arrivee"], errors="coerce")
-        dt_d = pd.to_datetime(r["date_depart"], errors="coerce")
-        if pd.isna(dt_a) or pd.isna(dt_d):
-            continue
-
-        summary = f"{apt_name} — {r.get('nom_client', 'Sans nom')}"
-        if r.get("plateforme"):
-            summary += f" ({r['plateforme']})"
-
-        desc = "\n".join([
-            f"Client: {r.get('nom_client', '')}",
-            f"Téléphone: {r.get('telephone', '')}",
-            f"Nuitées: {int(pd.to_numeric(r.get('nuitees'), errors='coerce') or 0)}",
-            f"Prix brut: {float(pd.to_numeric(r.get('prix_brut'), errors='coerce') or 0):.2f} €",
-            f"res_id: {r.get('res_id', '')}",
-        ])
-
-        lines += [
-            "BEGIN:VEVENT",
-            f"UID:{r['ical_uid']}",
-            f"DTSTAMP:{nowstamp}",
-            f"DTSTART;VALUE=DATE:{_fmt(dt_a)}",
-            f"DTEND;VALUE=DATE:{_fmt(dt_d)}",
-            f"SUMMARY:{_esc(summary)}",
-            f"DESCRIPTION:{_esc(desc)}",
-            "TRANSP:OPAQUE",
-            "END:VEVENT",
-        ]
-    lines.append("END:VCALENDAR")
-    ics = "\r\n".join(lines) + "\r\n"
-
-    st.download_button(
-        "📥 Télécharger .ics",
-        data=ics.encode("utf-8"),
-        file_name=f"reservations_{year}.ics",
-        mime="text/calendar"
-    )
-
-
-def vue_google_sheet(df: pd.DataFrame, palette: dict):
-    """Intégration Google Form & Sheet + affichage du CSV publié des réponses."""
+def vue_google_sheet(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"📝 Fiche d'arrivée / Google Sheet — {apt_name}")
     print_buttons()
-
+    render_print_header()
     st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
-    st.markdown(
-        f'<iframe src="{GOOGLE_FORM_VIEW}" width="100%" height="900" frameborder="0"></iframe>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<iframe src="{GOOGLE_FORM_VIEW}" width="100%" height="900" frameborder="0"></iframe>', unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Feuille Google intégrée")
-    st.markdown(
-        f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>', unsafe_allow_html=True)
     st.markdown("---")
     st.subheader("Réponses (CSV publié)")
     try:
@@ -1382,18 +1174,17 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
         st.error(f"Impossible de charger la feuille publiée : {e}")
 
 
-def vue_clients(df: pd.DataFrame, palette: dict):
-    """Liste simple des clients avec pays complété à partir du téléphone si manquant."""
+def vue_clients(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"👥 Liste des clients — {apt_name}")
     print_buttons()
-
+    render_print_header()
     if df.empty:
         st.info("Aucun client.")
         return
 
-    clients = df[["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]].copy()
+    clients = df[['nom_client', 'telephone', 'email', 'plateforme', 'res_id', 'pays']].copy()
     for c in ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]:
         clients[c] = clients[c].astype(str).str.strip().replace({"nan": ""})
 
@@ -1408,223 +1199,89 @@ def vue_clients(df: pd.DataFrame, palette: dict):
     st.dataframe(clients, use_container_width=True)
 
 
-def vue_id(df: pd.DataFrame, palette: dict):
-    """Table des identifiants (res_id + infos contact)."""
+def vue_id(df, palette):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"🆔 Identifiants des réservations — {apt_name}")
     print_buttons()
-
+    render_print_header()
     if df is None or df.empty:
         st.info("Aucune réservation.")
         return
-
     tbl = df[["res_id", "nom_client", "telephone", "email", "plateforme", "pays"]].copy()
     for c in ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]:
         tbl[c] = tbl[c].astype(str).str.strip().replace({"nan": ""})
-
     need = tbl["pays"].eq("") | tbl["pays"].isna()
     if need.any():
         tbl.loc[need, "pays"] = tbl.loc[need, "telephone"].apply(_phone_country)
-
     tbl = tbl.dropna(subset=["res_id"])
     tbl = tbl[tbl["res_id"] != ""].drop_duplicates()
-
     st.dataframe(tbl, use_container_width=True)
 
-# ============================== PARTIE 5/5 — PARAMÈTRES & MAIN ==============================
 
+# ============================== PARAMÈTRES ==============================
 def vue_settings(df: pd.DataFrame, palette: dict):
-    """Page Paramètres : export, restauration, cache, et écrasement de apartments.csv."""
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
-    st.header("## ⚙️ Paramètres")
-    st.subheader(apt_name)
+    st.header(f"⚙️ Paramètres — {apt_name}")
     print_buttons()
-    st.caption("Sauvegarde, restauration, cache, import manuel, diagnostic et écrasement de apartments.csv.")
+    render_print_header()
 
-    # ---------- Sauvegarde (exports) ----------
-    st.markdown("### 💾 Sauvegarde (exports)")
-    try:
-        out = ensure_schema(df).copy()
-        out["pays"] = out["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
-    except Exception:
-        csv_bytes = b""
+    st.subheader("💾 Sauvegarde (exports)")
+    st.download_button("⬇️ Exporter réservations (CSV)", df.to_csv(index=False).encode("utf-8"),
+                       file_name=CSV_RESERVATIONS, mime="text/csv")
+    xlsx_bytes, _ = _df_to_xlsx_bytes(df, "Réservations")
+    if xlsx_bytes:
+        st.download_button("⬇️ Exporter réservations (Excel)", xlsx_bytes,
+                           file_name=CSV_RESERVATIONS.replace(".csv", ".xlsx"),
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    c1, c2 = st.columns(2)
-    c1.download_button(
-        "⬇️ Exporter réservations (CSV)",
-        data=csv_bytes,
-        file_name=os.path.basename(CSV_RESERVATIONS),
-        mime="text/csv",
-        key="dl_res_csv",
-    )
-
-    try:
-        out_xlsx = ensure_schema(df).copy()
-        out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        xlsx_bytes, _ = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
-    except Exception:
-        xlsx_bytes = None
-
-    c2.download_button(
-        "⬇️ Exporter réservations (XLSX)",
-        data=xlsx_bytes or b"",
-        file_name=os.path.splitext(os.path.basename(CSV_RESERVATIONS))[0] + ".xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=(xlsx_bytes is None),
-        key="dl_res_xlsx",
-    )
-
-    # ---------- Restauration ----------
-    st.markdown("### ♻️ Restauration (remplacer les données)")
-    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader_settings")
+    st.subheader("♻️ Restauration (remplacer les données)")
+    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"])
     if up is not None:
-        try:
-            if up.name.lower().endswith(".xlsx"):
-                xls = pd.ExcelFile(up)
-                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0, key="restore_sheet_settings")
-                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-            else:
-                raw = up.read()
-                tmp = _detect_delimiter_and_read(raw)
+        _restore_file(up, CSV_RESERVATIONS)
+        st.success("Fichier restauré avec succès.")
+        st.experimental_rerun()
 
-            prev = ensure_schema(tmp)
-            st.success(f"Aperçu chargé ({up.name})")
-            with st.expander("Aperçu (10 premières lignes)", expanded=False):
-                st.dataframe(prev.head(10), use_container_width=True)
+    st.subheader("🧹 Vider le cache")
+    if st.button("Vider le cache"):
+        st.cache_data.clear()
+        st.success("Cache vidé. Recharger la page.")
 
-            if st.button("✅ Confirmer la restauration", key="confirm_restore_settings"):
-                try:
-                    save = prev.copy()
-                    for col in ["date_arrivee", "date_depart"]:
-                        save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                    save.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8", lineterminator="\n")
-                    st.cache_data.clear()
-                    st.success("Fichier restauré — rechargement…")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erreur écriture : {e}")
-        except Exception as e:
-            st.error(f"Erreur restauration : {e}")
+    st.subheader("⛑️ Import manuel (remplacement immédiat)")
+    up2 = st.file_uploader("Importer un fichier (CSV ou XLSX)", type=["csv", "xlsx"], key="imp2")
+    if up2 is not None:
+        _restore_file(up2, CSV_RESERVATIONS)
+        st.success("Fichier importé immédiatement.")
+        st.experimental_rerun()
 
-    # ---------- Vider le cache ----------
-    st.markdown("### 🧹 Vider le cache")
-    if st.button("Vider le cache & recharger", key="clear_cache_btn_settings"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.rerun()
-
-    # ---------- Écraser apartments.csv ----------
-    st.markdown("### 🧰 Écraser apartments.csv")
-    default_csv = "slug,name\nvilla-tobias,Villa Tobias\nle-turenne,Le Turenne\n"
-    txt = st.text_area(
-        "Contenu apartments.csv",
-        value=default_csv,
-        height=140,
-        key="force_apts_txt_settings"
-    )
-    if st.button("🧰 Écraser apartments.csv (outil secours)", key="force_apts_btn_settings"):
-        try:
-            with open(APARTMENTS_CSV, "w", encoding="utf-8", newline="") as f:
-                f.write(txt.strip() + "\n")
-            st.cache_data.clear()
-            st.success("apartments.csv écrasé ✅ — rechargement…")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Impossible d'écrire apartments.csv : {e}")
+    st.subheader("🔎 Diagnostics")
+    st.text(f"CSV_RESERVATIONS : {CSV_RESERVATIONS}")
+    st.text(f"CSV_PLATEFORMES  : {CSV_PLATEFORMES}")
 
 
-# ---------- Filet de sécurité : si le chargeur n’est pas défini (selon le collage des parties), on le définit ici ----------
-if "_load_data_for_active_apartment" not in globals():
-    def _load_data_for_active_apartment():
-        csv_res = st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)
-        csv_pal = st.session_state.get("CSV_PLATEFORMES",  CSV_PLATEFORMES)
-        try:
-            return charger_donnees(csv_res, csv_pal)
-        except TypeError:
-            return charger_donnees(CSV_RESERVATIONS, CSV_PLATEFORMES)
-        except Exception:
-            return pd.DataFrame(columns=BASE_COLS), DEFAULT_PALETTE.copy()
-
-
-# ============================= MAIN ==============================
+# ============================== MAIN ==============================
 def main():
-    # Reset cache via URL ?clear=1
-    params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
+    st.set_page_config(page_title="Villa Tobias — Réservations", layout="wide")
+    _apply_custom_css()
 
-    # Sélection appartement (met à jour CSV_RESERVATIONS / CSV_PLATEFORMES)
     changed = _select_apartment_sidebar()
-    if changed:
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        # Pas de rerun forcé : on laisse l’utilisateur naviguer immédiatement
+    df, palette = _load_data_for_active_apartment()
 
-    # Thème
-    try:
-        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
-    except Exception:
-        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
-    apply_style(light=bool(mode_clair))
-
-    # En-tête
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-    st.title(f"✨ {apt_name} — Gestion des Réservations")
-
-    # Chargement des données spécifiques à l'appartement
-    df, palette_loaded = _load_data_for_active_apartment()
-    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
-
-    # Navigation (robuste : n’ajoute que les vues réellement définies)
-    possible_pages = [
-        ("🏠 Accueil", "vue_accueil"),
-        ("📋 Réservations", "vue_reservations"),
-        ("➕ Ajouter", "vue_ajouter"),
-        ("✏️ Modifier / Supprimer", "vue_modifier"),
-        ("🎨 Plateformes", "vue_plateformes"),
-        ("📅 Calendrier", "vue_calendrier"),
-        ("📊 Rapport", "vue_rapport"),
-        ("✉️ SMS", "vue_sms"),
-        ("📆 Export ICS", "vue_export_ics"),
-        ("📝 Google Sheet", "vue_google_sheet"),
-        ("👥 Clients", "vue_clients"),
-        ("🆔 ID", "vue_id"),
-        ("⚙️ Paramètres", "vue_settings"),
-    ]
-
-    pages = {}
-    missing = []
-    for label, fn_name in possible_pages:
-        fn = globals().get(fn_name)
-        if callable(fn):
-            pages[label] = fn
-        else:
-            missing.append(label)
-
-    if missing:
-        with st.sidebar.expander("ℹ️ Onglets indisponibles (définitions manquantes)"):
-            for m in missing:
-                st.write(f"• {m}")
-
-    if not pages:
-        st.error("Aucune page disponible : les fonctions de vues ne sont pas chargées. "
-                 "Vérifie que toutes les parties de app.py ont bien été collées avant main().")
-        return
+    pages = {
+        "🏠 Accueil": vue_accueil,
+        "📋 Réservations": vue_reservations,
+        "➕ Ajouter": vue_ajouter,
+        "✏️ Modifier/Supprimer": vue_modifier,
+        "🎨 Plateformes": vue_plateformes,
+        "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,
+        "✉️ SMS": vue_sms,
+        "📝 Google Sheet": vue_google_sheet,
+        "👥 Clients": vue_clients,
+        "🆔 ID": vue_id,
+        "⚙️ Paramètres": vue_settings,
+    }
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
     pages[choice](df, palette)
