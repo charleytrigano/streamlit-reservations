@@ -175,7 +175,7 @@ def _format_phone_e164(phone: str) -> str:
 
 PHONE_PREFIX_COUNTRY = {
     "33":"France","34":"Espagne","49":"Allemagne","44":"Royaume-Uni","39":"Italie",
-    "41":"Suisse","32":"Belgique","352":"Luxembourg","351":"Portugal",
+    "41":"Suisse","32":"Belgique","352":"Luxembourg","351":"Portugal","359":"Bulgarie",
     "1":"États-Unis/Canada","61":"Australie","64":"Nouvelle-Zélande",
     "420":"Tchéquie","421":"Slovaquie","36":"Hongrie","40":"Roumanie",
     "30":"Grèce","31":"Pays-Bas","353":"Irlande","354":"Islande","358":"Finlande",
