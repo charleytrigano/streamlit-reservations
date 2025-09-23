@@ -1361,16 +1361,20 @@ def vue_settings(df: pd.DataFrame, palette: dict):
 def main():
     # Reset cache via URL ?clear=1
     params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1","true","True","yes"):
-        try: st.cache_data.clear()
-        except Exception: pass
+    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
 
     # Sélection appartement (met à jour CSV_RESERVATIONS / CSV_PLATEFORMES)
     changed = _select_apartment_sidebar()
     if changed:
-        try: st.cache_data.clear()
-        except Exception: pass
-        # On continue sans forcer un rerun immédiat (navigation fluide)
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        # on ne fait PAS de st.rerun() ici, pour éviter le double clic nécessaire
 
     # Thème
     try:
@@ -1384,7 +1388,7 @@ def main():
     apt_name = apt["name"] if apt else "—"
     st.title(f"✨ {apt_name} — Gestion des Réservations")
 
-    # Chargement des données spécifiques à l'appartement
+    # Données de l'appartement actif
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
@@ -1404,8 +1408,10 @@ def main():
         "🆔 ID": vue_id,
         "⚙️ Paramètres": vue_settings,
     }
-    choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
+
+    choice = st.sidebar.radio("Aller à", list(pages.keys()), index=0, key="nav_radio")
     pages[choice](df, palette)
+
 
 if __name__ == "__main__":
     main()
