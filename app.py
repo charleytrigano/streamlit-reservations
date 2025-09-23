@@ -708,6 +708,206 @@ def vue_calendrier(df, palette):
             unsafe_allow_html=True
         )
         st.dataframe(rows[["nom_client","plateforme","date_arrivee","date_depart","nuitees","paye","pays"]], use_container_width=True)
+
+# ============================== VUE : RAPPORT ==============================
+def vue_rapport(df, palette):
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📊 Rapport — {apt_name}")
+    print_buttons()
+    if df is None or df.empty:
+        st.info("Aucune donnée.")
+        return
+
+    dfa = df.copy()
+    dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
+    dfa["date_depart_dt"]  = pd.to_datetime(dfa["date_depart"],  errors="coerce")
+
+    years_avail = sorted(dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    months_avail = list(range(1,13))
+    plats_avail  = sorted(dfa["plateforme"].astype(str).str.strip().replace({"":np.nan}).dropna().unique().tolist())
+    dfa["_pays"] = dfa["pays"].replace("", np.nan)
+    dfa["_pays"] = dfa["_pays"].fillna(dfa["telephone"].apply(_phone_country)).replace("", "Inconnu")
+    pays_avail   = sorted(dfa["_pays"].unique().tolist())
+    if "France" in pays_avail:
+        pays_avail.remove("France"); pays_avail = ["France"] + pays_avail
+
+    c1,c2,c3,c4,c5 = st.columns([1,1,1,1.2,1.2])
+    year  = c1.selectbox("Année",     ["Toutes"]+years_avail, index=0)
+    month = c2.selectbox("Mois",      ["Tous"]+months_avail, index=0)
+    plat  = c3.selectbox("Plateforme",["Toutes"]+plats_avail, index=0)
+    payf  = c4.selectbox("Pays",      ["Tous"]+pays_avail, index=0)
+    metric= c5.selectbox("Métrique",  ["prix_brut","prix_net","base","charges","menage","taxes_sejour","nuitees"], index=1)
+
+    data = dfa.copy()
+    data["pays"] = data["_pays"]
+    if year != "Toutes":  data = data[data["date_arrivee_dt"].dt.year == int(year)]
+    if month != "Tous":   data = data[data["date_arrivee_dt"].dt.month == int(month)]
+    if plat != "Toutes":  data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+    if payf != "Tous":    data = data[data["pays"] == payf]
+    if data.empty:
+        st.warning("Aucune donnée après filtres."); return
+
+    # ---- Occupation par mois ----
+    st.markdown("---"); st.subheader("📅 Taux d'occupation")
+    data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
+    data["nuitees"] = (data["date_depart_dt"] - data["date_arrivee_dt"]).dt.days
+    occ_mois = data.groupby(["mois","plateforme"], as_index=False)["nuitees"].sum().rename(columns={"nuitees":"nuitees_occupees"})
+    def jours_dans_mois(periode_str):
+        an, mo = map(int, periode_str.split("-")); return monthrange(an, mo)[1]
+    occ_mois["jours_dans_mois"] = occ_mois["mois"].apply(jours_dans_mois)
+    occ_mois["taux_occupation"] = (occ_mois["nuitees_occupees"]/occ_mois["jours_dans_mois"])*100
+
+    col_plat, col_export = st.columns([1,1])
+    plat_occ = col_plat.selectbox("Filtrer par plateforme (occupation)", ["Toutes"]+plats_avail, index=0)
+    occ_filtered = occ_mois if plat_occ=="Toutes" else occ_mois[occ_mois["plateforme"]==plat_occ]
+    filtered_nuitees = pd.to_numeric(occ_filtered["nuitees_occupees"], errors="coerce").fillna(0).sum()
+    filtered_jours   = pd.to_numeric(occ_filtered["jours_dans_mois"], errors="coerce").fillna(0).sum()
+    taux_global_filtered = (filtered_nuitees/filtered_jours)*100 if filtered_jours>0 else 0
+
+    st.markdown(
+        f"""
+        <div class='glass'>
+          <span class='chip'><small>Taux global</small><br><strong>{taux_global_filtered:.1f}%</strong></span>
+          <span class='chip'><small>Nuitées occupées</small><br><strong>{int(filtered_nuitees)}</strong></span>
+          <span class='chip'><small>Jours dispos</small><br><strong>{int(filtered_jours)}</strong></span>
+          <span class='chip'><small>Pays filtré</small><br><strong>{payf if payf!='Tous' else 'Tous'}</strong></span>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+    occ_export = occ_filtered[["mois","plateforme","nuitees_occupees","jours_dans_mois","taux_occupation"]].copy().sort_values(["mois","plateforme"], ascending=[False,True])
+    col_export.download_button("⬇️ Exporter occupation (CSV)", data=occ_export.to_csv(index=False).encode("utf-8"),
+                               file_name="taux_occupation.csv", mime="text/csv")
+    xlsx_occ, _ = _df_to_xlsx_bytes(occ_export, "Taux d'occupation")
+    if xlsx_occ:
+        col_export.download_button("⬇️ Exporter occupation (Excel)", data=xlsx_occ, file_name="taux_occupation.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.dataframe(occ_export.assign(taux_occupation=lambda x: x["taux_occupation"].round(1)), use_container_width=True)
+
+    # ---- Comparaison années ----
+    st.markdown("---"); st.subheader("📊 Comparaison des taux d'occupation par année")
+    data["annee"] = data["date_arrivee_dt"].dt.year
+    occ_annee = data.groupby(["annee","plateforme"])["nuitees"].sum().reset_index().rename(columns={"nuitees":"nuitees_occupees"})
+    def jours_dans_annee(annee): return 366 if (annee%4==0 and annee%100!=0) or (annee%400==0) else 365
+    occ_annee["jours_dans_annee"] = occ_annee["annee"].apply(jours_dans_annee)
+    occ_annee["taux_occupation"]  = (occ_annee["nuitees_occupees"]/occ_annee["jours_dans_annee"])*100
+    default_years = sorted(occ_annee["annee"].unique())[-2:] if occ_annee["annee"].nunique()>=2 else sorted(occ_annee["annee"].unique())
+    annees_comparaison = st.multiselect("Sélectionner les années à comparer", options=sorted(occ_annee["annee"].unique()),
+                                        default=default_years)
+    if annees_comparaison:
+        occ_comp = occ_annee[occ_annee["annee"].isin(annees_comparaison)].copy()
+        try:
+            chart_comparaison = alt.Chart(occ_comp).mark_bar().encode(
+                x=alt.X("annee:N", title="Année"),
+                y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0,100])),
+                color=alt.Color("plateforme:N", title="Plateforme"),
+                tooltip=["annee","plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
+            ).properties(height=400)
+            st.altair_chart(chart_comparaison, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Graphique indisponible : {e}")
+        st.dataframe(occ_comp[["annee","plateforme","nuitees_occupees","taux_occupation"]]
+                     .sort_values(["annee","plateforme"])
+                     .assign(taux_occupation=lambda x: x["taux_occupation"].round(1)),
+                     use_container_width=True)
+
+    # ---- Métriques financières ----
+    st.markdown("---"); st.subheader("💰 Métriques financières")
+    data["mois"] = data["date_arrivee_dt"].dt.to_period("M").astype(str)
+    total_val = float(pd.to_numeric(data[metric], errors="coerce").fillna(0).sum())
+    st.markdown(f"**Total {metric.replace('_',' ')} : {total_val:,.2f}**".replace(",", " "))
+    agg_mois = data.groupby("mois", as_index=False)[metric].sum().sort_values("mois")
+    agg_mois_plat = data.groupby(["mois","plateforme"], as_index=False)[metric].sum().sort_values(["mois","plateforme"])
+    with st.expander("Détail par mois", expanded=True): st.dataframe(agg_mois, use_container_width=True)
+    with st.expander("Détail par mois et par plateforme", expanded=False): st.dataframe(agg_mois_plat, use_container_width=True)
+    try:
+        chart = alt.Chart(agg_mois_plat).mark_bar().encode(
+            x=alt.X("mois:N", sort=None, title="Mois"),
+            y=alt.Y(f"{metric}:Q", title=metric.replace("_"," ").title()),
+            color=alt.Color("plateforme:N", title="Plateforme"),
+            tooltip=["mois","plateforme", alt.Tooltip(f"{metric}:Q", format=",.2f")]
+        )
+        st.altair_chart(chart.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique indisponible : {e}")
+
+    # ---- Analyse par pays ----
+    st.markdown("---"); st.subheader("🌍 Analyse par pays")
+    years_pays = years_avail
+    year_pays = st.selectbox("Année (analyse pays)", ["Toutes"]+years_pays, index=0, key="year_pays")
+    data_p = dfa.copy()
+    data_p["pays"] = dfa["_pays"]
+    if year_pays != "Toutes":
+        data_p = data_p[data_p["date_arrivee_dt"].dt.year == int(year_pays)]
+    data_p["nuitees"] = (data_p["date_depart_dt"] - data_p["date_arrivee_dt"]).dt.days
+    agg_pays = data_p.groupby("pays", as_index=False).agg(
+        reservations=("nom_client","count"),
+        nuitees=("nuitees","sum"),
+        prix_brut=("prix_brut","sum"),
+        prix_net=("prix_net","sum"),
+        menage=("menage","sum"),
+        taxes_sejour=("taxes_sejour","sum"),
+        charges=("charges","sum"),
+        base=("base","sum"),
+    )
+    total_net = float(pd.to_numeric(agg_pays["prix_net"], errors="coerce").fillna(0).sum())
+    total_res = int(pd.to_numeric(agg_pays["reservations"], errors="coerce").fillna(0).sum())
+    agg_pays["part_revenu_%"] = np.where(total_net>0, (pd.to_numeric(agg_pays["prix_net"], errors="coerce").fillna(0)/total_net)*100, 0.0)
+    agg_pays["ADR_net"] = np.where(pd.to_numeric(agg_pays["nuitees"], errors="coerce").fillna(0)>0,
+                                   pd.to_numeric(agg_pays["prix_net"], errors="coerce").fillna(0)/pd.to_numeric(agg_pays["nuitees"], errors="coerce").fillna(0),
+                                   0.0)
+    agg_pays = agg_pays.sort_values(["prix_net","reservations"], ascending=[False,False])
+    nb_pays = int(agg_pays["pays"].nunique())
+    top_pays = agg_pays.iloc[0]["pays"] if not agg_pays.empty else "—"
+    st.markdown(
+        f"""
+        <div class='glass'>
+          <span class='chip'><small>Année</small><br><strong>{year_pays}</strong></span>
+          <span class='chip'><small>Pays distincts</small><br><strong>{nb_pays}</strong></span>
+          <span class='chip'><small>Total réservations</small><br><strong>{total_res}</strong></span>
+          <span class='chip'><small>Top pays (CA net)</small><br><strong>{top_pays}</strong></span>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    disp = agg_pays.copy()
+    for c in ["reservations","nuitees","prix_brut","prix_net","menage","taxes_sejour","charges","base","ADR_net","part_revenu_%"]:
+        disp[c] = pd.to_numeric(disp[c], errors="coerce")
+    disp["reservations"] = disp["reservations"].fillna(0).astype("int64")
+    disp["pays"] = disp["pays"].astype(str).replace({"nan":"Inconnu","":"Inconnu"})
+    disp["prix_brut"] = disp["prix_brut"].round(2); disp["prix_net"] = disp["prix_net"].round(2)
+    disp["ADR_net"] = disp["ADR_net"].round(2);     disp["part_revenu_%"] = disp["part_revenu_%"].round(1)
+    order_cols = ["pays","reservations","nuitees","prix_brut","prix_net","charges","menage","taxes_sejour","base","ADR_net","part_revenu_%"]
+    disp = disp[[c for c in order_cols if c in disp.columns]]
+    st.dataframe(disp, use_container_width=True)
+
+    try:
+        topN = st.slider("Afficher les N premiers pays (par CA net)", min_value=3, max_value=20, value=12, step=1)
+        chart_pays = alt.Chart(agg_pays.head(topN)).mark_bar().encode(
+            x=alt.X("pays:N", sort="-y", title="Pays"),
+            y=alt.Y("prix_net:Q", title="CA net (€)"),
+            tooltip=["pays", alt.Tooltip("reservations:Q", title="Réservations"),
+                     alt.Tooltip("nuitees:Q", title="Nuitées"),
+                     alt.Tooltip("ADR_net:Q", title="ADR net", format=",.2f"),
+                     alt.Tooltip("part_revenu_%:Q", title="Part (%)", format=".1f")]
+        ).properties(height=420)
+        st.altair_chart(chart_pays, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique 'Analyse pays' indisponible : {e}")
+
+    # ---- Courbe d'évolution du taux d’occupation ----
+    st.markdown("---"); st.subheader("📈 Évolution du taux d'occupation")
+    try:
+        chart_occ = alt.Chart(occ_mois).mark_line(point=True).encode(
+            x=alt.X("mois:N", sort=None, title="Mois"),
+            y=alt.Y("taux_occupation:Q", title="Taux d'occupation (%)", scale=alt.Scale(domain=[0,100])),
+            color=alt.Color("plateforme:N", title="Plateforme"),
+            tooltip=["mois","plateforme", alt.Tooltip("taux_occupation:Q", format=".1f")]
+        )
+        st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique du taux d'occupation indisponible : {e}")
 # ===== PART 3 END =====
 
 # ============================== VUE : SMS ==============================
