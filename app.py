@@ -1661,6 +1661,51 @@ def vue_export_ics(df: pd.DataFrame, palette: dict):
         key="dl_ics"
     )
 
+def vue_google_sheet(df: pd.DataFrame, palette: dict):
+    """Fiche d'arrivée (Google Form) + Google Sheet + aperçu CSV publié."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📝 Fiche d'arrivée / Google Sheet — {apt_name}")
+    print_buttons()
+
+    # Lien court (configuré via FORM_SHORT_URL)
+    try:
+        st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
+    except NameError:
+        st.warning("FORM_SHORT_URL n'est pas défini dans vos constantes.")
+
+    # Formulaire Google intégré
+    try:
+        st.markdown(
+            f'<iframe src="{GOOGLE_FORM_VIEW}" width="100%" height="900" frameborder="0"></iframe>',
+            unsafe_allow_html=True
+        )
+    except NameError:
+        st.error("GOOGLE_FORM_VIEW n'est pas défini.")
+
+    st.markdown("---")
+    st.subheader("Feuille Google intégrée")
+    try:
+        st.markdown(
+            f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>',
+            unsafe_allow_html=True
+        )
+    except NameError:
+        st.error("GOOGLE_SHEET_EMBED_URL n'est pas défini.")
+
+    st.markdown("---")
+    st.subheader("Réponses (CSV publié)")
+    try:
+        rep = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+        show_email = st.checkbox("Afficher les colonnes d'email (si présentes)", value=False)
+        if not show_email:
+            mask_cols = [c for c in rep.columns if "mail" in c.lower() or "email" in c.lower()]
+            rep = rep.drop(columns=mask_cols, errors="ignore")
+        st.dataframe(rep, use_container_width=True)
+    except NameError:
+        st.error("GOOGLE_SHEET_PUBLISHED_CSV n'est pas défini.")
+    except Exception as e:
+        st.error(f"Impossible de charger le CSV publié : {e}")
 
 # ------------------------------- MAIN ---------------------------------
 
