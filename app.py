@@ -1772,6 +1772,78 @@ def vue_id(df: pd.DataFrame, palette: dict):
 
     st.dataframe(tbl, use_container_width=True)
 
+
+def _ensure_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Retourne une copie de df avec toutes les colonnes `cols` présentes (remplies de '')."""
+    dfv = df.copy() if df is not None else pd.DataFrame()
+    if dfv.empty and cols:
+        # crée un DF vide avec les colonnes attendues
+        for c in cols:
+            dfv[c] = pd.Series(dtype="object")
+        return dfv
+    for c in cols:
+        if c not in dfv.columns:
+            dfv[c] = ""
+    return dfv
+
+def vue_clients(df: pd.DataFrame, palette: dict):
+    """Liste des clients (nom, pays, téléphone, email, plateforme, res_id)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"👥 Liste des clients — {apt_name}")
+    print_buttons()
+
+    cols = ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]
+    dfv = _ensure_columns(df, cols)
+
+    if dfv.empty:
+        st.info("Aucun client.")
+        return
+
+    clients = dfv[cols].copy()
+    for c in cols:
+        clients[c] = clients[c].astype(str).str.strip().replace({"nan": ""})
+
+    # Compléter le pays via le téléphone si manquant
+    need = clients["pays"].eq("") | clients["pays"].isna()
+    if need.any():
+        clients.loc[need, "pays"] = clients.loc[need, "telephone"].apply(_phone_country)
+
+    clients = clients.loc[clients["nom_client"] != ""].drop_duplicates()
+    clients = clients.sort_values(by="nom_client", kind="stable")
+
+    st.dataframe(
+        clients[["nom_client", "pays", "telephone", "email", "plateforme", "res_id"]],
+        use_container_width=True
+    )
+
+def vue_id(df: pd.DataFrame, palette: dict):
+    """Table d’identifiants (res_id) avec infos de contact."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🆔 Identifiants des réservations — {apt_name}")
+    print_buttons()
+
+    cols = ["res_id", "nom_client", "telephone", "email", "plateforme", "pays"]
+    dfv = _ensure_columns(df, cols)
+
+    if dfv.empty:
+        st.info("Aucune réservation.")
+        return
+
+    tbl = dfv[cols].copy()
+    for c in cols:
+        tbl[c] = tbl[c].astype(str).str.strip().replace({"nan": ""})
+
+    need = tbl["pays"].eq("") | tbl["pays"].isna()
+    if need.any():
+        tbl.loc[need, "pays"] = tbl.loc[need, "telephone"].apply(_phone_country)
+
+    tbl = tbl.dropna(subset=["res_id"])
+    tbl = tbl[tbl["res_id"] != ""].drop_duplicates()
+
+    st.dataframe(tbl, use_container_width=True)
+
 # ------------------------------- MAIN ---------------------------------
 
 def main():
