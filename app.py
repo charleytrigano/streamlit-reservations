@@ -184,6 +184,7 @@ def _format_phone_e164(phone: str) -> str:
         return "+33" + s[1:]
     # N° déjà avec indicatif sans '+', ex: 33xxxxxxxxx
     return "+" + s
+
 # ------------------------------ INDICATIFS PAYS (CSV ÉDITABLE) ------------------------------
 def _ensure_country_codes_file():
     """Crée un CSV d'indicatifs si absent (UTF-8)."""
