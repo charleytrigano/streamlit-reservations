@@ -137,6 +137,7 @@ def render_print_header(title_text: str):
         unsafe_allow_html=True
     )
 
+
 # ============================== PART 2/5 — HELPERS, SCHÉMA, PAYS, CHARGEMENT ==============================
 
 # ---- Colonnes standard du fichier réservations ----
