@@ -1462,5 +1462,6 @@ def main():
     else:
         st.error("Page inconnue.")
 
+
 if __name__ == "__main__":
     main()
