@@ -1290,6 +1290,7 @@ def vue_id(df, palette):
 
     st.dataframe(tbl, use_container_width=True)
 
+
 # === PART 5: PARAMÈTRES + MAIN ===
 
 def vue_sms(df: pd.DataFrame, palette: dict):
