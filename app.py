@@ -1,4 +1,4 @@
-# ============================== PART 1/5 — IMPORTS, CONFIG, STYLES, HELPERS ==============================
+i# ============================== PART 1/5 — IMPORTS, CONFIG, STYLES, HELPERS ==============================
 import os, io, re, uuid, hashlib
 from datetime import date, datetime, timedelta
 from calendar import Calendar, monthrange
@@ -1706,6 +1706,71 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
         st.error("GOOGLE_SHEET_PUBLISHED_CSV n'est pas défini.")
     except Exception as e:
         st.error(f"Impossible de charger le CSV publié : {e}")
+
+def vue_clients(df: pd.DataFrame, palette: dict):
+    """Liste simple des clients (nom, pays, téléphone, email, plateforme, res_id)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"👥 Liste des clients — {apt_name}")
+    print_buttons()
+
+    if df is None or df.empty:
+        st.info("Aucun client.")
+        return
+
+    # Colonnes minimales
+    cols = ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+
+    clients = df[cols].copy()
+    for c in cols:
+        clients[c] = clients[c].astype(str).str.strip().replace({"nan": ""})
+
+    # Complète pays à partir du téléphone si manquant
+    need = clients["pays"].eq("") | clients["pays"].isna()
+    if need.any():
+        clients.loc[need, "pays"] = clients.loc[need, "telephone"].apply(_phone_country)
+
+    # Nettoyage & tri
+    clients = clients.loc[clients["nom_client"] != ""].drop_duplicates()
+    clients = clients.sort_values(by="nom_client", kind="stable")
+
+    st.dataframe(
+        clients[["nom_client", "pays", "telephone", "email", "plateforme", "res_id"]],
+        use_container_width=True
+    )
+
+
+def vue_id(df: pd.DataFrame, palette: dict):
+    """Table d’identifiants (res_id) avec infos de contact."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🆔 Identifiants des réservations — {apt_name}")
+    print_buttons()
+
+    if df is None or df.empty:
+        st.info("Aucune réservation.")
+        return
+
+    cols = ["res_id", "nom_client", "telephone", "email", "plateforme", "pays"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+
+    tbl = df[cols].copy()
+    for c in cols:
+        tbl[c] = tbl[c].astype(str).str.strip().replace({"nan": ""})
+
+    need = tbl["pays"].eq("") | tbl["pays"].isna()
+    if need.any():
+        tbl.loc[need, "pays"] = tbl.loc[need, "telephone"].apply(_phone_country)
+
+    tbl = tbl.dropna(subset=["res_id"])
+    tbl = tbl[tbl["res_id"] != ""].drop_duplicates()
+
+    st.dataframe(tbl, use_container_width=True)
 
 # ------------------------------- MAIN ---------------------------------
 
