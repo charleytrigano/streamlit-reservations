@@ -1518,6 +1518,113 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Erreur écriture apartments.csv : {e}")
 
 
+# ============================== PAYS / INDICATIFS ==============================
+# Ajoute cette section si elle n'existe pas déjà
+
+# Déclaration du chemin si absent
+if "INDICATIFS_CSV" not in globals():
+    INDICATIFS_CSV = "indicatifs.csv"
+
+# Helpers lecture/écriture si absents
+if "_read_indicatifs_csv" not in globals():
+    import io, os, pandas as pd
+
+    def _read_indicatifs_csv() -> pd.DataFrame:
+        if not os.path.exists(INDICATIFS_CSV):
+            # crée un fichier de base
+            sample = (
+                "indicatif,pays,emoji\n"
+                "33,France,🇫🇷\n"
+                "34,Espagne,🇪🇸\n"
+                "49,Allemagne,🇩🇪\n"
+                "44,Royaume-Uni,🇬🇧\n"
+                "39,Italie,🇮🇹\n"
+            )
+            with open(INDICATIFS_CSV, "w", encoding="utf-8", newline="") as f:
+                f.write(sample)
+        try:
+            return pd.read_csv(INDICATIFS_CSV, dtype=str).fillna("")
+        except Exception:
+            return pd.DataFrame(columns=["indicatif", "pays", "emoji"])
+
+    def _save_indicatifs_csv(df: pd.DataFrame) -> None:
+        df2 = df.copy()
+        df2["indicatif"] = df2["indicatif"].astype(str).str.replace(r"\D", "", regex=True)
+        df2["pays"] = df2["pays"].astype(str).str.strip()
+        df2["emoji"] = df2["emoji"].astype(str).str.strip()
+        df2 = df2[(df2["indicatif"] != "") & (df2["pays"] != "")]
+        df2 = df2.drop_duplicates(subset=["indicatif"], keep="first")
+        df2.to_csv(INDICATIFS_CSV, index=False, encoding="utf-8")
+
+# La vue latérale pour gérer les pays / indicatifs
+def vue_pays(df, palette):
+    st.header("🌍 Indicateurs pays (indicatifs téléphoniques)")
+    st.caption("Ajoutez/modifiez les **indicatifs**, le **pays** et le **drapeau (emoji)**. "
+               "Ces valeurs sont utilisées pour déduire le pays à partir du téléphone.")
+
+    # charger table
+    try:
+        table = _read_indicatifs_csv()
+    except Exception as e:
+        st.error(f"Impossible de lire {INDICATIFS_CSV} : {e}")
+        table = pd.DataFrame(columns=["indicatif", "pays", "emoji"])
+
+    # tri ergonomique
+    if not table.empty:
+        with st.expander("Aperçu du fichier", expanded=False):
+            st.dataframe(table.sort_values("indicatif"), use_container_width=True)
+
+    # éditeur
+    st.subheader("Édition")
+    colcfg = {
+        "indicatif": st.column_config.TextColumn("Indicatif (ex: 33)"),
+        "pays":      st.column_config.TextColumn("Pays"),
+        "emoji":     st.column_config.TextColumn("Drapeau (emoji)"),
+    }
+    edited = st.data_editor(
+        table if not table.empty else pd.DataFrame(columns=["indicatif", "pays, emoji".split(", ")[0], "emoji"]),
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config=colcfg,
+        key="indicatifs_editor",
+    )
+
+    c1, c2, c3 = st.columns([0.4, 0.3, 0.3])
+    if c1.button("💾 Enregistrer", key="btn_save_indicatifs"):
+        try:
+            _save_indicatifs_csv(edited)
+            st.success("Indicatifs enregistrés ✅")
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+        except Exception as e:
+            st.error(f"Erreur d'enregistrement : {e}")
+
+    # export / import rapide
+    with c2:
+        st.download_button(
+            "⬇️ Exporter CSV",
+            data=(edited if isinstance(edited, pd.DataFrame) else table).to_csv(index=False).encode("utf-8"),
+            file_name=INDICATIFS_CSV,
+            mime="text/csv",
+            key="dl_indicatifs",
+        )
+    with c3:
+        up = st.file_uploader("Importer CSV", type=["csv"], key="up_indicatifs")
+        if up is not None:
+            try:
+                new_tab = pd.read_csv(up, dtype=str).fillna("")
+                _save_indicatifs_csv(new_tab)
+                st.success("Import réussi ✅ — rechargez la page si nécessaire.")
+            except Exception as e:
+                st.error(f"Import impossible : {e}")
+
+    st.markdown("---")
+    st.caption(f"Fichier : **{INDICATIFS_CSV}** — vous pouvez aussi l'éditer manuellement si besoin.")
+
+
 # ============================== MAIN ==============================
 
 def _load_data_for_active_apartment():
