@@ -683,6 +683,35 @@ def render_print_header(apt_name: str):
         unsafe_allow_html=True
     )
 
+# ============================== CSS & PRINT HEADER ==============================
+def _apply_custom_css():
+    css = """
+    <style>
+    @media print {
+      @page { size: A4 landscape; margin: 10mm; }
+      [data-testid="stSidebar"], header, footer { display: none !important; }
+      body, [data-testid="stAppViewContainer"] { font-size: 12pt !important; }
+      .block-container { padding: 0 !important; }
+      .stDataFrame, .stTable { break-inside: avoid; }
+    }
+    .chip small { opacity: .75; }
+    .stButton>button, .stDownloadButton>button { border-radius: 10px; }
+    .print-header {
+      display: none;
+      font-weight: 700; margin: 0 0 8px 0; padding: 6px 0;
+      border-bottom: 1px solid rgba(0,0,0,.15);
+    }
+    @media print { .print-header { display: block; } }
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+def render_print_header(apt_name: str):
+    st.markdown(
+        f"<div class='print-header'>Réservations — {apt_name}</div>",
+        unsafe_allow_html=True
+    )
+
 # ============================== MAIN ==============================
 def main():
     # Reset cache via URL ?clear=1
@@ -692,6 +721,11 @@ def main():
             st.cache_data.clear()
         except Exception:
             pass
+
+    # Auto-crée apartments.csv si manquant
+    if not os.path.exists("apartments.csv"):
+        with open("apartments.csv", "w", encoding="utf-8", newline="") as f:
+            f.write("slug,name\nvilla-tobias,Villa Tobias\n")
 
     # Sélecteur d'appartement
     _select_apartment_sidebar()
@@ -713,9 +747,8 @@ def main():
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    # Construire le dictionnaire des pages APRÈS la définition de toutes les vues
+    # Construire dictionnaire des pages APRÈS définition des vues
     pages = {}
-    # On ajoute prudemment (si la fonction existe bien)
     for label, fn_name in [
         ("🏠 Accueil", "vue_accueil"),
         ("📋 Réservations", "vue_reservations"),
@@ -736,12 +769,11 @@ def main():
         if callable(fn):
             pages[label] = fn
         else:
-            # Si une vue manque, on l’ignore pour éviter le crash
             st.sidebar.warning(f"Vue absente: {fn_name} (ignorée)")
 
     # Navigation
     if not pages:
-        st.error("Aucune page disponible. Vérifie que toutes les fonctions de vue sont définies.")
+        st.error("Aucune page disponible. Vérifie que toutes les fonctions sont définies.")
         return
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
