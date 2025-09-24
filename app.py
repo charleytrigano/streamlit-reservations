@@ -1292,6 +1292,86 @@ def vue_id(df, palette):
 
 # === PART 5: PARAMÈTRES + MAIN ===
 
+def vue_sms(df: pd.DataFrame, palette: dict):
+    """Page SMS — affichage des messages préformatés avant arrivée et après départ."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"✉️ SMS — {apt_name}")
+    print_buttons()
+
+    if df is None or df.empty:
+        st.info("Aucune réservation disponible.")
+        return
+
+    # ----------- Messages avant arrivée -----------
+    st.subheader("📩 Messages avant l'arrivée")
+    for _, r in df.iterrows():
+        msg = f"""
+APPARTEMENT {apt_name}
+Plateforme : {r.get('plateforme','')}
+Arrivée : {r.get('date_arrivee','')}   Départ : {r.get('date_depart','')}   Nuitées : {r.get('nuitees','')}
+
+Bonjour {r.get('nom_client','')}
+
+Bienvenue chez nous !
+
+Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant : 
+https://urlr.me/kZuH94
+
+Un parking est à votre disposition sur place.
+
+Le check-in se fait à partir de 14:00 h et le check-out avant 11:00 h.
+
+Vous trouverez des consignes à bagages dans chaque quartier, à Nice.
+
+Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt.
+
+Annick & Charley
+
+******
+
+Welcome to our establishment!
+
+We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible, we kindly ask you to fill out the form that you will find by clicking on the following link:
+https://urlr.me/kZuH94
+
+Parking is available on site.
+
+Check-in is from 2:00 p.m. and check-out is before 11:00 a.m.
+
+You will find luggage storage facilities in every district of Nice.
+
+We wish you a pleasant journey and look forward to meeting you very soon.
+
+Annick & Charley
+"""
+        st.text_area(f"Avant arrivée — {r.get('nom_client','')}", msg.strip(), height=350)
+
+    # ----------- Messages après départ -----------
+    st.subheader("📩 Messages après le départ")
+    for _, r in df.iterrows():
+        msg = f"""
+Bonjour {r.get('nom_client','')},
+
+Un grand merci d'avoir choisi notre appartement pour votre séjour.
+Nous espérons que vous avez passé un moment agréable.
+Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.
+
+Au plaisir de vous accueillir à nouveau.
+
+Annick & Charley
+
+******
+
+Hello {r.get('nom_client','')},
+
+Thank you very much for choosing our apartment for your stay.
+We hope you had a great time — our door is always open if you want to come back.
+
+Annick & Charley
+"""
+        st.text_area(f"Après départ — {r.get('nom_client','')}", msg.strip(), height=300)
+
 def vue_settings(df: pd.DataFrame, palette: dict):
     """Sauvegarde / restauration des données + maintenance apartments.csv + cache."""
     apt = _current_apartment()
