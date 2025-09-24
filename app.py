@@ -613,7 +613,7 @@ def vue_id(df, palette):
     st.dataframe(tbl, use_container_width=True)
 
 
-# ============================== PARAMÈTRES ==============================
+# =============================== PARAMÈTRES ==============================
 def vue_settings(df: pd.DataFrame, palette: dict):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
