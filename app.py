@@ -1540,31 +1540,77 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 
 
-# ============================== MAIN ==============================
+# # ============================== MAIN ==============================
 def main():
-    # -- Reset cache via URL ?clear=1 --
-    params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
+    try:
+        # -- Reset cache via URL ?clear=1 --
+        params = st.query_params
+        if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+
+        # -- Sélection appartement --
+        changed = _select_apartment_sidebar()
+        if changed:
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            # on ne rerun pas immédiatement : la suite se base déjà sur les bons chemins
+
+        # -- Thème clair/obscur --
         try:
-            st.cache_data.clear()
+            mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
         except Exception:
-            pass
+            mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
 
-    # -- Sélecteur d'appartement --
-    changed = _select_apartment_sidebar()
-    if changed:
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        # Pas de st.rerun ici : on continue, les pages liront les chemins mis à jour.
+        # IMPORTANT : s'assurer que apply_style est bien défini plus haut dans le fichier
+        apply_style(light=bool(mode_clair))
 
-    # -- Thème clair/obscur --
-try:
-    mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
-except Exception:
-    mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
+        # -- En-tête avec appartement --
+        apt = _current_apartment()
+        apt_name = apt["name"] if apt else "—"
+        st.title(f"✨ {apt_name} — Gestion des Réservations")
 
-apply_style(light=bool(mode_clair))
-    # -- En-tête avec nom d'appartement --
-    apt = 
+        # -- Chargement des données/palette pour l'appartement actif --
+        df, palette_loaded = _load_data_for_active_apartment()
+        if df is None:
+            df = pd.DataFrame(columns=BASE_COLS)
+        palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
+
+        # -- Navigation (s'assurer que ces vues existent dans le fichier) --
+        pages = {
+            "🏠 Accueil": vue_accueil,
+            "📋 Réservations": vue_reservations,
+            "➕ Ajouter": vue_ajouter,
+            "✏️ Modifier / Supprimer": vue_modifier,
+            "🎨 Plateformes": vue_plateformes,
+            "📅 Calendrier": vue_calendrier,
+            "📊 Rapport": vue_rapport,
+            "✉️ SMS": vue_sms,
+            "📆 Export ICS": vue_export_ics,
+            "📝 Google Sheet": vue_google_sheet,
+            "👥 Clients": vue_clients,
+            "🆔 ID": vue_id,
+            # "🌍 Indicateurs pays": vue_pays,  # décommente seulement si la vue existe
+            "⚙️ Paramètres": vue_settings,
+        }
+
+        choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
+        page_func = pages.get(choice)
+        if page_func is None:
+            st.error("Page inconnue.")
+            return
+
+        page_func(df, palette)
+
+    except Exception as e:
+        import traceback
+        st.error(f"Erreur dans main(): {e}")
+        st.code(traceback.format_exc())
+
+
+if __name__ == "__main__":
+    main()
