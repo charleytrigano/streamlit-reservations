@@ -653,11 +653,10 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Erreur import manuel : {e}")
 
 
-# ---- CSS global (impression A4 paysage + UI) ----
+# # ============================== CSS & PRINT HEADER ==============================
 def _apply_custom_css():
     css = """
     <style>
-    /* --------- Impression A4 paysage --------- */
     @media print {
       @page { size: A4 landscape; margin: 10mm; }
       [data-testid="stSidebar"], header, footer { display: none !important; }
@@ -665,58 +664,92 @@ def _apply_custom_css():
       .block-container { padding: 0 !important; }
       .stDataFrame, .stTable { break-inside: avoid; }
     }
-
-    /* --------- Petits styles UI --------- */
     .chip small { opacity: .75; }
     .stButton>button { border-radius: 10px; }
     .stDownloadButton>button { border-radius: 10px; }
-
-    /* Masque colonnes techniques */
-    .hide-tech { display: none !important; }
-
-    /* Bandeau imprimable */
     .print-header {
       display: none;
       font-weight: 700; margin: 0 0 8px 0; padding: 6px 0;
       border-bottom: 1px solid rgba(0,0,0,.15);
     }
-    @media print {
-      .print-header { display: block; }
-    }
+    @media print { .print-header { display: block; } }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
-# ============================== MAIN ==============================
+def render_print_header(apt_name: str):
+    st.markdown(
+        f"<div class='print-header'>Réservations — {apt_name}</div>",
+        unsafe_allow_html=True
+    )
 
+# ============================== MAIN ==============================
 def main():
-    st.set_page_config(page_title="✨ Villa Tobias — Réservations", layout="wide")
+    # Reset cache via URL ?clear=1
+    params = st.query_params
+    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+    # Sélecteur d'appartement
+    _select_apartment_sidebar()
+
+    # Thème + CSS
+    try:
+        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
+    except Exception:
+        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
+    apply_style(light=bool(mode_clair))
     _apply_custom_css()
 
-    changed = _select_apartment_sidebar()
+    # En-tête + chargement données
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.title(f"✨ {apt_name} — Gestion des Réservations")
+    render_print_header(apt_name)
+
     df, palette_loaded = _load_data_for_active_apartment()
+    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier_supprimer,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-        "🆔 ID": vue_id,
-        "⚙️ Paramètres": vue_settings,
-    }
+    # Construire le dictionnaire des pages APRÈS la définition de toutes les vues
+    pages = {}
+    # On ajoute prudemment (si la fonction existe bien)
+    for label, fn_name in [
+        ("🏠 Accueil", "vue_accueil"),
+        ("📋 Réservations", "vue_reservations"),
+        ("➕ Ajouter", "vue_ajouter"),
+        ("✏️ Modifier / Supprimer", "vue_modifier"),
+        ("🎨 Plateformes", "vue_plateformes"),
+        ("📅 Calendrier", "vue_calendrier"),
+        ("📊 Rapport", "vue_rapport"),
+        ("✉️ SMS", "vue_sms"),
+        ("📆 Export ICS", "vue_export_ics"),
+        ("📝 Google Sheet", "vue_google_sheet"),
+        ("👥 Clients", "vue_clients"),
+        ("🆔 ID", "vue_id"),
+        ("🌍 Indicateurs pays", "vue_pays"),
+        ("⚙️ Paramètres", "vue_settings"),
+    ]:
+        fn = globals().get(fn_name)
+        if callable(fn):
+            pages[label] = fn
+        else:
+            # Si une vue manque, on l’ignore pour éviter le crash
+            st.sidebar.warning(f"Vue absente: {fn_name} (ignorée)")
 
-    choice = st.sidebar.radio("Aller à", list(pages.keys()))
+    # Navigation
+    if not pages:
+        st.error("Aucune page disponible. Vérifie que toutes les fonctions de vue sont définies.")
+        return
+
+    choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
     page_func = pages.get(choice)
     if page_func:
-        page_func(df, palette_loaded)
-
+        page_func(df, palette)
+    else:
+        st.error("Page introuvable.")
 
 if __name__ == "__main__":
     main()
