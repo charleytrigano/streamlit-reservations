@@ -683,6 +683,7 @@ def render_print_header(apt_name: str):
         unsafe_allow_html=True
     )
 
+
 # ============================== CSS & PRINT HEADER ==============================
 def _apply_custom_css():
     css = """
