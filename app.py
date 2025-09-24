@@ -1552,6 +1552,116 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 
 
+def vue_export_ics(df: pd.DataFrame, palette: dict):
+    """Export des réservations au format .ics (iCalendar)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📆 Export ICS — {apt_name}")
+    print_buttons()
+
+    if df is None or df.empty:
+        st.info("Aucune réservation.")
+        return
+
+    dfa = df.copy()
+    dfa["date_arrivee_dt"] = pd.to_datetime(dfa["date_arrivee"], errors="coerce")
+    dfa["date_depart_dt"]  = pd.to_datetime(dfa["date_depart"],  errors="coerce")
+
+    years = sorted(
+        dfa["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(),
+        reverse=True
+    )
+    year = st.selectbox("Année (arrivées)", years if years else [date.today().year], index=0)
+
+    plats = ["Tous"] + sorted(df["plateforme"].astype(str).dropna().unique().tolist())
+    plat  = st.selectbox("Plateforme", plats, index=0)
+
+    data = dfa[dfa["date_arrivee_dt"].dt.year == int(year)].copy()
+    if plat != "Tous":
+        data = data[data["plateforme"].astype(str) == str(plat)]
+
+    if data.empty:
+        st.warning("Rien à exporter pour ces filtres.")
+        return
+
+    # Assure des UID stables
+    miss = data["ical_uid"].isna() | (data["ical_uid"].astype(str).str.strip() == "")
+    if miss.any():
+        data.loc[miss, "ical_uid"] = data.loc[miss].apply(build_stable_uid, axis=1)
+
+    nowstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+    def _fmt(d):
+        if isinstance(d, datetime): d = d.date()
+        if isinstance(d, date):
+            return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+        try:
+            dd = pd.to_datetime(d, errors="coerce")
+            return dd.strftime("%Y%m%d")
+        except Exception:
+            return ""
+
+    def _esc(s):
+        if s is None:
+            return ""
+        return (
+            str(s)
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace(",", "\\,")
+            .replace(";", "\\;")
+        )
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Villa Tobias//Reservations//FR",
+        "CALSCALE:GREGORIAN",
+    ]
+
+    # On exporte sous forme d'événements "journée entière" (DTSTART/DTEND en VALUE=DATE)
+    for _, r in data.iterrows():
+        dt_a = pd.to_datetime(r["date_arrivee"], errors="coerce")
+        dt_d = pd.to_datetime(r["date_depart"],  errors="coerce")
+        if pd.isna(dt_a) or pd.isna(dt_d):
+            continue
+
+        summary = f"{apt_name} — {r.get('nom_client','Sans nom')}"
+        if r.get("plateforme"):
+            summary += f" ({r.get('plateforme')})"
+
+        desc = "\n".join([
+            f"Client: {r.get('nom_client','')}",
+            f"Téléphone: {r.get('telephone','')}",
+            f"Nuitées: {int(pd.to_numeric(r.get('nuitees'), errors='coerce') or 0)}",
+            f"Prix brut: {float(pd.to_numeric(r.get('prix_brut'), errors='coerce') or 0):.2f} €",
+            f"res_id: {r.get('res_id','')}",
+        ])
+
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{r['ical_uid']}",
+            f"DTSTAMP:{nowstamp}",
+            f"DTSTART;VALUE=DATE:{_fmt(dt_a)}",
+            f"DTEND;VALUE=DATE:{_fmt(dt_d)}",
+            f"SUMMARY:{_esc(summary)}",
+            f"DESCRIPTION:{_esc(desc)}",
+            "TRANSP:OPAQUE",
+            "END:VEVENT",
+        ]
+
+    lines.append("END:VCALENDAR")
+    ics = "\r\n".join(lines) + "\r\n"
+
+    st.download_button(
+        "📥 Télécharger .ics",
+        data=ics.encode("utf-8"),
+        file_name=f"reservations_{year}.ics",
+        mime="text/calendar",
+        key="dl_ics"
+    )
+
+
 # ------------------------------- MAIN ---------------------------------
 
 def main():
