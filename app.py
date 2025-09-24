@@ -846,6 +846,8 @@ def vue_calendrier(df: pd.DataFrame, palette: dict):
         )
 
 
+
+
 def vue_rapport(df: pd.DataFrame, palette: dict):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
@@ -1121,6 +1123,9 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
         st.altair_chart(chart_occ.properties(height=420), use_container_width=True)
     except Exception as e:
         st.warning(f"Graphique du taux d'occupation indisponible : {e}")
+
+
+
 
 # ============================== PARTIE 4/5 — SMS, Export ICS, Google Sheet, Clients, ID ==============================
 
