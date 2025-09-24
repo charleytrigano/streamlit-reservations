@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import altair as alt
+from html import escape
 
 # ============================== CONFIG APP ==============================
 st.set_page_config(
