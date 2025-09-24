@@ -613,176 +613,164 @@ def vue_id(df, palette):
     st.dataframe(tbl, use_container_width=True)
 
 
+# ============================== PARAMÈTRES ==============================
 def vue_settings(df: pd.DataFrame, palette: dict):
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
-    st.header(f"⚙️ Paramètres — {apt_name}")
+    st.header("## ⚙️ Paramètres")
+    st.subheader(apt_name)
     print_buttons()
+    st.caption("Sauvegarde, restauration, cache, import manuel, diagnostic et écrasement apartments.csv.")
 
-    st.subheader("💾 Sauvegarde (exports)")
-    export_csv(df, CSV_RESERVATIONS, "Exporter réservations CSV")
-    export_xlsx(df, "reservations_export.xlsx", "Exporter réservations XLSX")
+    # Sauvegarde CSV/XLSX
+    st.markdown("### 💾 Sauvegarde (exports)")
+    try:
+        out = ensure_schema(df).copy()
+        out["pays"] = out["telephone"].apply(_phone_country)
+        for col in ["date_arrivee","date_depart"]:
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
+        csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
+    except Exception:
+        csv_bytes = b""
 
-    st.subheader("♻️ Restauration (remplacer les données)")
-    uploaded = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_file")
-    if uploaded is not None:
+    c1,c2 = st.columns(2)
+    c1.download_button("⬇️ Exporter réservations (CSV)",
+        data=csv_bytes, file_name=os.path.basename(CSV_RESERVATIONS), mime="text/csv")
+
+    try:
+        out_xlsx = ensure_schema(df).copy()
+        out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
+        for col in ["date_arrivee","date_depart"]:
+            out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
+        xlsx_bytes, _ = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
+    except Exception:
+        xlsx_bytes = None
+
+    c2.download_button("⬇️ Exporter réservations (XLSX)",
+        data=xlsx_bytes or b"", file_name=os.path.splitext(os.path.basename(CSV_RESERVATIONS))[0] + ".xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=(xlsx_bytes is None))
+
+    # Restauration CSV/XLSX
+    st.markdown("### ♻️ Restauration (remplacer les données)")
+    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv","xlsx"], key="restore_uploader_settings")
+    if up is not None:
         try:
-            content = uploaded.read()
-            with open(CSV_RESERVATIONS, "wb") as f:
-                f.write(content)
-            st.success("Fichier restauré avec succès.")
-            st.experimental_rerun()
+            if up.name.lower().endswith(".xlsx"):
+                xls = pd.ExcelFile(up)
+                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0)
+                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
+            else:
+                raw = up.read()
+                tmp = _detect_delimiter_and_read(raw)
+            prev = ensure_schema(tmp)
+            st.success(f"Aperçu chargé ({up.name})")
+            with st.expander("Aperçu (10 premières lignes)"):
+                st.dataframe(prev.head(10), use_container_width=True)
+
+            if st.button("✅ Confirmer la restauration"):
+                save = prev.copy()
+                for col in ["date_arrivee","date_depart"]:
+                    save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
+                save.to_csv(CSV_RESERVATIONS, sep=";", index=False, encoding="utf-8", lineterminator="\n")
+                st.cache_data.clear()
+                st.success("Fichier restauré — rechargement…")
+                st.rerun()
         except Exception as e:
             st.error(f"Erreur restauration : {e}")
 
-    st.subheader("🧹 Vider le cache")
-    if st.button("Vider le cache"):
-        st.cache_data.clear()
-        st.success("Cache vidé.")
+    # Vider cache
+    st.markdown("### 🧹 Vider le cache")
+    if st.button("Vider le cache & recharger"):
+        try: st.cache_data.clear()
+        except Exception: pass
+        st.rerun()
 
-    st.subheader("⛑️ Import manuel (remplacement immédiat)")
-    manual = st.file_uploader("Choisir un fichier (CSV ou XLSX)", type=["csv", "xlsx"], key="manual_import")
-    if manual is not None:
+    # Outil secours apartments.csv
+    st.markdown("### 🧰 Écraser apartments.csv")
+    default_csv = "slug,name\nvilla-tobias,Villa Tobias\nle-turenne,Le Turenne\n"
+    txt = st.text_area("Contenu apartments.csv", value=default_csv, height=140)
+    if st.button("🧰 Écraser apartments.csv (outil secours)"):
         try:
-            content = manual.read()
-            with open(CSV_RESERVATIONS, "wb") as f:
-                f.write(content)
-            st.success("Import manuel effectué.")
-            st.experimental_rerun()
+            with open(APARTMENTS_CSV, "w", encoding="utf-8", newline="") as f:
+                f.write(txt.strip()+"\n")
+            st.cache_data.clear()
+            st.success("apartments.csv écrasé ✅ — rechargement…")
+            st.rerun()
         except Exception as e:
-            st.error(f"Erreur import manuel : {e}")
+            st.error(f"Impossible d'écrire apartments.csv : {e}")
 
 
-# # ============================== CSS & PRINT HEADER ==============================
+# ============================== CSS IMPRIMER ==============================
 def _apply_custom_css():
-    css = """
-    <style>
-    @media print {
-      @page { size: A4 landscape; margin: 10mm; }
-      [data-testid="stSidebar"], header, footer { display: none !important; }
-      body, [data-testid="stAppViewContainer"] { font-size: 12pt !important; }
-      .block-container { padding: 0 !important; }
-      .stDataFrame, .stTable { break-inside: avoid; }
-    }
-    .chip small { opacity: .75; }
-    .stButton>button { border-radius: 10px; }
-    .stDownloadButton>button { border-radius: 10px; }
-    .print-header {
-      display: none;
-      font-weight: 700; margin: 0 0 8px 0; padding: 6px 0;
-      border-bottom: 1px solid rgba(0,0,0,.15);
-    }
-    @media print { .print-header { display: block; } }
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-
-def render_print_header(apt_name: str):
     st.markdown(
-        f"<div class='print-header'>Réservations — {apt_name}</div>",
+        """
+        <style>
+        @media print {
+            @page { size: A4 landscape; margin: 10mm; }
+            body { -webkit-print-color-adjust: exact; }
+            header, footer, [data-testid="stSidebar"], [data-testid="stToolbar"] {display: none !important;}
+            .print-header { display: block; }
+        }
+        .print-header { display: none; text-align: center; margin-bottom: 20px; }
+        </style>
+        """,
         unsafe_allow_html=True
     )
 
+def render_print_header():
+    st.markdown("<div class='print-header'><h2>📄 Réservations exportées</h2></div>", unsafe_allow_html=True)
 
-# ============================== CSS & PRINT HEADER ==============================
-def _apply_custom_css():
-    css = """
-    <style>
-    @media print {
-      @page { size: A4 landscape; margin: 10mm; }
-      [data-testid="stSidebar"], header, footer { display: none !important; }
-      body, [data-testid="stAppViewContainer"] { font-size: 12pt !important; }
-      .block-container { padding: 0 !important; }
-      .stDataFrame, .stTable { break-inside: avoid; }
-    }
-    .chip small { opacity: .75; }
-    .stButton>button, .stDownloadButton>button { border-radius: 10px; }
-    .print-header {
-      display: none;
-      font-weight: 700; margin: 0 0 8px 0; padding: 6px 0;
-      border-bottom: 1px solid rgba(0,0,0,.15);
-    }
-    @media print { .print-header { display: block; } }
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-
-def render_print_header(apt_name: str):
-    st.markdown(
-        f"<div class='print-header'>Réservations — {apt_name}</div>",
-        unsafe_allow_html=True
-    )
 
 # ============================== MAIN ==============================
 def main():
     # Reset cache via URL ?clear=1
     params = st.query_params
-    if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
+    if params.get("clear", ["0"])[0] in ("1","true","True","yes"):
+        try: st.cache_data.clear()
+        except Exception: pass
 
-    # Auto-crée apartments.csv si manquant
-    if not os.path.exists("apartments.csv"):
-        with open("apartments.csv", "w", encoding="utf-8", newline="") as f:
-            f.write("slug,name\nvilla-tobias,Villa Tobias\n")
+    # Sélection appartement
+    changed = _select_apartment_sidebar()
+    if changed:
+        try: st.cache_data.clear()
+        except Exception: pass
 
-    # Sélecteur d'appartement
-    _select_apartment_sidebar()
-
-    # Thème + CSS
-    try:
-        mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
-    except Exception:
-        mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
+    # Thème
+    mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
     apply_style(light=bool(mode_clair))
     _apply_custom_css()
+    render_print_header()
 
-    # En-tête + chargement données
+    # En-tête
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.title(f"✨ {apt_name} — Gestion des Réservations")
-    render_print_header(apt_name)
 
+    # Chargement données
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    # Construire dictionnaire des pages APRÈS définition des vues
-    pages = {}
-    for label, fn_name in [
-        ("🏠 Accueil", "vue_accueil"),
-        ("📋 Réservations", "vue_reservations"),
-        ("➕ Ajouter", "vue_ajouter"),
-        ("✏️ Modifier / Supprimer", "vue_modifier"),
-        ("🎨 Plateformes", "vue_plateformes"),
-        ("📅 Calendrier", "vue_calendrier"),
-        ("📊 Rapport", "vue_rapport"),
-        ("✉️ SMS", "vue_sms"),
-        ("📆 Export ICS", "vue_export_ics"),
-        ("📝 Google Sheet", "vue_google_sheet"),
-        ("👥 Clients", "vue_clients"),
-        ("🆔 ID", "vue_id"),
-        ("🌍 Indicateurs pays", "vue_pays"),
-        ("⚙️ Paramètres", "vue_settings"),
-    ]:
-        fn = globals().get(fn_name)
-        if callable(fn):
-            pages[label] = fn
-        else:
-            st.sidebar.warning(f"Vue absente: {fn_name} (ignorée)")
+    # Pages
+    pages = {
+        "🏠 Accueil": vue_accueil,
+        "📋 Réservations": vue_reservations,
+        "➕ Ajouter": vue_ajouter,
+        "✏️ Modifier / Supprimer": vue_modifier,
+        "🎨 Plateformes": vue_plateformes,
+        "📅 Calendrier": vue_calendrier,
+        "📊 Rapport": vue_rapport,
+        "✉️ SMS": vue_sms,
+        "📆 Export ICS": vue_export_ics,
+        "📝 Google Sheet": vue_google_sheet,
+        "👥 Clients": vue_clients,
+        "🆔 ID": vue_id,
+        "⚙️ Paramètres": vue_settings,
+    }
 
-    # Navigation
-    if not pages:
-        st.error("Aucune page disponible. Vérifie que toutes les fonctions sont définies.")
-        return
-
-    choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
+    choice = st.sidebar.radio("Aller à", list(pages.keys()))
     page_func = pages.get(choice)
     if page_func:
         page_func(df, palette)
-    else:
-        st.error("Page introuvable.")
 
 if __name__ == "__main__":
     main()
