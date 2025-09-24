@@ -653,6 +653,48 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Erreur import manuel : {e}")
 
 
+# ---- CSS global (impression A4 paysage + petits raffinements UI) ----
+def _apply_custom_css():
+    st.markdown(
+        """
+        <style>
+        /* --------- Impression A4 paysage --------- */
+        @media print {
+          @page { size: A4 landscape; margin: 10mm; }
+          /* Enlève la sidebar et la barre de menu Streamlit à l'impression */
+          [data-testid="stSidebar"], header, footer { display: none !important; }
+          /* Agrandit un peu le texte imprimé */
+          body, [data-testid="stAppViewContainer"] { font-size: 12pt !important; }
+          /* Évite les coupures bizarres */
+          .block-container { padding: 0 !important; }
+          .stDataFrame, .stTable { break-inside: avoid; }
+        }
+
+        /* --------- Petits styles UI --------- */
+        .chip small { opacity: .75; }
+        .stButton>button { border-radius: 10px; }
+        .stDownloadButton>button { border-radius: 10px; }
+
+        /* Masque les colonnes techniques si besoin (on peut utiliser column_config côté DataFrame) */
+        .hide-tech { display: none !important; }
+
+        /* Bandeau d’en-tête imprimable (si tu l’utilises) */
+        .print-header {
+          display: none;
+          font-weight: 700; margin: 0 0 8px 0; padding: 6px 0;
+          border-bottom: 1px solid rgba(0,0,0,.15);
+        }
+        @media print {
+          .print-header { display: block; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+st.markdown(f"<div class='print-header'>{(_current_apartment() or {}).get('name','—')} — Export</div>", unsafe_allow_html=True)
+
 # ============================== MAIN ==============================
 
 def main():
