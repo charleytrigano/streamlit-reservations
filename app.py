@@ -777,12 +777,13 @@ def vue_calendrier(df, palette):
         mask = (dfv["date_arrivee"] <= d) & (dfv["date_depart"] > d)
         return dfv[mask]
 
-    from html import escape  # à mettre en haut du fichier une seule fois
+  from html import escape  # à mettre en haut du fichier une seule fois
 
 # ...
 
 cal = Calendar(firstweekday=0)
 html_parts = ["<div class='cal-grid'>"]
+
 for week in cal.monthdatescalendar(annee, mois):
     for d in week:
         outside = (d.month != mois)
@@ -794,7 +795,7 @@ for week in cal.monthdatescalendar(annee, mois):
             if not rs.empty:
                 for _, r in rs.iterrows():
                     color = palette.get(r.get("plateforme"), "#888")
-                    name  = str(r.get("nom_client") or "")[:22]
+                    name = str(r.get("nom_client") or "")[:22]
                     title_txt = escape(str(r.get("nom_client", "")), quote=True)
 
                     cell += (
@@ -805,14 +806,15 @@ for week in cal.monthdatescalendar(annee, mois):
                     )
         cell += "</div>"
         html_parts.append(cell)
+
 html_parts.append("</div>")
 st.markdown("".join(html_parts), unsafe_allow_html=True)
+st.markdown("---")
 
-
-    st.subheader("Détail du mois sélectionné")
-    debut_mois = date(annee, mois, 1)
-    fin_mois = date(annee, mois, monthrange(annee, mois)[1])
-    rows = dfv[(dfv["date_arrivee"] <= fin_mois) & (dfv["date_depart"] > debut_mois)].copy()
+st.subheader("Détail du mois sélectionné")
+debut_mois = date(annee, mois, 1)
+fin_mois = date(annee, mois, monthrange(annee, mois)[1])
+rows = dfv[(dfv["date_arrivee"] <= fin_mois) & (dfv["date_depart"] > debut_mois)].copy()
 
     if rows.empty:
         st.info("Aucune réservation sur ce mois.")
