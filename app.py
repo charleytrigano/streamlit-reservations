@@ -1,7 +1,7 @@
 # ============================== PART 1/5 - IMPORTS, CONFIG, STYLES, HELPERS ==============================
 
-import os
-import io
+# tout en haut
+import os, io, re, uuid, hashlib
 import pandas as pd
 import streamlit as st
 from datetime import date, datetime, timedelta
@@ -171,12 +171,19 @@ def _df_to_xlsx_bytes(df: pd.DataFrame, sheet_name: str = "Reservations"):
         return None, e
 
 def _format_phone_e164(phone: str) -> str:
-    s = re.sub(r"\D","", str(phone or ""))
-    if not s: return ""
-    if s.startswith("33"): return "+"+s
-    if s.startswith("0"):  return "+33"+s[1:]
-    return "+"+s
-
+    # robustesse si l'import du haut est retiré par erreur
+    import re  # <-- garde cette ligne
+    s = re.sub(r"\D", "", str(phone or ""))
+    if not s:
+        return ""
+    # Déjà au format +E164 ?
+    if str(phone).strip().startswith("+"):
+        return "+" + s
+    # France: numéro local commençant par 0 -> +33 sans le 0
+    if s.startswith("0"):
+        return "+33" + s[1:]
+    # N° déjà avec indicatif sans '+', ex: 33xxxxxxxxx
+    return "+" + s
 # ------------------------------ INDICATIFS PAYS (CSV ÉDITABLE) ------------------------------
 def _ensure_country_codes_file():
     """Crée un CSV d'indicatifs si absent (UTF-8)."""
