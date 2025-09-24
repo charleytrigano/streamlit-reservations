@@ -1567,33 +1567,4 @@ except Exception:
 
 apply_style(light=bool(mode_clair))
     # -- En-tête avec nom d'appartement --
-    apt = _current_apartment()
-    apt_name = apt["name"] if apt else "—"
-    st.title(f"✨ {apt_name} — Gestion des Réservations")
-
-    # -- Chargement des données (fichiers selon l'appartement actif) --
-    df, palette_loaded = _load_data_for_active_apartment()
-    palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
-
-    # -- Navigation (garder EXACTEMENT ces libellés/fonctions) --
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-        "🆔 ID": vue_id,
-        "⚙️ Paramètres": vue_settings,
-    }
-    choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
-    pages[choice](df, palette)
-
-
-if __name__ == "__main__":
-    main()
+    apt = 
