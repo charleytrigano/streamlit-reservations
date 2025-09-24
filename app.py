@@ -776,31 +776,37 @@ def vue_calendrier(df, palette):
         mask = (dfv["date_arrivee"] <= d) & (dfv["date_depart"] > d)
         return dfv[mask]
 
-    cal = Calendar(firstweekday=0)
-    html = ["<div class='cal-grid'>"]
-    for week in cal.monthdatescalendar(annee, mois):
-        for d in week:
-            outside = (d.month != mois)
-            classes = "cal-cell outside" if outside else "cal-cell"
-            cell = f"<div class='{classes}'>"
-            cell += f"<div class='cal-date'>{d.day}</div>"
-            if not outside:
-                rs = day_resas(d)
-                if not rs.empty:
-                    for _, r in rs.iterrows():
-                        color = palette.get(r.get("plateforme"), "#888")
-                        name = str(r.get("nom_client") or "")[:22]
-                        cell += (
-                            "<div class='resa-pill' "
-                            f"style='background:{color}' "
-                            f"title='{str(r.get('nom_client', '')).replace('\"','&quot;')}'>"
-                            f"{name}</div>"
-                        )
-            cell += "</div>"
-            html.append(cell)
-    html.append("</div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
-    st.markdown("---")
+    from html import escape  # à mettre en haut du fichier une seule fois
+
+# ...
+
+cal = Calendar(firstweekday=0)
+html_parts = ["<div class='cal-grid'>"]
+for week in cal.monthdatescalendar(annee, mois):
+    for d in week:
+        outside = (d.month != mois)
+        classes = "cal-cell outside" if outside else "cal-cell"
+        cell = f"<div class='{classes}'>"
+        cell += f"<div class='cal-date'>{d.day}</div>"
+        if not outside:
+            rs = day_resas(d)
+            if not rs.empty:
+                for _, r in rs.iterrows():
+                    color = palette.get(r.get("plateforme"), "#888")
+                    name  = str(r.get("nom_client") or "")[:22]
+                    title_txt = escape(str(r.get("nom_client", "")), quote=True)
+
+                    cell += (
+                        "<div class='resa-pill' "
+                        f"style='background:{color}' "
+                        f"title='{title_txt}'>"
+                        f"{name}</div>"
+                    )
+        cell += "</div>"
+        html_parts.append(cell)
+html_parts.append("</div>")
+st.markdown("".join(html_parts), unsafe_allow_html=True)
+
 
     st.subheader("Détail du mois sélectionné")
     debut_mois = date(annee, mois, 1)
