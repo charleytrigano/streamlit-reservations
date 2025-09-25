@@ -1457,6 +1457,100 @@ def vue_settings(df: pd.DataFrame, palette: dict):
 
 
 # ------------------------------- MAIN -------------------------------
+# ============================== INDICATIFS (CSV + Page) ==============================
+INDICATIFS_CSV = "countries_with_flags.csv"
+
+def create_indicatifs_csv():
+    """Crée le CSV d'indicatifs avec drapeaux si le fichier n'existe pas."""
+    if os.path.exists(INDICATIFS_CSV):
+        return
+    rows = [
+        # prefix,country,flag (unicode)
+        ("33",  "France",          "🇫🇷"),
+        ("34",  "Espagne",         "🇪🇸"),
+        ("39",  "Italie",          "🇮🇹"),
+        ("41",  "Suisse",          "🇨🇭"),
+        ("32",  "Belgique",        "🇧🇪"),
+        ("352", "Luxembourg",      "🇱🇺"),
+        ("351", "Portugal",        "🇵🇹"),
+        ("49",  "Allemagne",       "🇩🇪"),
+        ("44",  "Royaume-Uni",     "🇬🇧"),
+        ("1",   "États-Unis/Canada","🇺🇸/🇨🇦"),
+        ("61",  "Australie",       "🇦🇺"),
+        ("64",  "Nouvelle-Zélande","🇳🇿"),
+        ("31",  "Pays-Bas",        "🇳🇱"),
+        ("353", "Irlande",         "🇮🇪"),
+        ("46",  "Suède",           "🇸🇪"),
+        ("47",  "Norvège",         "🇳🇴"),
+        ("48",  "Pologne",         "🇵🇱"),
+        ("43",  "Autriche",        "🇦🇹"),
+        ("45",  "Danemark",        "🇩🇰"),
+        ("90",  "Turquie",         "🇹🇷"),
+        ("212", "Maroc",           "🇲🇦"),
+        ("216", "Tunisie",         "🇹🇳"),
+        ("971", "Émirats Arabes Unis","🇦🇪"),
+    ]
+    pd.DataFrame(rows, columns=["prefix","country","flag"]).to_csv(
+        INDICATIFS_CSV, index=False, encoding="utf-8", lineterminator="\n"
+    )
+
+@st.cache_data(show_spinner=False)
+def load_indicatifs() -> pd.DataFrame:
+    """Charge le CSV des indicatifs (crée un fichier par défaut si absent)."""
+    create_indicatifs_csv()
+    try:
+        df = pd.read_csv(INDICATIFS_CSV, dtype=str)
+    except Exception:
+        df = pd.DataFrame(columns=["prefix","country","flag"])
+    # Nettoyage minimal
+    for c in ["prefix","country","flag"]:
+        if c not in df.columns:
+            df[c] = ""
+        df[c] = df[c].astype(str).str.strip()
+    # Unicité par préfixe (garde la première occurrence)
+    if not df.empty:
+        df = df.drop_duplicates(subset=["prefix"], keep="first")
+    return df[["prefix","country","flag"]]
+
+def vue_indicatifs(df: pd.DataFrame, palette: dict):
+    """Page de consultation/édition des indicatifs pays (préfixe → pays + drapeau)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🌍 Indicateurs pays — {apt_name}")
+    print_buttons()
+
+    base = load_indicatifs().copy()
+    st.caption("Ajoutez/modifiez les lignes. Le préfixe doit être **sans +** (ex: 33).")
+    edited = st.data_editor(
+        base,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "prefix":  st.column_config.TextColumn("Préfixe", help="Ex: 33, 351, 1…"),
+            "country": st.column_config.TextColumn("Pays",     help="Nom du pays"),
+            "flag":    st.column_config.TextColumn("Drapeau",  help="Emoji drapeau (facultatif)"),
+        },
+        key="indicatifs_editor",
+    )
+
+    c1, c2 = st.columns([0.6, 0.4])
+    if c1.button("💾 Enregistrer les indicatifs"):
+        try:
+            to_save = edited.copy()
+            to_save["prefix"]  = to_save["prefix"].astype(str).str.strip()
+            to_save["country"] = to_save["country"].astype(str).str.strip()
+            to_save["flag"]    = to_save["flag"].astype(str).str.strip()
+            to_save = to_save[to_save["prefix"] != ""].drop_duplicates(subset=["prefix"])
+            to_save.to_csv(INDICATIFS_CSV, index=False, encoding="utf-8", lineterminator="\n")
+            st.cache_data.clear()
+            st.success("Indicatifs enregistrés ✅")
+        except Exception as e:
+            st.error(f"Erreur d'enregistrement : {e}")
+
+    if c2.button("🔄 Recharger"):
+        st.cache_data.clear()
+        st.rerun()
 
 def main():
     # Reset cache via URL ?clear=1
