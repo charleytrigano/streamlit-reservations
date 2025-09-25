@@ -1233,11 +1233,7 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
 
 
 
-# ============================== PART 5/5 : SMS, PARAMETRES, MAIN ==============================
-
-def vue_sms(df: pd.DataFrame, palette: dict):
-    """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
-    from urllib.parse import quote
+#  import quote
 
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
@@ -1274,7 +1270,10 @@ def vue_sms(df: pd.DataFrame, palette: dict):
 
             msg = (
                 f"{apt_name.upper()}\n"
-                f"Plateforme : {r.get('plateforme','N/A')}\n"
+                f"Plateforme : 
+
+
+{r.get('plateforme','N/A')}\n"
                 f"Arrivée : {arr_txt}  Départ : {dep_txt}  Nuitées : {nuitees}\n\n"
                 f"Bonjour {r.get('nom_client','')}\n"
                 "Bienvenue chez nous !\n\n"
