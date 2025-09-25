@@ -1281,6 +1281,7 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
                 "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant :\n"
                 
 
+
 ============================= PART 5/5 — SMS, PARAMETRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
