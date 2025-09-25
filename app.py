@@ -1282,7 +1282,7 @@ def vue_sms(df: pd.DataFrame, palette: dict):
                 "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant :\n"
                 
 
-# ============================== PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
+============================== PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
     """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
