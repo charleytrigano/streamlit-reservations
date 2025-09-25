@@ -1,4 +1,4 @@
-# ============================== PART 1/5 — IMPORTS, CONFIG, STYLES, CONSTANTES, INDICATIFS, HELPERS ==============================
+Dr# ============================== PART 1/5 — IMPORTS, CONFIG, STYLES, CONSTANTES, INDICATIFS, HELPERS ==============================
 
 import os, io, re, uuid, hashlib
 from datetime import date, datetime, timedelta
@@ -1281,7 +1281,7 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
                 "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant :\n"
                 
 
-# ============================== PART 5/5 — SMS, PARAMETRES, MAIN ==============================
+============================= PART 5/5 — SMS, PARAMETRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
     """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
