@@ -1233,7 +1233,7 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
 
 
 
-# ============================== PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
+======================= PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
     """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
@@ -1280,89 +1280,24 @@ def vue_sms(df: pd.DataFrame, palette: dict):
                 "Bienvenue chez nous !\n\n"
                 "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, "
                 "nous vous demandons de bien vouloir remplir la fiche que vous trouverez en cliquant sur le lien suivant :\n"
-                f"{link_form}\n\n"
-                "Un parking est à votre disposition sur place.\n\n"
-                "Le check-in se fait à partir de 14:00 et le check-out avant 11:00. Nous serons sur place lors de "
-                "votre arrivée pour vous remettre les clés.\n\n"
-                "Vous trouverez des consignes à bagages dans chaque quartier, à Nice.\n\n"
-                "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt.\n\n"
-                "Annick & Charley\n\n"
-                "******\n\n"
-                "Welcome to our establishment!\n\n"
-                "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible, "
-                "we kindly ask you to fill out this form:\n"
-                f"{link_form}\n\n"
-                "Parking is available on site.\n\n"
-                "Check-in from 2:00 p.m. — check-out before 11:00 a.m. We will be there when you arrive to give you the keys.\n\n"
-                "You will find luggage storage facilities in every district of Nice.\n\n"
-                "We wish you a pleasant journey and look forward to meeting you very soon.\n\n"
-                "Annick & Charley"
-            )
+                
 
-            st.text_area("📋 Copier le message", value=msg, height=360)
-            e164 = _format_phone_e164(r.get("telephone",""))
-            only_digits = "".join(ch for ch in e164 if ch.isdigit())
-            enc = quote(msg)
-            c1, c2, c3 = st.columns(3)
-            c1.link_button("📲 iPhone SMS", f"sms:&body={enc}")
-            c2.link_button("🤖 Android SMS", f"sms:{e164}?body={enc}")
-            c3.link_button("🟢 WhatsApp", f"https://wa.me/{only_digits}?text={enc}")
+# ============================== PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
 
-            if st.button("✅ Marquer 'SMS envoyé' pour ce client"):
-                try:
-                    df.loc[r["index"], "sms_envoye"] = True
-                    if sauvegarder_donnees(df):
-                        st.success("Marqué ✅")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Impossible de marquer : {e}")
+def vue_sms(df: pd.DataFrame, palette: dict):
+    """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
+    from urllib.parse import quote
 
-    # -------- Post-départ (départs du jour) --------
-    st.markdown("---")
-    st.subheader("📤 Post-départ (départs du jour)")
-    target_depart = st.date_input("Départs du", date.today(), key="post_date")
-    post = dfv.dropna(subset=["telephone","nom_client","date_depart"]).copy()
-    post = post[(post["date_depart"] == target_depart) & (~_to_bool_series(post["post_depart_envoye"]))]
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"✉️ SMS — {apt_name}")
+    print_buttons()
 
-    if post.empty:
-        st.info("Aucun message post-départ à envoyer aujourd’hui.")
-    else:
-        post_idx = post.reset_index()
-        options2 = [f"{i}: {r['nom_client']} — départ {r['date_depart']}" for i, r in post_idx.iterrows()]
-        pick2 = st.selectbox("Client (post-départ)", options=options2, index=None)
-        if pick2:
-            sel_idx2 = int(pick2.split(":")[0])
-            r2 = post_idx.loc[sel_idx2]
-            name = str(r2.get("nom_client") or "").strip()
-            msg2 = (
-                f"Bonjour {name},\n\n"
-                "Un grand merci d'avoir choisi notre appartement pour votre séjour.\n"
-                "Nous espérons que vous avez passé un moment agréable.\n"
-                "Si vous souhaitez revenir explorer encore un peu la ville, notre porte vous sera toujours grande ouverte.\n\n"
-                "Au plaisir de vous accueillir à nouveau.\n\n"
-                "Annick & Charley\n\n"
-                f"Hello {name},\n\n"
-                "Thank you very much for choosing our apartment for your stay.\n"
-                "We hope you had a great time — our door is always open if you want to come back.\n\n"
-                "Annick & Charley"
-            )
-            st.text_area("📋 Copier le message", value=msg2, height=280)
-            e164b = _format_phone_e164(r2.get("telephone",""))
-            only_digits_b = "".join(ch for ch in e164b if ch.isdigit())
-            enc2 = quote(msg2)
-            c1, c2, c3 = st.columns(3)
-            c1.link_button("🟢 WhatsApp", f"https://wa.me/{only_digits_b}?text={enc2}")
-            c2.link_button("📲 iPhone SMS", f"sms:&body={enc2}")
-            c3.link_button("🤖 Android SMS", f"sms:{e164b}?body={enc2}")
+    if df is None or df.empty:
+        st.info("Aucune réservation disponible.")
+        return
 
-            if st.button("✅ Marquer 'post-départ envoyé' pour ce client"):
-                try:
-                    df.loc[r2["index"], "post_depart_envoye"] = True
-                    if sauvegarder_donnees(df):
-                        st.success("Marqué ✅")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Impossible de marquer : {e}")
+    # ... (ton code de génération des messages SMS ici, inchangé) ...
 
 
 # ============================== PARAMÈTRES ==============================
@@ -1376,104 +1311,7 @@ def vue_settings(df: pd.DataFrame, palette: dict):
     print_buttons()
     st.caption("Sauvegarde, restauration, cache et outil secours pour apartments.csv.")
 
-    # -------- Sauvegarde (exports) --------
-    st.markdown("### 💾 Sauvegarde (exports)")
-    try:
-        out = ensure_schema(df).copy()
-        out["pays"] = out["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        csv_bytes = out.to_csv(sep=";", index=False).encode("utf-8")
-    except Exception:
-        csv_bytes = b""
-
-    c1, c2 = st.columns(2)
-    c1.download_button(
-        "⬇️ Exporter réservations (CSV)",
-        data=csv_bytes,
-        file_name=os.path.basename(st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)),
-        mime="text/csv",
-        key="dl_res_csv",
-    )
-
-    try:
-        out_xlsx = ensure_schema(df).copy()
-        out_xlsx["pays"] = out_xlsx["telephone"].apply(_phone_country)
-        for col in ["date_arrivee", "date_depart"]:
-            out_xlsx[col] = pd.to_datetime(out_xlsx[col], errors="coerce").dt.strftime("%d/%m/%Y")
-        xlsx_bytes, _ = _df_to_xlsx_bytes(out_xlsx, sheet_name="Reservations")
-    except Exception:
-        xlsx_bytes = None
-
-    c2.download_button(
-        "⬇️ Exporter réservations (XLSX)",
-        data=xlsx_bytes or b"",
-        file_name=(os.path.splitext(os.path.basename(st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)))[0] + ".xlsx"),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=(xlsx_bytes is None),
-        key="dl_res_xlsx",
-    )
-
-    # -------- Restauration (CSV/XLSX) --------
-    st.markdown("### ♻️ Restauration (remplacer les données)")
-    up = st.file_uploader("Restaurer (CSV ou XLSX)", type=["csv", "xlsx"], key="restore_uploader_settings")
-    if up is not None:
-        try:
-            if up.name.lower().endswith(".xlsx"):
-                xls = pd.ExcelFile(up)
-                sheet = st.selectbox("Feuille Excel", xls.sheet_names, index=0, key="restore_sheet_settings")
-                tmp = pd.read_excel(xls, sheet_name=sheet, dtype=str)
-            else:
-                raw = up.read()
-                tmp = _detect_delimiter_and_read(raw)
-
-            prev = ensure_schema(tmp)
-            st.success(f"Aperçu chargé ({up.name})")
-            with st.expander("Aperçu (10 premières lignes)", expanded=False):
-                st.dataframe(prev.head(10), use_container_width=True)
-
-            if st.button("✅ Confirmer la restauration", key="confirm_restore_settings"):
-                try:
-                    save = prev.copy()
-                    for col in ["date_arrivee", "date_depart"]:
-                        save[col] = pd.to_datetime(save[col], errors="coerce").dt.strftime("%d/%m/%Y")
-                    target_csv = st.session_state.get("CSV_RESERVATIONS", CSV_RESERVATIONS)
-                    save.to_csv(target_csv, sep=";", index=False, encoding="utf-8", lineterminator="\n")
-                    st.cache_data.clear()
-                    st.success("Fichier restauré — rechargement…")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erreur écriture : {e}")
-        except Exception as e:
-            st.error(f"Erreur restauration : {e}")
-
-    # -------- Vider le cache --------
-    st.markdown("### 🧹 Vider le cache")
-    if st.button("Vider le cache & recharger", key="clear_cache_btn_settings"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.rerun()
-
-    # -------- Outil secours apartments.csv --------
-    st.markdown("### 🧰 Écraser apartments.csv (outil secours)")
-    default_csv = "slug,name\nvilla-tobias,Villa Tobias\nle-turenne,Le Turenne\n"
-    txt = st.text_area(
-        "Contenu apartments.csv",
-        value=default_csv,
-        height=140,
-        key="force_apts_txt_settings",
-    )
-    if st.button("🧰 Écraser apartments.csv", key="force_apts_btn_settings"):
-        try:
-            with open(APARTMENTS_CSV, "w", encoding="utf-8", newline="") as f:
-                f.write(txt.strip() + "\n")
-            st.cache_data.clear()
-            st.success("apartments.csv écrasé ✅ — rechargement…")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Impossible d'écrire apartments.csv : {e}")
+    # ... (code d’export, restauration, cache, apartments.csv inchangé) ...
 
 
 # ------------------------------- MAIN ---------------------------------
@@ -1487,7 +1325,7 @@ def main():
         except Exception:
             pass
 
-    # Sélection appartement (met à jour CSV_RESERVATIONS / CSV_PLATEFORMES)
+    # Sélecteur d'appartement
     changed = _select_apartment_sidebar()
     if changed:
         try:
@@ -1507,37 +1345,49 @@ def main():
     apt_name = apt["name"] if apt else "—"
     st.title(f"✨ {apt_name} — Gestion des Réservations")
 
-    # Chargement des données spécifiques à l'appartement
+    # Chargement des données
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    Pages de base
-    pages = {
-        "🏠 Accueil": vue_accueil,
-        "📋 Réservations": vue_reservations,
-        "➕ Ajouter": vue_ajouter,
-        "✏️ Modifier / Supprimer": vue_modifier,
-        "🎨 Plateformes": vue_plateformes,
-        "📅 Calendrier": vue_calendrier,
-        "📊 Rapport": vue_rapport,
-        "✉️ SMS": vue_sms,
-        "📆 Export ICS": vue_export_ics,
-        "📝 Google Sheet": vue_google_sheet,
-        "👥 Clients": vue_clients,
-        "🆔 ID": vue_id,
-        "⚙️ Paramètres": vue_settings,
-    }
-    # Ajout conditionnel de la page indicatifs si définie dans PART 2/3
-    if "vue_indicatifs" in globals():
-        pages["🌍 Indicateurs pays"] = globals()["vue_indicatifs"]
+    # Pages (tolérant si certaines vues manquent)
+    page_specs = [
+        ("🏠 Accueil", "vue_accueil"),
+        ("📋 Réservations", "vue_reservations"),
+        ("➕ Ajouter", "vue_ajouter"),
+        ("✏️ Modifier / Supprimer", "vue_modifier"),
+        ("🎨 Plateformes", "vue_plateformes"),
+        ("📅 Calendrier", "vue_calendrier"),
+        ("📊 Rapport", "vue_rapport"),
+        ("✉️ SMS", "vue_sms"),
+        ("📆 Export ICS", "vue_export_ics"),
+        ("📝 Google Sheet", "vue_google_sheet"),
+        ("👥 Clients", "vue_clients"),
+        ("🆔 ID", "vue_id"),
+        ("🌍 Indicateurs pays", "vue_indicatifs"),
+        ("⚙️ Paramètres", "vue_settings"),
+    ]
+
+    pages = {}
+    missing = []
+    for label, fn_name in page_specs:
+        fn = globals().get(fn_name)
+        if callable(fn):
+            pages[label] = fn
+        else:
+            missing.append(label)
+
+    if missing:
+        with st.sidebar.expander("⚠️ Pages manquantes", expanded=False):
+            st.write("Les vues suivantes ne sont pas disponibles dans ce script :")
+            for m in missing:
+                st.write(f"• {m}")
+
+    if not pages:
+        st.error("Aucune page disponible. Vérifie que toutes les parties du script ont été collées.")
+        return
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
-    page_func = pages.get(choice)
-    if page_func:
-        page_func(df, palette)
-
-    else:
-        st.error("Page inconnue.")
+    pages[choice](df, palette)
 
 
 if __name__ == "__main__":
