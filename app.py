@@ -199,6 +199,23 @@ def _format_phone_e164(phone: str) -> str:
     # N° déjà avec indicatif sans '+', ex: 33xxxxxxxxx
     return "+" + s
 
+
+def create_indicatifs_csv():
+    """Crée un CSV d'indicatifs si absent (UTF-8)."""
+    filename = "countries_with_flags.csv"
+    if not os.path.exists(filename):
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("indicatif,pays,drapeau\n")
+            f.write("33,France,🇫🇷\n")
+            f.write("34,Espagne,🇪🇸\n")
+            f.write("39,Italie,🇮🇹\n")
+            f.write("41,Suisse,🇨🇭\n")
+            f.write("32,Belgique,🇧🇪\n")
+            f.write("49,Allemagne,🇩🇪\n")
+            f.write("44,Royaume-Uni,🇬🇧\n")
+            f.write("351,Portugal,🇵🇹\n")
+            f.write("1,États-Unis/Canada,🇺🇸\n")
+
 # ------------------------------ INDICATIFS PAYS (CSV ÉDITABLE) ------------------------------
 INDICATIFS_CSV = "countries_with_flags.csv"  # chemin selon l'endroit où vous l’avez mis
 
