@@ -1535,6 +1535,7 @@ def main():
     page_func = pages.get(choice)
     if page_func:
         page_func(df, palette)
+
     else:
         st.error("Page inconnue.")
 
