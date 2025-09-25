@@ -1,7 +1,7 @@
 
             
 
-============================= PART 5/5 — SMS, PARAMETRES, MAIN ==============================
+# ============================ PART 5/5 — SMS, PARAMETRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
     """Page SMS — messages préformatés avant arrivée et après départ (copier/coller)."""
