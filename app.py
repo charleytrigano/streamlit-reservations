@@ -1321,8 +1321,7 @@ def vue_sms(df: pd.DataFrame, palette: dict):
             arr_txt = r["date_arrivee"].strftime("%d/%m/%Y") if pd.notna(r["date_arrivee"]) else ""
             dep_txt = r["date_depart"].strftime("%d/%m/%Y") if pd.notna(r["date_depart"]) else ""
 
-            msg = f"""\
-{apt_name.upper()}
+            apt_name.upper()}
 Plateforme : {r.get('plateforme','N/A')}
 Arrivée : {arr_txt}  Départ : {dep_txt}  Nuitées : {nuitees}
 
@@ -1364,6 +1363,7 @@ We wish you a pleasant journey and look forward to meeting you very soon.
 
 Annick & Charley
 """
+{
 
             st.text_area("📋 Copier le message", value=msg, height=360)
             # Liens rapides
