@@ -1509,7 +1509,7 @@ def main():
     df, palette_loaded = _load_data_for_active_apartment()
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
-    # Pages de base
+    Pages de base
     pages = {
         "🏠 Accueil": vue_accueil,
         "📋 Réservations": vue_reservations,
