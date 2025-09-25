@@ -1231,6 +1231,8 @@ def vue_google_sheet(df: pd.DataFrame, palette: dict):
     except Exception as e:
         st.error(f"Impossible de charger la feuille publiée : {e}")
 
+
+
 # ============================== PART 5/5 — SMS, PARAMÈTRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
