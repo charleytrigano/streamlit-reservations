@@ -126,6 +126,20 @@ def _detect_delimiter_and_read(raw: bytes) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ------------------------------ HELPERS DATA ------------------------------
+INDICATIFS_CSV = "countries_with_flags.csv"  # chemin selon l'endroit où vous l’avez mis
+
+@st.cache_data
+def load_pays_table(path=INDICATIFS_CSV):
+    import pandas as pd
+    try:
+        df = pd.read_csv(path, dtype=str).fillna("")
+        df["indicatif"] = df["indicatif"].str.strip()
+        df["pays"] = df["pays"].str.strip()
+        df["drapeau"] = df.get("drapeau","").astype(str)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["indicatif","pays","drapeau"])
+
 def _as_series(x, index=None):
     if isinstance(x, pd.Series): return x
     if isinstance(x, (list, tuple, np.ndarray)):
@@ -186,7 +200,24 @@ def _format_phone_e164(phone: str) -> str:
     return "+" + s
 
 # ------------------------------ INDICATIFS PAYS (CSV ÉDITABLE) ------------------------------
-def _ensure_country_codes_file():
+INDICATIFS_CSV = "countries_with_flags.csv"  # chemin selon l'endroit où vous l’avez mis
+
+@st.cache_data
+def load_pays_table(path=INDICATIFS_CSV):
+    import pandas as pd
+    try:
+        df = pd.read_csv(path, dtype=str).fillna("")
+        df["indicatif"] = df["indicatif"].str.strip()
+        df["pays"] = df["pays"].str.strip()
+        df["drapeau"] = df.get("drapeau","").astype(str)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["indicatif","pays","drapeau"])
+
+    
+    
+    
+    def _ensure_country_codes_file():
     """Crée un CSV d'indicatifs si absent (UTF-8)."""
     if os.path.exists(COUNTRY_CODES_CSV):
         return
