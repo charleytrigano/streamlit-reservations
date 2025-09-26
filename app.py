@@ -953,6 +953,9 @@ def vue_plateformes(df: pd.DataFrame, palette: dict):
     if c3.button("🔄 Recharger", key="reload_palette_btn"):
         st.cache_data.clear()
         st.rerun()
+
+
+
 # ============================= PART 4/5 - CALENDRIER, RAPPORT, SHEET, CLIENTS, ICS, INDICATIFS =============================
 
 # ---------- Calendrier (grille mensuelle) ----------
@@ -1445,7 +1448,141 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
                            data=edited[["code","country","flag","prefix"]].to_csv(index=False).encode("utf-8"),
                            file_name="indicatifs_pays.csv",
                            mime="text/csv",
-                           key="dl_indicatifs_inner")
+                          
+
+# ============================== PART 4/5 — RAPPORT, GOOGLE SHEET, CLIENTS, ID ==============================
+
+def vue_rapport(df: pd.DataFrame, palette: dict):
+    """Tableaux de bord et KPIs par plateforme et par pays."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📊 Rapport — {apt_name}")
+    print_buttons()
+
+    if df is None or df.empty:
+        st.info("Aucune donnée disponible.")
+        return
+
+    dfr = ensure_schema(df).copy()
+    dfr["date_arrivee"] = _to_date(dfr["date_arrivee"])
+    dfr["date_depart"] = _to_date(dfr["date_depart"])
+    dfr["nuitees"] = pd.to_numeric(dfr["nuitees"], errors="coerce").fillna(0).astype(int)
+    dfr["revenu"] = pd.to_numeric(dfr["tarif"], errors="coerce").fillna(0)
+
+    # ---- KPIs principaux ----
+    total_resa = len(dfr)
+    total_nuitees = dfr["nuitees"].sum()
+    total_revenu = dfr["revenu"].sum()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Réservations", f"{total_resa}")
+    c2.metric("Nuitées", f"{total_nuitees}")
+    c3.metric("Revenu total", f"{total_revenu:,.0f} €".replace(",", " "))
+
+    st.markdown("---")
+
+    # ---- Agrégation par plateforme ----
+    agg = (
+        dfr.groupby("plateforme")
+        .agg(
+            reservations=("plateforme", "count"),
+            nuitees=("nuitees", "sum"),
+            revenu_total=("revenu", "sum"),
+        )
+        .reset_index()
+    )
+    agg["part_revenu_%"] = (agg["revenu_total"] / total_revenu * 100).round(1) if total_revenu > 0 else 0
+
+    disp = agg.assign(
+        reservations=lambda x: x["reservations"].astype(int),
+        nuitees=lambda x: x["nuitees"].astype(int),
+        revenu_total=lambda x: pd.to_numeric(x["revenu_total"], errors="coerce").round(0),
+    )
+    if "part_revenu_%" in agg.columns:
+        disp["part_revenu_%"] = pd.to_numeric(agg["part_revenu_%"], errors="coerce").round(1)
+
+    st.subheader("Par plateforme")
+    st.dataframe(disp, use_container_width=True)
+
+    # ---- Graphique ----
+    fig, ax = plt.subplots()
+    ax.pie(
+        agg["revenu_total"],
+        labels=agg["plateforme"],
+        autopct="%1.1f%%",
+        colors=[palette.get(p, "#999999") for p in agg["plateforme"]],
+    )
+    ax.set_title("Répartition du revenu par plateforme")
+    st.pyplot(fig)
+
+    st.markdown("---")
+
+    # ---- Agrégation par pays ----
+    if "pays" in dfr.columns:
+        agg_pays = (
+            dfr.groupby("pays")
+            .agg(
+                reservations=("pays", "count"),
+                nuitees=("nuitees", "sum"),
+                revenu_total=("revenu", "sum"),
+            )
+            .reset_index()
+        )
+        agg_pays = agg_pays.sort_values("revenu_total", ascending=False).head(20)
+        agg_pays["part_revenu_%"] = (agg_pays["revenu_total"] / total_revenu * 100).round(1) if total_revenu > 0 else 0
+
+        disp2 = agg_pays.assign(
+            reservations=lambda x: x["reservations"].astype(int),
+            nuitees=lambda x: x["nuitees"].astype(int),
+            revenu_total=lambda x: pd.to_numeric(x["revenu_total"], errors="coerce").round(0),
+        )
+        if "part_revenu_%" in agg_pays.columns:
+            disp2["part_revenu_%"] = pd.to_numeric(agg_pays["part_revenu_%"], errors="coerce").round(1)
+
+        st.subheader("Top 20 pays")
+        st.dataframe(disp2, use_container_width=True)
+
+        fig2, ax2 = plt.subplots()
+        ax2.barh(agg_pays["pays"], agg_pays["revenu_total"], color="skyblue")
+        ax2.set_xlabel("Revenu (€)")
+        ax2.set_ylabel("Pays")
+        st.pyplot(fig2)
+
+
+# ---------------- GOOGLE SHEET ----------------
+def vue_google_sheet(df: pd.DataFrame, palette: dict):
+    """Placeholder Google Sheet (future intégration API)."""
+    st.header("📝 Google Sheet")
+    st.info("⚠️ Fonctionnalité à venir — export automatique vers Google Sheets.")
+
+
+# ---------------- CLIENTS ----------------
+def vue_clients(df: pd.DataFrame, palette: dict):
+    """Liste simple des clients avec téléphone et pays."""
+    st.header("👥 Clients")
+    if df is None or df.empty:
+        st.info("Aucun client.")
+        return
+
+    dfx = df.copy()
+    dfx["pays"] = dfx["telephone"].apply(_phone_country)
+
+    st.dataframe(dfx[["nom_client", "telephone", "pays"]], use_container_width=True)
+
+
+# ---------------- ID ----------------
+def vue_id(df: pd.DataFrame, palette: dict):
+    """Affiche les numéros de réservation et ID uniques."""
+    st.header("🆔 Identifiants")
+    if df is None or df.empty:
+        st.info("Aucun enregistrement.")
+        return
+
+    st.dataframe(df[["id", "numero_reservation", "plateforme"]], use_container_width=True)
+
+
+
+ key="dl_indicatifs_inner")
 
 # ============================= PART 5/5 - SMS, PARAMETRES, MAIN =============================
 
