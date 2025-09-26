@@ -1,233 +1,86 @@
-﻿indicatif;pays;drapeau
-+1;Canada;
-+1;États-Unis (USA);
-+1-242;Bahamas;
-+1-246;Barbade;
-+1-264;Anguilla;
-+1-268;Antigua-et-Barbuda;
-+1-284;Îles Vierges britanniques;
-+1-340;Îles Vierges américaines;
-+1-345;Îles Caïmans;
-+1-441;Bermudes;
-+1-473;Grenade;
-+1-649;Îles Turques-et-Caïques;
-+1-664;Montserrat;
-+1-670;Îles Mariannes du Nord;
-+1-671;Guam;
-+1-684;Samoa américaines;
-+1-721;Sint Maarten (partie néerlandaise);
-+1-758;Sainte-Lucie;
-+1-767;Dominique;
-+1-784;Saint-Vincent-et-les-Grenadines;
-+1-787/939;Porto Rico;
-+1-808;Hawaï (USA);
-+1-809/829/849;République dominicaine;
-+1-868;Trinité-et-Tobago;
-+1-869;Saint-Christophe-et-Niévès;
-+1-876/658;Jamaïque;
-+7;Kazakhstan;
-+7;Russie;
-+20;Égypte;
-+27;Afrique du Sud;
-+30;Grèce;
-+31;Pays-Bas;
-+32;Belgique;
-+33;France;
-+34;Espagne;
-+36;Hongrie;
-+39;Italie;
-+40;Roumanie;
-+41;Suisse;
-+43;Autriche;
-+44;Royaume-Uni (y c. Jersey/Guernesey/Île de Man);
-+45;Danemark (y c. Féroé 🇫🇴 via +298);
-+46;Suède;
-+47;Norvège (Svalbard/Jan Mayen);
-+48;Pologne;
-+49;Allemagne;
-+52;Mexique;
-+53;Cuba;
-+54;Argentine;
-+55;Brésil;
-+56;Chili;
-+57;Colombie;
-+58;Venezuela;
-+60;Malaisie;
-+61;Australie (continent) / Territoires extérieurs;
-+62;Indonésie;
-+63;Philippines;
-+64;Nouvelle-Zélande;
-+65;Singapour;
-+66;Thaïlande;
-+81;Japon;
-+82;Corée du Sud;
-+84;Viêt Nam;
-+86;Chine;
-+90;Turquie;
-+91;Inde;
-+92;Pakistan;
-+93;Afghanistan;
-+94;Sri Lanka;
-+95;Myanmar;
-+98;Iran;
-+211;Soudan du Sud;
-+212;Maroc;
-+213;Algérie;
-+216;Tunisie;
-+218;Libye;
-+220;Gambie;
-+221;Sénégal;
-+222;Mauritanie;
-+223;Mali;
-+224;Guinée;
-+225;Côte d’Ivoire;
-+226;Burkina Faso;
-+227;Niger;
-+228;Togo;
-+229;Bénin;
-+230;Maurice;
-+231;Liberia;
-+232;Sierra Leone;
-+233;Ghana;
-+234;Nigeria;
-+235;Tchad;
-+236;République centrafricaine;
-+237;Cameroun;
-+238;Cap-Vert;
-+239;Sao Tomé-et-Principe;
-+240;Guinée équatoriale;
-+241;Gabon;
-+242;Congo (Brazzaville);
-+243;RDC (Congo-Kinshasa);
-+244;Angola;
-+245;Guinée-Bissau;
-+246;Territoire britannique de l’océan Indien;
-+247;Ascension;
-+248;Seychelles;
-+249;Soudan;
-+250;Rwanda;
-+251;Éthiopie;
-+252;Somalie;
-+253;Djibouti;
-+254;Kenya;
-+255;Tanzanie;
-+256;Ouganda;
-+257;Burundi;
-+258;Mozambique;
-+260;Zambie;
-+261;Madagascar;
-+262;La Réunion / Mayotte (FR);
-+263;Zimbabwe;
-+264;Namibie;
-+265;Malawi;
-+266;Lesotho;
-+267;Botswana;
-+268;Eswatini;
-+269;Comores;
-+290;Sainte-Hélène;
-+291;Érythrée;
-+298;Îles Féroé;
-+299;Groenland;
-+350;Gibraltar;
-+351;Portugal (y c. Açores/Madère);
-+352;Luxembourg;
-+353;Irlande;
-+354;Islande;
-+355;Albanie;
-+356;Malte;
-+357;Chypre;
-+358;Finlande (y c. Åland);
-+359;Bulgarie;
-+370;Lituanie;
-+371;Lettonie;
-+372;Estonie;
-+373;Moldavie;
-+374;Arménie;
-+375;Biélorussie;
-+376;Andorre;
-+377;Monaco;
-+378;Saint-Marin;
-+379;Vatican (usage spécial);
-+380;Ukraine;
-+381;Serbie;
-+382;Monténégro;
-+383;Kosovo;
-+385;Croatie;
-+386;Slovénie;
-+387;Bosnie-Herzégovine;
-+389;Macédoine du Nord;
-+420;Tchéquie;
-+421;Slovaquie;
-+423;Liechtenstein;
-+500;Îles Malouines (Falkland);
-+501;Belize;
-+502;Guatemala;
-+503;Salvador;
-+504;Honduras;
-+505;Nicaragua;
-+506;Costa Rica;
-+507;Panama;
-+508;Saint-Pierre-et-Miquelon;
-+509;Haïti;
-+590;Guadeloupe / Saint-Barthélemy / Saint-Martin (FR);
-+591;Bolivie;
-+592;Guyana;
-+593;Équateur;
-+594;Guyane (FR);
-+595;Paraguay;
-+596;Martinique (FR);
-+597;Suriname;
-+598;Uruguay;
-+599;Curaçao / Caraïbes néerlandaises (Bonaire, Saba, Saint-Eustache);
-+670;Timor oriental (Timor-Leste);
-+672;Territoires australiens extérieurs / Île Norfolk;
-+673;Brunei;
-+674;Nauru;
-+675;Papouasie-Nouvelle-Guinée;
-+676;Tonga;
-+677;Îles Salomon;
-+678;Vanuatu;
-+679;Fidji;
-+680;Palaos;
-+681;Wallis-et-Futuna (FR);
-+682;Îles Cook;
-+683;Niue;
-+685;Samoa;
-+686;Kiribati;
-+687;Nouvelle-Calédonie (FR);
-+688;Tuvalu;
-+689;Polynésie française (FR);
-+690;Tokelau (NZ);
-+691;États fédérés de Micronésie;
-+692;Îles Marshall;
-+850;Corée du Nord;
-+852;Hong Kong (RAS Chine);
-+853;Macao (RAS Chine);
-+855;Cambodge;
-+856;Laos;
-+880;Bangladesh;
-+886;Taïwan;
-+960;Maldives;
-+961;Liban;
-+962;Jordanie;
-+963;Syrie;
-+964;Irak;
-+965;Koweït;
-+966;Arabie saoudite;
-+967;Yémen;
-+968;Oman;
-+970;Palestine (Cisjordanie/Gaza);
-+971;Émirats arabes unis;
-+972;Israël;
-+973;Bahreïn;
-+974;Qatar;
-+975;Bhoutan;
-+976;Mongolie;
-+977;Népal;
-+992;Tadjikistan;
-+993;Turkménistan;
-+994;Azerbaïdjan;
-+995;Géorgie;
-+996;Kirghizistan;
-+997;Kazakhstan (historique/rare, utiliser +7);
-+998;Ouzbékistan;
+indicatif,emoji,nom
+1,🇺🇸,États-Unis / Canada
+7,🇷🇺,Russie / Kazakhstan
+20,🇪🇬,Égypte
+27,🇿🇦,Afrique du Sud
+30,🇬🇷,Grèce
+31,🇳🇱,Pays-Bas
+32,🇧🇪,Belgique
+33,🇫🇷,France
+34,🇪🇸,Espagne
+39,🇮🇹,Italie
+41,🇨🇭,Suisse
+44,🇬🇧,Royaume-Uni
+45,🇩🇰,Danemark
+46,🇸🇪,Suède
+47,🇳🇴,Norvège
+48,🇵🇱,Pologne
+49,🇩🇪,Allemagne
+51,🇵🇪,Pérou
+52,🇲🇽,Mexique
+54,🇦🇷,Argentine
+55,🇧🇷,Brésil
+56,🇨🇱,Chili
+57,🇨🇴,Colombie
+58,🇻🇪,Venezuela
+60,🇲🇾,Malaisie
+61,🇦🇺,Australie
+62,🇮🇩,Indonésie
+63,🇵🇭,Philippines
+64,🇳🇿,Nouvelle-Zélande
+65,🇸🇬,Singapour
+66,🇹🇭,Thaïlande
+81,🇯🇵,Japon
+82,🇰🇷,Corée du Sud
+84,🇻🇳,Vietnam
+86,🇨🇳,Chine
+90,🇹🇷,Turquie
+91,🇮🇳,Inde
+92,🇵🇰,Pakistan
+93,🇦🇫,Afghanistan
+94,🇱🇰,Sri Lanka
+98,🇮🇷,Iran
+212,🇲🇦,Maroc
+213,🇩🇿,Algérie
+216,🇹🇳,Tunisie
+218,🇱🇾,Libye
+220,🇬🇲,Gambie
+221,🇸🇳,Sénégal
+225,🇨🇮,Côte d'Ivoire
+229,🇧🇯,Bénin
+231,🇱🇷,Libéria
+234,🇳🇬,Nigéria
+237,🇨🇲,Cameroun
+240,🇬🇶,Guinée équatoriale
+241,🇬🇦,Gabon
+243,🇨🇩,RD Congo
+250,🇷🇼,Rwanda
+254,🇰🇪,Kenya
+255,🇹🇿,Tanzanie
+256,🇺🇬,Ouganda
+260,🇿🇲,Zambie
+263,🇿🇼,Zimbabwe
+351,🇵🇹,Portugal
+352,🇱🇺,Luxembourg
+353,🇮🇪,Irlande
+354,🇮🇸,Islande
+355,🇦🇱,Albanie
+356,🇲🇹,Malte
+357,🇨🇾,Chypre
+358,🇫🇮,Finlande
+359,🇧🇬,Bulgarie
+370,🇱🇹,Lituanie
+371,🇱🇻,Lettonie
+372,🇪🇪,Estonie
+373,🇲🇩,Moldavie
+374,🇦🇲,Arménie
+375,🇧🇾,Biélorussie
+376,🇦🇩,Andorre
+377,🇲🇨,Monaco
+378,🇸🇲,Saint-Marin
+380,🇺🇦,Ukraine
+381,🇷🇸,Serbie
+385,🇭🇷,Croatie
+386,🇸🇮,Slovénie
+387,🇧🇦,Bosnie-Herzégovine
+389,🇲🇰,Macédoine du Nord
