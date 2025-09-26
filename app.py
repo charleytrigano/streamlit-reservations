@@ -1453,7 +1453,7 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
 # ============================== PART 4/5 — RAPPORT, GOOGLE SHEET, CLIENTS, ID ==============================
 
 def vue_rapport(df: pd.DataFrame, palette: dict):
-    """Tableaux de bord et KPIs par plateforme et par pays."""
+    """Tableaux de bord et KPIs par plateforme et par pays (cohérent avec ensure_schema)."""
     apt = _current_apartment()
     apt_name = apt["name"] if apt else "—"
     st.header(f"📊 Rapport — {apt_name}")
@@ -1464,125 +1464,283 @@ def vue_rapport(df: pd.DataFrame, palette: dict):
         return
 
     dfr = ensure_schema(df).copy()
-    dfr["date_arrivee"] = _to_date(dfr["date_arrivee"])
-    dfr["date_depart"] = _to_date(dfr["date_depart"])
-    dfr["nuitees"] = pd.to_numeric(dfr["nuitees"], errors="coerce").fillna(0).astype(int)
-    dfr["revenu"] = pd.to_numeric(dfr["tarif"], errors="coerce").fillna(0)
+    # Dates & numériques
+    dfr["date_arrivee_dt"] = pd.to_datetime(dfr["date_arrivee"], errors="coerce")
+    dfr["date_depart_dt"]  = pd.to_datetime(dfr["date_depart"], errors="coerce")
+    dfr["nuitees"]   = pd.to_numeric(dfr["nuitees"], errors="coerce").fillna(0)
+    dfr["prix_brut"] = pd.to_numeric(dfr["prix_brut"], errors="coerce").fillna(0.0)
+    dfr["prix_net"]  = pd.to_numeric(dfr["prix_net"],  errors="coerce").fillna(0.0)
+    dfr["base"]      = pd.to_numeric(dfr["base"],      errors="coerce").fillna(0.0)
+    dfr["charges"]   = pd.to_numeric(dfr["charges"],   errors="coerce").fillna(0.0)
 
-    # ---- KPIs principaux ----
-    total_resa = len(dfr)
-    total_nuitees = dfr["nuitees"].sum()
-    total_revenu = dfr["revenu"].sum()
+    # --- Filtres simples (année / mois / plateforme) ---
+    years_avail  = sorted(dfr["date_arrivee_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True)
+    months_avail = list(range(1, 12+1))
+    plats_avail  = sorted(dfr["plateforme"].astype(str).str.strip().replace({"": np.nan}).dropna().unique().tolist())
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Réservations", f"{total_resa}")
-    c2.metric("Nuitées", f"{total_nuitees}")
-    c3.metric("Revenu total", f"{total_revenu:,.0f} €".replace(",", " "))
+    year  = c1.selectbox("Année (arrivée)", ["Toutes"] + years_avail, index=0, key="rap_year")
+    month = c2.selectbox("Mois", ["Tous"] + months_avail, index=0, key="rap_month")
+    plat  = c3.selectbox("Plateforme", ["Toutes"] + plats_avail, index=0, key="rap_plat")
+
+    data = dfr.copy()
+    if year != "Toutes":
+        data = data[data["date_arrivee_dt"].dt.year == int(year)]
+    if month != "Tous":
+        data = data[data["date_arrivee_dt"].dt.month == int(month)]
+    if plat != "Toutes":
+        data = data[data["plateforme"].astype(str).str.strip() == str(plat).strip()]
+
+    if data.empty:
+        st.warning("Aucune donnée après filtres.")
+        return
+
+    # --- KPIs principaux ---
+    total_resa     = int(len(data))
+    total_nuitees  = int(pd.to_numeric(data["nuitees"], errors="coerce").fillna(0).sum())
+    total_brut     = float(pd.to_numeric(data["prix_brut"], errors="coerce").fillna(0).sum())
+    total_net      = float(pd.to_numeric(data["prix_net"],  errors="coerce").fillna(0).sum())
+    total_charges  = float(pd.to_numeric(data["charges"],   errors="coerce").fillna(0).sum())
+    total_base     = float(pd.to_numeric(data["base"],      errors="coerce").fillna(0).sum())
+    adr_net        = (total_net / total_nuitees) if total_nuitees > 0 else 0.0
+
+    st.markdown(
+        f"""
+        <div class='glass'>
+          <span class='chip'><small>Réservations</small><br><strong>{total_resa}</strong></span>
+          <span class='chip'><small>Nuitées</small><br><strong>{total_nuitees}</strong></span>
+          <span class='chip'><small>Brut</small><br><strong>{total_brut:,.2f} €</strong></span>
+          <span class='chip'><small>Net</small><br><strong>{total_net:,.2f} €</strong></span>
+          <span class='chip'><small>Charges</small><br><strong>{total_charges:,.2f} €</strong></span>
+          <span class='chip'><small>Base</small><br><strong>{total_base:,.2f} €</strong></span>
+          <span class='chip'><small>ADR (net)</small><br><strong>{adr_net:,.2f} €</strong></span>
+        </div>
+        """.replace(",", " "),
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
 
-    # ---- Agrégation par plateforme ----
-    agg = (
-        dfr.groupby("plateforme")
-        .agg(
-            reservations=("plateforme", "count"),
-            nuitees=("nuitees", "sum"),
-            revenu_total=("revenu", "sum"),
-        )
-        .reset_index()
-    )
-    agg["part_revenu_%"] = (agg["revenu_total"] / total_revenu * 100).round(1) if total_revenu > 0 else 0
-
-    disp = agg.assign(
-        reservations=lambda x: x["reservations"].astype(int),
-        nuitees=lambda x: x["nuitees"].astype(int),
-        revenu_total=lambda x: pd.to_numeric(x["revenu_total"], errors="coerce").round(0),
-    )
-    if "part_revenu_%" in agg.columns:
-        disp["part_revenu_%"] = pd.to_numeric(agg["part_revenu_%"], errors="coerce").round(1)
-
+    # --- Par plateforme ---
     st.subheader("Par plateforme")
-    st.dataframe(disp, use_container_width=True)
+    agg_plt = (
+        data.groupby("plateforme", as_index=False)
+        .agg(
+            reservations=("nom_client", "count"),
+            nuitees=("nuitees", "sum"),
+            prix_brut=("prix_brut", "sum"),
+            prix_net=("prix_net", "sum"),
+            base=("base", "sum"),
+            charges=("charges", "sum"),
+        )
+    ).sort_values("prix_net", ascending=False)
 
-    # ---- Graphique ----
-    fig, ax = plt.subplots()
-    ax.pie(
-        agg["revenu_total"],
-        labels=agg["plateforme"],
-        autopct="%1.1f%%",
-        colors=[palette.get(p, "#999999") for p in agg["plateforme"]],
+    # Ajouter la colonne part_revenu_% (pas via assign avec % -> on l'ajoute en deux temps)
+    if float(total_net) > 0:
+        agg_plt["part_revenu_%"] = (pd.to_numeric(agg_plt["prix_net"], errors="coerce").fillna(0) / float(total_net) * 100).round(1)
+    else:
+        agg_plt["part_revenu_%"] = 0.0
+
+    # ADR par plateforme
+    agg_plt["ADR_net"] = np.where(
+        pd.to_numeric(agg_plt["nuitees"], errors="coerce").fillna(0) > 0,
+        pd.to_numeric(agg_plt["prix_net"], errors="coerce").fillna(0) / pd.to_numeric(agg_plt["nuitees"], errors="coerce").fillna(0),
+        0.0
+    ).round(2)
+
+    st.dataframe(
+        agg_plt.assign(
+            prix_brut=lambda x: pd.to_numeric(x["prix_brut"], errors="coerce").round(2),
+            prix_net=lambda x: pd.to_numeric(x["prix_net"], errors="coerce").round(2),
+            base=lambda x: pd.to_numeric(x["base"], errors="coerce").round(2),
+            charges=lambda x: pd.to_numeric(x["charges"], errors="coerce").round(2),
+        ),
+        use_container_width=True
     )
-    ax.set_title("Répartition du revenu par plateforme")
-    st.pyplot(fig)
+
+    # Graphique Altair — répartition du net par plateforme
+    try:
+        ch1 = alt.Chart(agg_plt).mark_bar().encode(
+            x=alt.X("plateforme:N", title="Plateforme", sort="-y"),
+            y=alt.Y("prix_net:Q", title="CA net (€)"),
+            color=alt.Color("plateforme:N", legend=None),
+            tooltip=[
+                "plateforme",
+                alt.Tooltip("prix_net:Q", title="Net (€)", format=",.2f"),
+                alt.Tooltip("nuitees:Q", title="Nuitées"),
+                alt.Tooltip("part_revenu_%:Q", title="Part (%)", format=".1f"),
+                alt.Tooltip("ADR_net:Q", title="ADR net", format=",.2f"),
+            ],
+        ).properties(height=360)
+        st.altair_chart(ch1, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique plateformes indisponible : {e}")
 
     st.markdown("---")
 
-    # ---- Agrégation par pays ----
-    if "pays" in dfr.columns:
-        agg_pays = (
-            dfr.groupby("pays")
-            .agg(
-                reservations=("pays", "count"),
-                nuitees=("nuitees", "sum"),
-                revenu_total=("revenu", "sum"),
-            )
-            .reset_index()
+    # --- Par pays ---
+    st.subheader("Par pays")
+    data_p = data.copy()
+    # Si 'pays' absent ou vide, on tente de déduire via téléphone
+    if "pays" not in data_p.columns:
+        data_p["pays"] = ""
+    need = (data_p["pays"].astype(str).str.strip() == "") | (data_p["pays"].isna())
+    if need.any():
+        data_p.loc[need, "pays"] = data_p.loc[need, "telephone"].apply(_phone_country)
+
+    agg_pays = (
+        data_p.groupby("pays", as_index=False)
+        .agg(
+            reservations=("nom_client", "count"),
+            nuitees=("nuitees", "sum"),
+            prix_brut=("prix_brut", "sum"),
+            prix_net=("prix_net", "sum"),
+            base=("base", "sum"),
+            charges=("charges", "sum"),
         )
-        agg_pays = agg_pays.sort_values("revenu_total", ascending=False).head(20)
-        agg_pays["part_revenu_%"] = (agg_pays["revenu_total"] / total_revenu * 100).round(1) if total_revenu > 0 else 0
+    ).sort_values("prix_net", ascending=False)
 
-        disp2 = agg_pays.assign(
-            reservations=lambda x: x["reservations"].astype(int),
-            nuitees=lambda x: x["nuitees"].astype(int),
-            revenu_total=lambda x: pd.to_numeric(x["revenu_total"], errors="coerce").round(0),
-        )
-        if "part_revenu_%" in agg_pays.columns:
-            disp2["part_revenu_%"] = pd.to_numeric(agg_pays["part_revenu_%"], errors="coerce").round(1)
+    if float(total_net) > 0:
+        agg_pays["part_revenu_%"] = (pd.to_numeric(agg_pays["prix_net"], errors="coerce").fillna(0) / float(total_net) * 100).round(1)
+    else:
+        agg_pays["part_revenu_%"] = 0.0
 
-        st.subheader("Top 20 pays")
-        st.dataframe(disp2, use_container_width=True)
+    agg_pays["ADR_net"] = np.where(
+        pd.to_numeric(agg_pays["nuitees"], errors="coerce").fillna(0) > 0,
+        pd.to_numeric(agg_pays["prix_net"], errors="coerce").fillna(0) / pd.to_numeric(agg_pays["nuitees"], errors="coerce").fillna(0),
+        0.0
+    ).round(2)
 
-        fig2, ax2 = plt.subplots()
-        ax2.barh(agg_pays["pays"], agg_pays["revenu_total"], color="skyblue")
-        ax2.set_xlabel("Revenu (€)")
-        ax2.set_ylabel("Pays")
-        st.pyplot(fig2)
+    st.dataframe(
+        agg_pays.assign(
+            prix_brut=lambda x: pd.to_numeric(x["prix_brut"], errors="coerce").round(2),
+            prix_net=lambda x: pd.to_numeric(x["prix_net"], errors="coerce").round(2),
+            base=lambda x: pd.to_numeric(x["base"], errors="coerce").round(2),
+            charges=lambda x: pd.to_numeric(x["charges"], errors="coerce").round(2),
+        ),
+        use_container_width=True
+    )
+
+    # Graphique Altair — top N pays par CA net
+    try:
+        topN = st.slider("Top N pays (par CA net)", min_value=5, max_value=25, value=12, step=1, key="rap_top_pays")
+        ch2 = alt.Chart(agg_pays.head(topN)).mark_bar().encode(
+            x=alt.X("pays:N", sort="-y", title="Pays"),
+            y=alt.Y("prix_net:Q", title="CA net (€)"),
+            tooltip=[
+                "pays",
+                alt.Tooltip("reservations:Q", title="Réservations"),
+                alt.Tooltip("nuitees:Q", title="Nuitées"),
+                alt.Tooltip("ADR_net:Q", title="ADR net", format=",.2f"),
+                alt.Tooltip("part_revenu_%:Q", title="Part (%)", format=".1f"),
+            ],
+        ).properties(height=420)
+        st.altair_chart(ch2, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Graphique pays indisponible : {e}")
 
 
 # ---------------- GOOGLE SHEET ----------------
 def vue_google_sheet(df: pd.DataFrame, palette: dict):
-    """Placeholder Google Sheet (future intégration API)."""
-    st.header("📝 Google Sheet")
-    st.info("⚠️ Fonctionnalité à venir — export automatique vers Google Sheets.")
+    """Affichage du Google Form + Google Sheet + CSV publié (si constantes renseignées)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"📝 Fiche d'arrivée / Google Sheet — {apt_name}")
+    print_buttons()
+
+    # Lien court
+    try:
+        st.markdown(f"**Lien court à partager** : {FORM_SHORT_URL}")
+    except Exception:
+        st.info("Aucun lien court configuré.")
+
+    # Iframe Form
+    try:
+        st.markdown(
+            f'<iframe src="{GOOGLE_FORM_VIEW}" width="100%" height="900" frameborder="0"></iframe>',
+            unsafe_allow_html=True
+        )
+    except Exception:
+        st.info("Formulaire non configuré.")
+    st.markdown("---")
+
+    # Iframe Sheet
+    st.subheader("Feuille Google intégrée")
+    try:
+        st.markdown(
+            f'<iframe src="{GOOGLE_SHEET_EMBED_URL}" width="100%" height="700" frameborder="0"></iframe>',
+            unsafe_allow_html=True
+        )
+    except Exception:
+        st.info("Google Sheet non configurée.")
+    st.markdown("---")
+
+    # CSV publié
+    st.subheader("Réponses (CSV publié)")
+    try:
+        rep = pd.read_csv(GOOGLE_SHEET_PUBLISHED_CSV)
+        show_email = st.checkbox("Afficher les colonnes d'email (si présentes)", value=False)
+        if not show_email:
+            mask_cols = [c for c in rep.columns if "mail" in c.lower() or "email" in c.lower()]
+            rep_display = rep.drop(columns=mask_cols, errors="ignore")
+        else:
+            rep_display = rep
+        st.dataframe(rep_display, use_container_width=True)
+    except Exception as e:
+        st.error(f"Impossible de charger la feuille publiée : {e}")
 
 
 # ---------------- CLIENTS ----------------
 def vue_clients(df: pd.DataFrame, palette: dict):
-    """Liste simple des clients avec téléphone et pays."""
-    st.header("👥 Clients")
+    """Liste des clients avec téléphone, pays, plateforme et res_id (colonnes cohérentes)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"👥 Liste des clients — {apt_name}")
+    print_buttons()
+
     if df is None or df.empty:
         st.info("Aucun client.")
         return
 
-    dfx = df.copy()
-    dfx["pays"] = dfx["telephone"].apply(_phone_country)
+    clients = ensure_schema(df)[["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]].copy()
+    for c in ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]:
+        clients[c] = clients[c].astype(str).str.strip().replace({"nan": ""})
 
-    st.dataframe(dfx[["nom_client", "telephone", "pays"]], use_container_width=True)
+    need = clients["pays"].eq("") | clients["pays"].isna()
+    if need.any():
+        clients.loc[need, "pays"] = clients.loc[need, "telephone"].apply(_phone_country)
+
+    cols_order = ["nom_client", "pays", "telephone", "email", "plateforme", "res_id"]
+    clients = clients[cols_order]
+    clients = clients.loc[clients["nom_client"] != ""].drop_duplicates()
+    clients = clients.sort_values(by="nom_client", kind="stable")
+    st.dataframe(clients, use_container_width=True)
 
 
 # ---------------- ID ----------------
 def vue_id(df: pd.DataFrame, palette: dict):
-    """Affiche les numéros de réservation et ID uniques."""
-    st.header("🆔 Identifiants")
+    """Affiche res_id avec quelques infos utiles (cohérent avec ensure_schema)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🆔 Identifiants des réservations — {apt_name}")
+    print_buttons()
+
     if df is None or df.empty:
-        st.info("Aucun enregistrement.")
+        st.info("Aucune réservation.")
         return
 
-    st.dataframe(df[["id", "numero_reservation", "plateforme"]], use_container_width=True)
+    tbl = ensure_schema(df)[["res_id", "nom_client", "telephone", "email", "plateforme", "pays"]].copy()
+    for c in ["nom_client", "telephone", "email", "plateforme", "res_id", "pays"]:
+        tbl[c] = tbl[c].astype(str).str.strip().replace({"nan": ""})
 
+    need = tbl["pays"].eq("") | tbl["pays"].isna()
+    if need.any():
+        tbl.loc[need, "pays"] = tbl.loc[need, "telephone"].apply(_phone_country)
 
+    tbl = tbl.dropna(subset=["res_id"])
+    tbl = tbl[tbl["res_id"] != ""].drop_duplicates()
+    st.dataframe(tbl, use_container_width=True)
 
- key="dl_indicatifs_inner")
 
 # ============================= PART 5/5 - SMS, PARAMETRES, MAIN =============================
 
