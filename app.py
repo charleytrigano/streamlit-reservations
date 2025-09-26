@@ -207,6 +207,145 @@ def _phone_country(phone: str) -> str:
             return PHONE_PREFIX_COUNTRY[k]
     return "Inconnu"
 
+# ====================== INDICATIFS PAYS (helpers + page) ======================
+
+INDICATIFS_CSV = "indicatifs_pays.csv"
+
+def create_indicatifs_csv_if_missing():
+    """Crée un CSV d'indicatifs minimal s'il est absent (UTF-8)."""
+    import os
+    if os.path.exists(INDICATIFS_CSV):
+        return
+    df = pd.DataFrame(
+        [
+            {"code": "FR", "country": "France",       "calling_code": "33", "flag": "🇫🇷"},
+            {"code": "ES", "country": "Espagne",      "calling_code": "34", "flag": "🇪🇸"},
+            {"code": "DE", "country": "Allemagne",    "calling_code": "49", "flag": "🇩🇪"},
+            {"code": "GB", "country": "Royaume-Uni",  "calling_code": "44", "flag": "🇬🇧"},
+            {"code": "IT", "country": "Italie",       "calling_code": "39", "flag": "🇮🇹"},
+        ],
+        columns=["code", "country", "calling_code", "flag"],
+    )
+    df.to_csv(INDICATIFS_CSV, index=False, encoding="utf-8")
+
+@st.cache_data(show_spinner=False)
+def load_indicatifs():
+    """Charge le CSV depuis le disque (cacheable)."""
+    create_indicatifs_csv_if_missing()
+    return pd.read_csv(INDICATIFS_CSV, dtype=str, encoding="utf-8").fillna("")
+
+def vue_indicatifs(df: pd.DataFrame, palette: dict):
+    """Gestion des indicatifs pays (code ISO, nom, indicatif, drapeau)."""
+    apt = _current_apartment()
+    apt_name = apt["name"] if apt else "—"
+    st.header(f"🌍 Indicateurs pays — {apt_name}")
+    print_buttons()
+
+    # Charge depuis le disque via la fonction cacheable
+    data = load_indicatifs().copy()
+
+    with st.expander("Aperçu (5 lignes)", expanded=False):
+        st.dataframe(data.head(5), use_container_width=True)
+
+    st.markdown("### Édition")
+    st.caption("Colonnes : code (ISO-2), country (nom), calling_code (sans '+'), flag (emoji).")
+
+    # Clé d’éditeur versionnée pour forcer un reset lorsque l’on « recharge »
+    version_key = st.session_state.get("indicatifs_editor_version", 0)
+    editor_key = f"indicatifs_editor_{version_key}"
+
+    base = (
+        data[["code", "country", "calling_code", "flag"]]
+        .astype(str)
+        .fillna("")
+        .drop_duplicates(subset=["code", "calling_code"], keep="first")
+        .reset_index(drop=True)
+    )
+
+    edited = st.data_editor(
+        base,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "code": st.column_config.TextColumn("Code (ISO-2)", help="Ex: FR, ES, DE", width="small"),
+            "country": st.column_config.TextColumn("Pays"),
+            "calling_code": st.column_config.TextColumn("Indicatif (sans +)", help="Ex: 33, 34, 49", width="small"),
+            "flag": st.column_config.TextColumn("Drapeau (emoji)", help="Ex: 🇫🇷 🇪🇸 🇩🇪", width="small"),
+        },
+        key=editor_key,
+    )
+
+    c1, c2, c3, c4 = st.columns([0.32, 0.28, 0.22, 0.18])
+
+    # Enregistrer sur disque
+    if c1.button("💾 Enregistrer sur disque", key="save_indics"):
+        try:
+            out = edited.copy()
+            out["code"] = out["code"].astype(str).str.strip().str.upper()
+            out["country"] = out["country"].astype(str).str.strip()
+            out["calling_code"] = (
+                out["calling_code"].astype(str).str.replace(r"\D", "", regex=True)
+            )
+            out["flag"] = out["flag"].astype(str).str.strip()
+
+            out = out[(out["code"] != "") & (out["country"] != "") & (out["calling_code"] != "")]
+            out = out.drop_duplicates(subset=["code", "calling_code"], keep="first")
+
+            out.to_csv(INDICATIFS_CSV, index=False, encoding="utf-8")
+            st.success("✅ Fichier indicatifs_pays.csv enregistré.")
+            st.cache_data.clear()  # purge le cache de load_indicatifs
+        except Exception as e:
+            st.error(f"Erreur sauvegarde : {e}")
+
+    # Recharger depuis le disque
+    if c2.button("🔄 Recharger depuis le disque", key="reload_indics"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.session_state["indicatifs_editor_version"] = version_key + 1  # nouvelle clé éditeur
+        st.rerun()
+
+    # Import CSV
+    up = c3.file_uploader("Importer CSV", type=["csv"], label_visibility="collapsed", key="import_indics")
+    if up is not None:
+        try:
+            tmp = pd.read_csv(up, dtype=str, encoding="utf-8").fillna("")
+            cols = {c.lower().strip(): c for c in tmp.columns}
+            need = {"code", "country", "calling_code", "flag"}
+            if need.issubset(set(cols.keys())):
+                save = tmp[[cols["code"], cols["country"], cols["calling_code"], cols["flag"]]].copy()
+                save.columns = ["code", "country", "calling_code", "flag"]
+                save["code"] = save["code"].astype(str).str.strip().str.upper()
+                save["country"] = save["country"].astype(str).str.strip()
+                save["calling_code"] = save["calling_code"].astype(str).str.replace(r"\D", "", regex=True)
+                save["flag"] = save["flag"].astype(str).str.strip()
+                save = save[(save["code"] != "") & (save["country"] != "") & (save["calling_code"] != "")]
+                save = save.drop_duplicates(subset=["code", "calling_code"], keep="first")
+                save.to_csv(INDICATIFS_CSV, index=False, encoding="utf-8")
+                st.success(f"✅ Importé {len(save)} lignes dans {INDICATIFS_CSV}.")
+                st.cache_data.clear()
+                st.session_state["indicatifs_editor_version"] = version_key + 1
+                st.rerun()
+            else:
+                st.error("Le CSV doit contenir les colonnes: code, country, calling_code, flag.")
+        except Exception as e:
+            st.error(f"Erreur import CSV : {e}")
+
+    # Restaurer défauts minimum
+    if c4.button("↩️ Defaults (mini)", key="defaults_indics"):
+        try:
+            create_indicatifs_csv_if_missing()
+            st.cache_data.clear()
+            st.session_state["indicatifs_editor_version"] = version_key + 1
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erreur reset : {e}")
+
+    st.markdown("---")
+    st.caption(f"Fichier : **{INDICATIFS_CSV}** — encodage UTF-8.")
+
 # ===================== Indicatifs pays - lecture / ecriture / lookup =====================
 @st.cache_data(show_spinner=False)
 def load_indicatifs() -> pd.DataFrame:
