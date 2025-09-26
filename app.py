@@ -1560,6 +1560,7 @@ def load_indicatifs() -> pd.DataFrame:
     df = df[df["dial_code"] != ""].drop_duplicates(subset=["dial_code"], keep="first")
     return df[["dial_code", "country", "flag"]]
 
+
 def vue_indicatifs(df: pd.DataFrame, palette: dict):
     """Éditer la table des indicatifs (avec drapeau emoji)."""
     st.header("Indicateurs pays (indicatifs téléphoniques)")
@@ -1599,6 +1600,7 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
     if c2.button("🔄 Recharger depuis le disque"):
         st.cache_data.clear()
         st.experimental_rerun()  # relit le CSV
+
 
 # PART 5/5 - PARAMETRES + MAIN
 
