@@ -1599,7 +1599,7 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
 
     if c2.button("🔄 Recharger depuis le disque"):
         st.cache_data.clear()
-        st.experimental_rerun()  # relit le CSV
+        st.rerun()  # relit le CSV
 
 
 # PART 5/5 - PARAMETRES + MAIN
