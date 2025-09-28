@@ -19,6 +19,26 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+CSV_RESERVATIONS = "resa_booking.csv"
+PALETTE_CSV = "plateformes.csv"
+APARTMENTS_CSV = "apartments.csv"
+
+# Chemins possibles pour le CSV d'indicatifs
+INDICATIFS_CANDIDATES = [
+    "indicatifs_pays.csv",
+    "Indicatif pays.csv",
+    "indicatif_pays.csv",
+    "countries_with_flags.csv",
+]
+
+def _resolve_indicatifs_path() -> str:
+    for p in INDICATIFS_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return INDICATIFS_CANDIDATES[0]  # défaut si rien trouvé
+
+# Constante utilisée partout
+INDICATIFS_CSV = _resolve_indicatifs_path()
 # --- CONSTANTES GLOBALES ---
 CSV_RESERVATIONS = "reservations.csv"     # sera écrasé par appartement actif
 CSV_PLATEFORMES  = "plateformes.csv"      # sera écrasé par appartement actif
@@ -1597,6 +1617,25 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
             st.success("Mini-jeu de donnees restaure ✅")
             st.rerun()
 
+
+# ... fin de vue_sms()
+
+# ---------------- INDICATEURS / INDICATIFS PAYS ----------------
+def _load_indicatifs_df(): 
+    ...
+    # ta fonction existante
+    ...
+
+# ---------------- EXPORT ICS ----------------
+def vue_export_ics(df: pd.DataFrame, palette: dict):
+    """Exporte les réservations au format ICS (téléchargement d'un .ics)."""
+    ...
+    # code du patch que je t’ai donné
+    ...
+
+# ---------------- PARAMETRES ----------------
+def vue_settings(df: pd.DataFrame, palette: dict):
+    ...
 
 # ---------------- PARAMETRES ----------------
 def vue_settings(df: pd.DataFrame, palette: dict):
