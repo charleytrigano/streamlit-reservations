@@ -1762,11 +1762,11 @@ def main():
             pass
 
     # Theme
-    try:
         mode_clair = st.sidebar.toggle("🌓 Mode clair (PC)", value=False)
     except Exception:
         mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
-    apply_style(light=bool(mode_clair))
+    apply_style
+
 
     # En-tete
     apt = _current_apartment()
