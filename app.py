@@ -1348,6 +1348,80 @@ def vue_sms(df: pd.DataFrame, palette: dict):
                     st.error(f"Impossible de marquer : {e}")
 
 
+# ---------- Helper SMS robuste : message de pré-arrivée ----------
+def _build_pre_arrival_message(rec: pd.Series, apt_name: str, link: str) -> str:
+    """
+    Construit un message FR/EN de pré-arrivée.
+    Robuste si dates ou nuitées sont manquantes.
+    """
+    # Récupérations sûres
+    name = str(rec.get("nom_client") or "").strip()
+    plat = str(rec.get("plateforme") or "N/A").strip()
+
+    # Dates -> texte jj/mm/aaaa (ou vide si NaT)
+    arr = pd.to_datetime(rec.get("date_arrivee"), errors="coerce")
+    dep = pd.to_datetime(rec.get("date_depart"),  errors="coerce")
+    arr_txt = arr.strftime("%d/%m/%Y") if not pd.isna(arr) else ""
+    dep_txt = dep.strftime("%d/%m/%Y") if not pd.isna(dep) else ""
+
+    # Nuitées -> int (0 par défaut)
+    try:
+        nuitees = int(float(rec.get("nuitees") or 0))
+    except Exception:
+        nuitees = 0
+
+    # Nom d'appartement sécurisés
+    apt_name = str(apt_name or "").strip()
+    apt_label = apt_name.upper() if apt_name else "APPARTEMENT"
+
+    # Lien (fallback si vide)
+    link = str(link or "").strip() or "https://urlr.me/kZuH94"
+
+    lines = [
+        f"{apt_label}",
+        f"Plateforme : {plat}",
+        f"Arrivée : {arr_txt}  Départ : {dep_txt}  Nuitées : {nuitees}",
+        "",
+        f"Bonjour {name}",
+        "",
+        "Bienvenue chez nous !",
+        "",
+        "Nous sommes ravis de vous accueillir bientôt à Nice. Afin d'organiser au mieux votre réception, "
+        "nous vous demandons de bien vouloir remplir la fiche en cliquant sur le lien suivant :",
+        f"{link}",
+        "",
+        "Un parking est à votre disposition sur place.",
+        "",
+        "Le check-in se fait à partir de 14:00 et le check-out avant 11:00. "
+        "Nous serons sur place lors de votre arrivée pour vous remettre les clés.",
+        "",
+        "Vous trouverez des consignes à bagages dans chaque quartier, à Nice.",
+        "",
+        "Nous vous souhaitons un excellent voyage et nous nous réjouissons de vous rencontrer très bientôt.",
+        "",
+        "Annick & Charley",
+        "",
+        "******",
+        "",
+        "Welcome to our establishment!",
+        "",
+        "We are delighted to welcome you soon to Nice. In order to organize your reception as efficiently as possible, "
+        "we kindly ask you to fill out the form at the following link:",
+        f"{link}",
+        "",
+        "Parking is available on site.",
+        "",
+        "Check-in is from 2:00 p.m. and check-out is before 11:00 a.m. "
+        "We will be there when you arrive to give you the keys.",
+        "",
+        "You will find luggage storage facilities in every district of Nice.",
+        "",
+        "We wish you a pleasant journey and look forward to meeting you very soon.",
+        "",
+        "Annick & Charley",
+    ]
+    return "\n".join(lines)
+
 # ---------------- Export ICS ----------------
 def vue_export_ics(df: pd.DataFrame, palette: dict):
     st.header("📆 Export ICS (Google/Apple/Outlook)")
