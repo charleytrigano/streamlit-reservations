@@ -1155,6 +1155,9 @@ def vue_id(df: pd.DataFrame, palette: dict):
 
     st.dataframe(df[["id", "numero_reservation", "plateforme"]], use_container_width=True)
 
+
+
+
 # ============================== PART 5/5 : SMS, INDICATEURS PAYS, PARAMÈTRES, MAIN ==============================
 
 def vue_sms(df: pd.DataFrame, palette: dict):
