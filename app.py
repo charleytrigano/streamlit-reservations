@@ -1279,6 +1279,12 @@ def vue_indicatifs(df: pd.DataFrame, palette: dict):
         st.success("Indicatifs rechargés.")
         st.rerun()
 
+# ---------------- EXPORT ICS ----------------
+def vue_export_ics(df: pd.DataFrame, palette: dict):
+    """Export calendrier au format ICS (placeholder)."""
+    st.header("📆 Export ICS")
+    st.info("⚠️ Fonctionnalité à venir — export au format iCalendar (ICS).")
+
 
 # ---------------- MAIN ----------------
 def main():
