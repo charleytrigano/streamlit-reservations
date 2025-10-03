@@ -1775,6 +1775,8 @@ def vue_settings(df: pd.DataFrame, palette: dict):
         except Exception as e:
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 
+
+
 # ------------------------------- MAIN 
 def main():
     # Reset cache via URL ?clear=1
