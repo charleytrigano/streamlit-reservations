@@ -1854,10 +1854,8 @@ def apartment_selector_sidebar():
 
 
 
-
-
-# ------------------------------- MAIN 
- main():
+# --------------------------------- MAIN ---------------------------------
+def main():
     # Reset cache via URL ?clear=1
     params = st.query_params
     if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
@@ -1873,11 +1871,22 @@ def apartment_selector_sidebar():
         mode_clair = st.sidebar.checkbox("🌓 Mode clair (PC)", value=False)
     apply_style(light=bool(mode_clair))
 
+    # Sélecteur d'appartement (nouvelle version)
+    apartment_selector_sidebar()
+
+    # Si non connecté, on arrête proprement
+    if not st.session_state.get("apt_slug"):
+        st.info("Choisis un appartement dans la barre latérale puis clique **Se connecter**.")
+        return
+
+    # Réappliquer les chemins (au cas où)
+    _set_current_apartment(st.session_state["apt_slug"])
+
     # En-tête
     apt_name = st.session_state.get("apt_name") or st.session_state.get("apt_slug") or "—"
     st.title(f"✨ {apt_name} — Gestion des Réservations")
 
-    # Chargement des données spécifiques à l'appartement
+    # Données
     df, palette_loaded = charger_donnees(_files_cache_key())
     palette = palette_loaded if palette_loaded else DEFAULT_PALETTE
 
@@ -1900,11 +1909,8 @@ def apartment_selector_sidebar():
     }
 
     choice = st.sidebar.radio("Aller à", list(pages.keys()), key="nav_radio")
-    page_func = pages.get(choice)
-    if page_func:
-        page_func(df, palette)
-    else:
-        st.error("Page inconnue.")
+    pages.get(choice, lambda *_: st.error("Page inconnue."))(df, palette)
 
+# --------------------------- ENTRY POINT ---------------------------
 if __name__ == "__main__":
     main()
