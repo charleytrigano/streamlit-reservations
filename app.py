@@ -1776,9 +1776,88 @@ def vue_settings(df: pd.DataFrame, palette: dict):
             st.error(f"Impossible d'écrire apartments.csv : {e}")
 
 
+# ----------------------- APARTMENT SELECTOR (SIDEBAR) -----------------------
+def apartment_selector_sidebar():
+    """Sélecteur robuste dans la barre latérale + diagnostics.
+       Utilise un bouton 'Se connecter' explicite et un bouton 'Changer'."""
+    st.sidebar.subheader("🔐 Appartement")
+
+    # 1) S'assurer que apartments.csv existe (mini contenu par défaut)
+    apt_path = "apartments.csv"
+    if not os.path.exists(apt_path):
+        default_csv = (
+            "slug,name,password_hash\n"
+            "villa-tobias,Villa Tobias,\n"
+            "le-turenne,Le Turenne,\n"
+        )
+        try:
+            with open(apt_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(default_csv)
+        except Exception as e:
+            st.sidebar.error(f"Impossible de créer apartments.csv : {e}")
+
+    # 2) Charger les appartements
+    df_apts = _load_apartments_csv(apt_path)
+    if df_apts.empty:
+        st.sidebar.error("Aucun appartement trouvé dans apartments.csv")
+        st.sidebar.caption("Utilise l’outil ci-dessous pour l’écrire.")
+        _force_write_apartments_csv(key_prefix="sidebar")
+        return  # stop ici (main vérifiera ensuite l’état)
+
+    # 3) Sélecteur + boutons
+    options_labels = [f"{row['name']} ({row['slug']})" for _, row in df_apts.iterrows()]
+    # Préselection : si déjà connecté, pointer l’option correspondante
+    def_idx = 0
+    current_slug = st.session_state.get("apt_slug")
+    if current_slug:
+        for i, (_, r) in enumerate(df_apts.iterrows()):
+            if r["slug"] == current_slug:
+                def_idx = i
+                break
+
+    label_pick = st.sidebar.selectbox("Choisir un appartement", options=options_labels, index=def_idx, key="apt_select_label")
+    picked_slug = label_pick.split("(")[-1].rstrip(")").strip()
+    picked_row = df_apts[df_apts["slug"] == picked_slug].iloc[0]
+    picked_name = picked_row["name"]
+
+    colA, colB = st.sidebar.columns(2)
+    if colA.button("Se connecter", use_container_width=True, key="btn_connect_appt"):
+        # Connexion explicite
+        st.session_state["apt_slug"] = picked_slug
+        st.session_state["apt_name"] = picked_name
+        _set_current_apartment(picked_slug)  # met à jour CSV_RESERVATIONS / CSV_PLATEFORMES
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.rerun()
+
+    if colB.button("Changer", use_container_width=True, key="btn_logout_appt"):
+        # Déconnexion / retour au choix
+        st.session_state.pop("apt_slug", None)
+        st.session_state.pop("apt_name", None)
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.rerun()
+
+    # 4) Diagnostic rapide
+    with st.sidebar.expander("🔎 Diagnostic appartement", expanded=False):
+        st.write("Session :", {
+            "apt_slug": st.session_state.get("apt_slug"),
+            "apt_name": st.session_state.get("apt_name"),
+            "CSV_RESERVATIONS": CSV_RESERVATIONS,
+            "CSV_PLATEFORMES": CSV_PLATEFORMES,
+        })
+        st.dataframe(df_apts, use_container_width=True)
+
+
+
+
 
 # ------------------------------- MAIN 
-def main():
+ main():
     # Reset cache via URL ?clear=1
     params = st.query_params
     if params.get("clear", ["0"])[0] in ("1", "true", "True", "yes"):
